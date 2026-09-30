@@ -4,11 +4,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/chat_message.dart';
 import '../providers/providers.dart';
-import 'memory_screen.dart';
-import 'settings_screen.dart';
 
+/// 对话 Tab（body，无 Scaffold；drawer 由 HomeShell 提供）。
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key});
+  const ChatScreen({super.key, required this.onJumpToTab});
+
+  final VoidCallback onJumpToTab;
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -17,6 +18,16 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
+  bool _hasText = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _inputController.addListener(() {
+      final has = _inputController.text.trim().isNotEmpty;
+      if (has != _hasText) setState(() => _hasText = has);
+    });
+  }
 
   @override
   void dispose() {
@@ -48,7 +59,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final chat = ref.watch(chatProvider);
     final session = chat.activeSession;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (chat.isStreaming) _scrollToBottom();
+    });
 
     final items = <Widget>[];
     if (session != null) {
@@ -57,100 +70,180 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     }
     if (chat.isStreaming) {
-      items.add(_StreamingBubble(content: chat.streamingContent, steps: chat.steps));
+      items.add(_StreamingBubble(
+          content: chat.streamingContent, steps: chat.steps));
     }
+    final empty = items.isEmpty;
 
-    return Scaffold(
-      appBar: AppBar(
-        title: Text(session?.title ?? 'Pocket Agent'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.memory_outlined),
-            tooltip: '长期记忆',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const MemoryScreen()),
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: '设置',
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const SettingsScreen()),
-            ),
-          ),
-        ],
-      ),
-      drawer: _SessionDrawer(chat: chat),
-      body: SafeArea(
-        child: Column(
-          children: [
-            if (chat.error != null)
-              Material(
-                color: Theme.of(context).colorScheme.errorContainer,
-                child: ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.error_outline),
-                  title: Text(chat.error!,
-                      style: TextStyle(
-                          color: Theme.of(context).colorScheme.onErrorContainer)),
-                  trailing: IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () =>
-                        ref.read(chatProvider.notifier).state =
-                            chat.copyWith(clearError: true),
+    return Column(
+      children: [
+        // ------- 顶栏：汉堡 + 标题 -------
+        SafeArea(
+          bottom: false,
+          child: SizedBox(
+            height: 56,
+            child: Row(
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.menu_rounded, size: 26),
+                  onPressed: () => Scaffold.of(context).openDrawer(),
+                ),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Pocket Agent',
+                          style: TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w800)),
+                      Row(
+                        children: [
+                          Container(
+                            width: 6,
+                            height: 6,
+                            decoration: const BoxDecoration(
+                                color: Color(0xFF3B82F6), shape: BoxShape.circle),
+                          ),
+                          const SizedBox(width: 5),
+                          Text('本机 · ${session?.messages.length ?? 0} 条消息',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.black.withOpacity(0.4))),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
-              ),
-            Expanded(
-              child: items.isEmpty
-                  ? _EmptyHint(onNewChat: () => ref.read(chatProvider.notifier).newSession())
-                  : ListView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
-                      itemCount: items.length,
-                      itemBuilder: (_, i) => items[i],
-                    ),
+                IconButton(
+                  icon: const Icon(Icons.history_rounded, size: 24),
+                  onPressed: () => Scaffold.of(context).openDrawer(),
+                ),
+              ],
             ),
-            _InputBar(
-              controller: _inputController,
-              isStreaming: chat.isStreaming,
-              onSend: _send,
-              onStop: () => ref.read(chatProvider.notifier).stop(),
-            ),
-          ],
+          ),
         ),
-      ),
+        // ------- 错误提示 -------
+        if (chat.error != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFEECEC),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded,
+                      size: 18, color: Color(0xFFD93025)),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(chat.error!,
+                        style: const TextStyle(
+                            fontSize: 13, color: Color(0xFFD93025))),
+                  ),
+                  GestureDetector(
+                    onTap: () => ref.read(chatProvider.notifier).state =
+                        chat.copyWith(clearError: true),
+                    child: const Icon(Icons.close_rounded,
+                        size: 16, color: Color(0xFFD93025)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        // ------- 消息区 -------
+        Expanded(
+          child: empty
+              ? _EmptyGreeting(
+                  onSuggestion: (text) {
+                    ref.read(chatProvider.notifier).send(text);
+                    Future.delayed(
+                        const Duration(milliseconds: 300), _scrollToBottom);
+                  },
+                )
+              : ListView.builder(
+                  controller: _scrollController,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  itemCount: items.length,
+                  itemBuilder: (_, i) => items[i],
+                ),
+        ),
+        // ------- 输入栏 -------
+        _InputBar(
+          controller: _inputController,
+          hasText: _hasText,
+          isStreaming: chat.isStreaming,
+          onSend: _send,
+          onStop: () => ref.read(chatProvider.notifier).stop(),
+        ),
+        const SizedBox(height: 72), // 给磨砂底导航留出空间
+      ],
     );
   }
 }
 
-class _EmptyHint extends StatelessWidget {
-  const _EmptyHint({required this.onNewChat});
+class _EmptyGreeting extends StatelessWidget {
+  const _EmptyGreeting({required this.onSuggestion});
 
-  final VoidCallback onNewChat;
+  final ValueChanged<String> onSuggestion;
+
+  static const _suggestions = [
+    ('🔍', '联网搜索今天的科技新闻'),
+    ('🧮', '帮我算一笔账'),
+    ('🌐', '读取一个网页并总结'),
+    ('💡', '记住我的偏好设置'),
+  ];
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.smart_toy_outlined,
-              size: 72, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(height: 16),
-          Text('你好，我是 Pocket Agent',
-              style: Theme.of(context).textTheme.titleLarge),
-          const SizedBox(height: 8),
-          const Text('我可以联网搜索、抓网页、精确计算，\n并记住你的长期偏好。'),
-          const SizedBox(height: 16),
-          FilledButton.icon(
-            onPressed: onNewChat,
-            icon: const Icon(Icons.add),
-            label: const Text('开始新对话'),
+    return ListView(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+      children: [
+        const SizedBox(height: 24),
+        Container(
+          width: 84,
+          height: 84,
+          decoration: const BoxDecoration(
+              color: Colors.black, shape: BoxShape.circle),
+          child: const Icon(Icons.smart_toy_rounded,
+              color: Colors.white, size: 44),
+        ),
+        const SizedBox(height: 24),
+        const Text('你好，今天想做什么？',
+            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+        const SizedBox(height: 20),
+        for (final (emoji, text) in _suggestions)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 10),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => onSuggestion(text),
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(emoji, style: const TextStyle(fontSize: 18)),
+                    const SizedBox(width: 10),
+                    Flexible(
+                      child: Text(text,
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w500)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
-        ],
-      ),
+      ],
     );
   }
 }
@@ -171,11 +264,12 @@ class _MessageBubble extends StatelessWidget {
           constraints: BoxConstraints(
               maxWidth: MediaQuery.of(context).size.width * 0.78),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primaryContainer,
-            borderRadius:
-                BorderRadius.circular(16).copyWith(bottomRight: const Radius.circular(4)),
+            color: Colors.black,
+            borderRadius: BorderRadius.circular(18)
+                .copyWith(bottomRight: const Radius.circular(6)),
           ),
-          child: SelectableText(message.content),
+          child: SelectableText(message.content,
+              style: const TextStyle(color: Colors.white, fontSize: 15)),
         ),
       );
     }
@@ -185,29 +279,29 @@ class _MessageBubble extends StatelessWidget {
         alignment: Alignment.centerLeft,
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(8),
+            color: Colors.black.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(10),
           ),
           child: Text('🔧 ${message.toolName ?? "tool"} 结果已返回',
-              style: Theme.of(context).textTheme.bodySmall),
+              style: TextStyle(
+                  fontSize: 12, color: Colors.black.withOpacity(0.45))),
         ),
       );
     }
 
-    // assistant
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * 0.86),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius:
-              BorderRadius.circular(16).copyWith(bottomLeft: const Radius.circular(4)),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18)
+              .copyWith(bottomLeft: const Radius.circular(6)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -216,7 +310,8 @@ class _MessageBubble extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text('🔧 已调用 ${tc.name}',
-                    style: Theme.of(context).textTheme.bodySmall),
+                    style: TextStyle(
+                        fontSize: 12, color: Colors.black.withOpacity(0.45))),
               ),
             if (message.content.isNotEmpty)
               MarkdownBody(data: message.content),
@@ -239,13 +334,13 @@ class _StreamingBubble extends StatelessWidget {
       alignment: Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        constraints:
-            BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.86),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.86),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius:
-              BorderRadius.circular(16).copyWith(bottomLeft: const Radius.circular(4)),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(18)
+              .copyWith(bottomLeft: const Radius.circular(6)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -253,7 +348,9 @@ class _StreamingBubble extends StatelessWidget {
             for (final s in steps)
               Padding(
                 padding: const EdgeInsets.only(bottom: 2),
-                child: Text(s, style: Theme.of(context).textTheme.bodySmall),
+                child: Text(s,
+                    style: TextStyle(
+                        fontSize: 12, color: Colors.black.withOpacity(0.45))),
               ),
             if (content.isEmpty)
               const SizedBox(
@@ -273,12 +370,14 @@ class _StreamingBubble extends StatelessWidget {
 class _InputBar extends StatelessWidget {
   const _InputBar({
     required this.controller,
+    required this.hasText,
     required this.isStreaming,
     required this.onSend,
     required this.onStop,
   });
 
   final TextEditingController controller;
+  final bool hasText;
   final bool isStreaming;
   final VoidCallback onSend;
   final VoidCallback onStop;
@@ -286,92 +385,75 @@ class _InputBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 4, 12, 10),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              minLines: 1,
-              maxLines: 5,
-              textInputAction: TextInputAction.newline,
-              decoration: InputDecoration(
-                hintText: '输入消息…',
-                filled: true,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: BorderSide.none,
-                ),
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              ),
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(28),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 12,
+              offset: const Offset(0, 2),
             ),
-          ),
-          const SizedBox(width: 8),
-          CircleAvatar(
-            radius: 22,
-            child: isStreaming
-                ? IconButton(icon: const Icon(Icons.stop), onPressed: onStop)
-                : IconButton(icon: const Icon(Icons.send), onPressed: onSend),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SessionDrawer extends ConsumerWidget {
-  const _SessionDrawer({required this.chat});
-
-  final ChatState chat;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final sessions = chat.sessions;
-    return Drawer(
-      child: SafeArea(
-        child: Column(
+          ],
+        ),
+        child: Row(
           children: [
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: FilledButton.icon(
-                onPressed: () {
-                  ref.read(chatProvider.notifier).newSession();
-                  Navigator.of(context).pop();
-                },
-                icon: const Icon(Icons.add),
-                label: const Text('新对话'),
-              ),
+            Container(
+              width: 40,
+              height: 40,
+              alignment: Alignment.center,
+              child: const Icon(Icons.add_rounded,
+                  size: 24, color: Colors.black54),
             ),
             Expanded(
-              child: sessions.isEmpty
-                  ? const Center(child: Text('暂无历史会话'))
-                  : ListView.builder(
-                      itemCount: sessions.length,
-                      itemBuilder: (_, i) {
-                        final s = sessions[i];
-                        final active = s.id == chat.activeSessionId;
-                        return ListTile(
-                          selected: active,
-                          title: Text(s.title, maxLines: 1, overflow: TextOverflow.ellipsis),
-                          subtitle: Text(
-                            '${s.messages.length} 条消息',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline, size: 20),
-                            onPressed: () {
-                              ref.read(chatProvider.notifier).deleteSession(s.id);
-                            },
-                          ),
-                          onTap: () {
-                            ref.read(chatProvider.notifier).selectSession(s.id);
-                            Navigator.of(context).pop();
-                          },
-                        );
-                      },
-                    ),
+              child: TextField(
+                controller: controller,
+                minLines: 1,
+                maxLines: 4,
+                textInputAction: TextInputAction.send,
+                onSubmitted: (_) => hasText ? onSend() : null,
+                decoration: InputDecoration(
+                  hintText: '请在此输入任务',
+                  hintStyle: TextStyle(
+                      color: Colors.black.withOpacity(0.28), fontSize: 15),
+                  border: InputBorder.none,
+                  isDense: true,
+                  contentPadding: const EdgeInsets.symmetric(vertical: 10),
+                ),
+              ),
             ),
+            if (isStreaming)
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton(
+                  icon: const Icon(Icons.stop_rounded,
+                      size: 24, color: Colors.black),
+                  onPressed: onStop,
+                ),
+              )
+            else if (hasText)
+              GestureDetector(
+                onTap: onSend,
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: const BoxDecoration(
+                      color: Colors.black, shape: BoxShape.circle),
+                  child: const Icon(Icons.arrow_upward_rounded,
+                      size: 22, color: Colors.white),
+                ),
+              )
+            else
+              SizedBox(
+                width: 40,
+                height: 40,
+                child: Icon(Icons.mic_none_rounded,
+                    size: 24, color: Colors.black.withOpacity(0.35)),
+              ),
           ],
         ),
       ),

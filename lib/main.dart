@@ -4,7 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'providers/providers.dart';
 import 'services/storage_service.dart';
-import 'ui/chat_screen.dart';
+import 'ui/home_shell.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -29,18 +29,34 @@ class PocketAgentApp extends StatelessWidget {
     return MaterialApp(
       title: 'Pocket Agent',
       debugShowCheckedModeBanner: false,
+      themeMode: ThemeMode.light,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4C6FFF)),
         useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: const Color(0xFFF6F6F6),
         colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4C6FFF),
-          brightness: Brightness.dark,
+          seedColor: Colors.black,
+          brightness: Brightness.light,
+        ).copyWith(
+          primary: Colors.black,
+          onPrimary: Colors.white,
+          surface: Colors.white,
         ),
-        useMaterial3: true,
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          foregroundColor: Colors.black,
+          titleTextStyle: TextStyle(
+            color: Colors.black,
+            fontSize: 18,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        dividerColor: Colors.black.withOpacity(0.06),
+        splashFactory: InkSparkle.splashFactory,
       ),
-      home: const ChatScreen(),
+      home: const HomeShell(),
     );
   }
 }

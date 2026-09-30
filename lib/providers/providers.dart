@@ -218,6 +218,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _persist();
   }
 
+  Future<void> clearAllSessions() async {
+    state = ChatState(sessions: const [], activeSessionId: null);
+    await _storage.saveSessions(const []);
+  }
+
   void _persist() {
     _storage.saveSessions(state.sessions);
   }
