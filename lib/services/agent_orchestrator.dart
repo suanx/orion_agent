@@ -4,8 +4,8 @@ import 'package:dio/dio.dart';
 
 import 'llm_client.dart';
 import 'memory_service.dart';
-import 'models/chat_message.dart' show ChatMessage, ToolCall;
-import 'models/llm_config.dart';
+import '../models/chat_message.dart' show ChatMessage;
+import '../models/llm_config.dart';
 import 'tools.dart';
 
 /// Agent 运行事件。

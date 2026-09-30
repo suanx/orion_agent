@@ -315,7 +315,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   Future<void> stop() async {
     final t = _cancelToken;
     if (t != null && !t.isCancelled) {
-      await t.cancel();
+      t.cancel();
     }
   }
 }
