@@ -63,7 +63,8 @@ void main() {
       final docs = await rag.listDocs();
       expect(docs, hasLength(1));
       expect(docs.single.title, '宠物笔记');
-      expect(docs.single.chunkCount, 3);
+      // 三段共 46 字，低于 800 上限，按设计合并为单块
+      expect(docs.single.chunkCount, 1);
 
       final hits = await rag.search(
         query: '猫的习性',
@@ -71,10 +72,25 @@ void main() {
       );
       expect(hits, isNotEmpty);
       expect(hits.first.content.contains('猫'), isTrue);
-      // 相关性排序：含猫的块应排在含狗的块前面
-      final catIdx = hits.indexWhere((h) => h.content.contains('狗'));
-      if (catIdx != -1) {
-        expect(catIdx, greaterThanOrEqualTo(1));
+    });
+
+    test('长文档分块后按块检索', () async {
+      await rag.addDocument(
+        title: '长短文',
+        // 两段各 1000 字，分别硬切成 800+200，共 4 块
+        text: '${'猫很可爱。' * 200}\n\n${'狗很忠诚。' * 200}',
+        embed: fakeEmbed,
+      );
+      final docs = await rag.listDocs();
+      expect(docs.single.chunkCount, 4);
+
+      final hits = await rag.search(
+        query: '猫',
+        embedOne: (q) async => (await fakeEmbed([q])).first,
+      );
+      expect(hits, hasLength(2)); // 只有含「猫」的两块过阈值
+      for (final h in hits) {
+        expect(h.content.contains('猫'), isTrue);
       }
     });
 
