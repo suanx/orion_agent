@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:dio/dio.dart';
 
 import 'memory_service.dart';
+import 'rag_service.dart';
 import 'package:flutter/foundation.dart';
 
 /// 工具基类：所有内置工具与 MCP 工具都实现此接口。
@@ -337,9 +338,55 @@ class SaveMemoryTool extends Tool {
   }
 }
 
+/// 知识库检索工具。
+class SearchKnowledgeTool extends Tool {
+  SearchKnowledgeTool(this._rag, this._embed);
+
+  final RagService _rag;
+  final BatchEmbed _embed;
+
+  @override
+  String get name => 'search_knowledge';
+
+  @override
+  String get description =>
+      '在用户的知识库（其导入的文档与笔记）中检索相关资料。当用户的问题可能与其导入的文档内容有关，或用户要求"查我资料/查知识库"时调用。';
+
+  @override
+  Map<String, dynamic> get parameters => {
+        'type': 'object',
+        'properties': {
+          'query': {'type': 'string', 'description': '检索查询语句'},
+        },
+        'required': ['query'],
+      };
+
+  @override
+  Future<String> execute(Map<String, dynamic> args) async {
+    final query = args['query']?.toString() ?? '';
+    if (query.trim().isEmpty) return '错误：检索词为空';
+    final hits = await _rag.search(
+      query: query,
+      embedOne: (q) async => (await _embed([q])).first,
+    );
+    if (hits.isEmpty) return '知识库中没有找到相关内容。';
+    final buf = StringBuffer();
+    for (var i = 0; i < hits.length; i++) {
+      buf.writeln('【资料${i + 1}｜来源: ${hits[i].docTitle}】');
+      buf.writeln(hits[i].content);
+      buf.writeln();
+    }
+    return _truncate(buf.toString(), 4000);
+  }
+}
+
 /// 工具注册表：统一管理内置工具与（未来的）MCP 工具。
 class ToolRegistry {
-  ToolRegistry({required MemoryService memoryService}) {
+  ToolRegistry({
+    required MemoryService memoryService,
+    RagService? ragService,
+    BatchEmbed? batchEmbed,
+  }) {
     final dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 20),
       receiveTimeout: const Duration(seconds: 30),
@@ -350,6 +397,8 @@ class ToolRegistry {
       WebSearchTool(dio),
       WebFetchTool(dio),
       SaveMemoryTool(memoryService),
+      if (ragService != null && batchEmbed != null)
+        SearchKnowledgeTool(ragService, batchEmbed),
     ];
   }
 

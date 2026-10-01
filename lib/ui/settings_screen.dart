@@ -77,6 +77,7 @@ class SettingsScreen extends ConsumerWidget {
         TextEditingController(text: existing?.baseUrl ?? 'https://api.openai.com/v1');
     final keyCtrl = TextEditingController(text: existing?.apiKey ?? '');
     final modelCtrl = TextEditingController(text: existing?.model ?? '');
+    final embCtrl = TextEditingController(text: existing?.embeddingModel ?? '');
     double temperature = existing?.temperature ?? 0.7;
 
     final saved = await showModalBottomSheet<bool>(
@@ -116,6 +117,13 @@ class SettingsScreen extends ConsumerWidget {
                 controller: modelCtrl,
                 decoration: const InputDecoration(
                     labelText: '模型名（如 gpt-4o-mini、glm-4-flash）'),
+              ),
+              TextField(
+                controller: embCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Embedding 模型名（可选，用于知识库检索）',
+                  hintText: '如 text-embedding-3-small、embedding-3',
+                ),
               ),
               Row(
                 children: [
@@ -158,6 +166,7 @@ class SettingsScreen extends ConsumerWidget {
           apiKey: keyCtrl.text.trim(),
           model: modelCtrl.text.trim(),
           temperature: temperature,
+          embeddingModel: embCtrl.text.trim(),
         ));
   }
 }

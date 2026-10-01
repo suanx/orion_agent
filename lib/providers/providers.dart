@@ -12,6 +12,7 @@ import '../services/agent_orchestrator.dart';
 import '../services/database.dart';
 import '../services/llm_client.dart';
 import '../services/memory_service.dart';
+import '../services/rag_service.dart';
 import '../services/storage_service.dart';
 import '../services/tools.dart';
 
@@ -33,8 +34,26 @@ final storageServiceProvider =
 final memoryServiceProvider =
     Provider<MemoryService>((ref) => MemoryService(ref.watch(databaseProvider)));
 
-final toolRegistryProvider = Provider<ToolRegistry>((ref) =>
-    ToolRegistry(memoryService: ref.watch(memoryServiceProvider)));
+final ragServiceProvider =
+    Provider<RagService>((ref) => RagService(ref.watch(databaseProvider)));
+
+/// 用当前激活的模型配置调用 /embeddings。未配置 Embedding 模型时调用会抛异常，
+/// 由调用方（工具/聊天）捕获降级。
+final batchEmbedProvider = Provider<BatchEmbed>((ref) {
+  return (inputs) async {
+    final config = ref.read(configProvider).activeConfig;
+    if (config == null) {
+      throw Exception('未配置模型服务');
+    }
+    return ref.read(llmClientProvider).embedBatch(config: config, inputs: inputs);
+  };
+});
+
+final toolRegistryProvider = Provider<ToolRegistry>((ref) => ToolRegistry(
+      memoryService: ref.watch(memoryServiceProvider),
+      ragService: ref.watch(ragServiceProvider),
+      batchEmbed: ref.watch(batchEmbedProvider),
+    ));
 
 final llmClientProvider = Provider<LlmClient>(
     (ref) => LlmClient(Dio(BaseOptions(connectTimeout: const Duration(seconds: 30)))));
@@ -195,9 +214,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
     required List<ChatSession> initialSessions,
     required StorageService storage,
     required AgentOrchestrator orchestrator,
+    required RagService rag,
+    required LlmClient llm,
     required LlmConfig? Function() getConfig,
   })  : _storage = storage,
         _orchestrator = orchestrator,
+        _rag = rag,
+        _llm = llm,
         _getConfig = getConfig,
         super(ChatState(
           sessions: initialSessions,
@@ -206,6 +229,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   final StorageService _storage;
   final AgentOrchestrator _orchestrator;
+  final RagService _rag;
+  final LlmClient _llm;
   final LlmConfig? Function() _getConfig;
 
   CancelToken? _cancelToken;
@@ -290,6 +315,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _cancelToken = CancelToken();
     final history = List<ChatMessage>.from(updated.messages);
 
+    // 发送前自动检索知识库（未配置 embedding 模型或检索失败时静默跳过）
+    var knowledge = const <RagHit>[];
+    if (config.embeddingModel.trim().isNotEmpty) {
+      try {
+        knowledge = await _rag.search(
+          query: content,
+          embedOne: (q) async =>
+              (await _llm.embedBatch(config: config, inputs: [q])).first,
+        );
+      } catch (_) {}
+    }
+
     final buf = StringBuffer();
     ChatMessage? answer;
 
@@ -298,6 +335,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         config: config,
         history: history,
         cancelToken: _cancelToken,
+        knowledge: knowledge,
       )) {
         if (ev is AgentDelta) {
           buf.write(ev.delta);
@@ -346,6 +384,8 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     initialSessions: ref.watch(initialSessionsProvider),
     storage: ref.watch(storageServiceProvider),
     orchestrator: ref.watch(orchestratorProvider),
+    rag: ref.watch(ragServiceProvider),
+    llm: ref.watch(llmClientProvider),
     getConfig: () => ref.read(configProvider).activeConfig,
   );
 });

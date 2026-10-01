@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 
 import 'llm_client.dart';
 import 'memory_service.dart';
+import 'rag_service.dart';
 import '../models/chat_message.dart' show ChatMessage;
 import '../models/llm_config.dart';
 import 'tools.dart';
@@ -64,9 +65,10 @@ class AgentOrchestrator {
     required LlmConfig config,
     required List<ChatMessage> history,
     CancelToken? cancelToken,
+    List<RagHit> knowledge = const [],
   }) async* {
     final messages = <Map<String, dynamic>>[
-      {'role': 'system', 'content': _systemPrompt()},
+      {'role': 'system', 'content': _systemPrompt(knowledge)},
       ...history.map((m) => m.toApiJson()),
     ];
 
@@ -121,16 +123,27 @@ class AgentOrchestrator {
     yield const AgentFailure('已达最大工具调用轮数（$_maxSteps），任务中止。');
   }
 
-  String _systemPrompt() {
+  String _systemPrompt(List<RagHit> knowledge) {
     final mem = _memory.memoryPrompt();
+    var kb = '';
+    if (knowledge.isNotEmpty) {
+      final buf = StringBuffer();
+      for (var i = 0; i < knowledge.length; i++) {
+        buf.writeln('【资料${i + 1}｜来源: ${knowledge[i].docTitle}】');
+        buf.writeln(knowledge[i].content);
+        buf.writeln();
+      }
+      kb = '\n以下是从用户知识库检索到的参考资料。回答与这些资料相关的问题时，'
+          '优先依据资料内容，并注明来源（如「来源：资料1」）；资料中没有的内容不要编造：\n$buf';
+    }
     return '你是 Pocket Agent，一个运行在用户手机上的智能助手。'
-        '你可以使用提供的工具来获取实时信息、执行计算和读取网页。'
+        '你可以使用提供的工具来获取实时信息、执行计算、读取网页和检索知识库。'
         '规则：\n'
         '1. 涉及实时信息、精确计算、读取链接时，必须调用工具，不要凭记忆编造。\n'
         '2. 得到工具结果后，用自然语言总结回答，不要原样粘贴原始数据。\n'
         '3. 使用与用户相同的语言回答（默认中文）。\n'
         '4. 回答力求准确、简洁。\n'
-        '当前日期：${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日。$mem';
+        '当前日期：${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日。$mem$kb';
   }
 
   String _dioError(DioException e) {

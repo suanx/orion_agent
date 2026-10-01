@@ -43,14 +43,45 @@ class MemoryNoteRows extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-@DriftDatabase(tables: [SessionRows, MessageRows, MemoryNoteRows])
+/// 知识库文档表。
+class KnowledgeDocs extends Table {
+  TextColumn get id => text()();
+  TextColumn get title => text()();
+  IntColumn get chunkCount => integer()();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// 知识库分块表：embedding 以 float 数组 JSON 存储（v1 暴力余弦检索）。
+class KnowledgeChunks extends Table {
+  IntColumn get id => integer().autoIncrement()();
+  TextColumn get docId => text()();
+  IntColumn get idx => integer()();
+  TextColumn get content => text()();
+  TextColumn get embeddingJson => text()();
+}
+
+@DriftDatabase(
+    tables: [SessionRows, MessageRows, MemoryNoteRows, KnowledgeDocs, KnowledgeChunks])
 class AppDatabase extends _$AppDatabase {
   /// 生产环境不传 executor；测试注入 NativeDatabase.memory()。
   AppDatabase([QueryExecutor? executor])
       : super(executor ?? driftDatabase(name: 'pocket_agent'));
 
   @override
-  int get schemaVersion => 1;
+  int get schemaVersion => 2;
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+        onUpgrade: (m, from, to) async {
+          if (from < 2) {
+            await m.createTable(knowledgeDocs);
+            await m.createTable(knowledgeChunks);
+          }
+        },
+      );
 }
 
 // ---------------- 行 ↔ 领域模型映射 ----------------

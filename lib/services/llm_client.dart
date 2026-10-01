@@ -135,4 +135,42 @@ class LlmClient {
     );
     yield FinalMessage(finalMsg);
   }
+
+  /// 批量调用 OpenAI 兼容的 /embeddings 接口，返回与输入顺序一致的向量列表。
+  Future<List<List<double>>> embedBatch({
+    required LlmConfig config,
+    required List<String> inputs,
+    CancelToken? cancelToken,
+  }) async {
+    if (config.embeddingModel.trim().isEmpty) {
+      throw Exception('未配置 Embedding 模型（设置 → 模型服务 → Embedding 模型名）');
+    }
+    final base = config.baseUrl.endsWith('/')
+        ? config.baseUrl.substring(0, config.baseUrl.length - 1)
+        : config.baseUrl;
+
+    final resp = await _dio.post<Map<String, dynamic>>(
+      '$base/embeddings',
+      data: {'model': config.embeddingModel, 'input': inputs},
+      cancelToken: cancelToken,
+      options: Options(headers: {
+        'Authorization': 'Bearer ${config.apiKey}',
+        'Content-Type': 'application/json',
+      }),
+    );
+
+    final data = resp.data?['data'] as List? ?? const [];
+    final pairs = <MapEntry<int, List<double>>>[];
+    for (final item in data) {
+      if (item is! Map<String, dynamic>) continue;
+      final idx = (item['index'] as num?)?.toInt() ?? 0;
+      final vec = (item['embedding'] as List? ?? const [])
+          .whereType<num>()
+          .map((e) => e.toDouble())
+          .toList();
+      pairs.add(MapEntry(idx, vec));
+    }
+    pairs.sort((a, b) => a.key.compareTo(b.key));
+    return pairs.map((e) => e.value).toList();
+  }
 }

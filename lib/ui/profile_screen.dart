@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import 'knowledge_screen.dart';
 import 'memory_screen.dart';
 import 'settings_screen.dart';
 
@@ -112,6 +113,13 @@ class ProfileScreen extends ConsumerWidget {
                     fontSize: 13, color: Colors.black.withOpacity(0.4))),
             onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const MemoryScreen())),
+          ),
+          _CardItem(
+            icon: Icons.auto_stories_rounded,
+            title: '知识库',
+            trailing: () => const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const KnowledgeScreen())),
           ),
         ]),
         const SizedBox(height: 12),
