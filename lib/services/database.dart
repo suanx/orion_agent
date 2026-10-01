@@ -13,8 +13,8 @@ part 'database.g.dart';
 class SessionRows extends Table {
   TextColumn get id => text()();
   TextColumn get title => text()();
-  IntColumn get createdAt => intColumn()();
-  IntColumn get updatedAt => intColumn()();
+  IntColumn get createdAt => integer()();
+  IntColumn get updatedAt => integer()();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -30,14 +30,14 @@ class MessageRows extends Table {
   TextColumn get toolCallsJson => text().withDefault(const Constant('[]'))();
   TextColumn get toolCallId => text().nullable()();
   TextColumn get toolName => text().nullable()();
-  IntColumn get createdAt => intColumn()();
+  IntColumn get createdAt => integer()();
 }
 
 /// 长期记忆表。
 class MemoryNoteRows extends Table {
   TextColumn get id => text()();
   TextColumn get body => text()();
-  IntColumn get createdAt => intColumn()();
+  IntColumn get createdAt => integer()();
 
   @override
   Set<Column> get primaryKey => {id};
