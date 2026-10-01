@@ -1,18 +1,19 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/chat_message.dart';
+import '../models/chat_session.dart';
 import '../models/llm_config.dart';
 import '../services/agent_orchestrator.dart';
+import '../services/database.dart';
 import '../services/llm_client.dart';
 import '../services/memory_service.dart';
 import '../services/storage_service.dart';
 import '../services/tools.dart';
-import '../models/chat_message.dart';
-import '../models/chat_session.dart';
-import 'package:dio/dio.dart';
-import 'dart:async';
 
 /// 在 main() 中 override 注入。
 final sharedPreferencesProvider =
@@ -22,13 +23,15 @@ final sharedPreferencesProvider =
 final initialSessionsProvider =
     Provider<List<ChatSession>>((ref) => throw UnimplementedError());
 
-final storageServiceProvider = Provider<StorageService>((ref) => StorageService());
+/// 在 main() 中 override 注入，保证全 app 单一数据库连接。
+final databaseProvider =
+    Provider<AppDatabase>((ref) => throw UnimplementedError());
 
-final memoryServiceProvider = Provider<MemoryService>((ref) {
-  final m = MemoryService();
-  // load() 在 addNote/removeNote 内部会自动触发
-  return m;
-});
+final storageServiceProvider =
+    Provider<StorageService>((ref) => StorageService(ref.watch(databaseProvider)));
+
+final memoryServiceProvider =
+    Provider<MemoryService>((ref) => MemoryService(ref.watch(databaseProvider)));
 
 final toolRegistryProvider = Provider<ToolRegistry>((ref) =>
     ToolRegistry(memoryService: ref.watch(memoryServiceProvider)));
@@ -58,19 +61,31 @@ class ConfigState {
   }
 }
 
+/// 配置存两处：配置 JSON（含 API Key）进 flutter_secure_storage
+/// （Keychain/Keystore 加密），activeId 进 shared_preferences。
 class ConfigNotifier extends StateNotifier<ConfigState> {
-  ConfigNotifier(this._prefs)
+  ConfigNotifier(this._prefs, this._secure)
       : super(const ConfigState(configs: [], activeId: '')) {
     _load();
   }
 
   final SharedPreferences _prefs;
+  final FlutterSecureStorage _secure;
 
   static const _kConfigs = 'llm_configs';
   static const _kActive = 'llm_active_id';
 
-  void _load() {
-    final raw = _prefs.getString(_kConfigs);
+  Future<void> _load() async {
+    var raw = await _secure.read(key: _kConfigs);
+    if (raw == null) {
+      // 旧版本把配置明文存在 shared_preferences，迁移到加密存储后删除明文。
+      final legacy = _prefs.getString(_kConfigs);
+      if (legacy != null) {
+        raw = legacy;
+        await _secure.write(key: _kConfigs, value: legacy);
+        await _prefs.remove(_kConfigs);
+      }
+    }
     final list = <LlmConfig>[];
     if (raw != null) {
       try {
@@ -82,13 +97,14 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
         }
       } catch (_) {}
     }
+    if (!mounted) return;
     state = ConfigState(configs: list, activeId: _prefs.getString(_kActive) ?? '');
   }
 
-  void _persist() {
-    _prefs.setString(
-        _kConfigs, jsonEncode(state.configs.map((c) => c.toJson()).toList()));
-    _prefs.setString(_kActive, state.activeId);
+  Future<void> _persist() async {
+    await _secure.write(key: _kConfigs,
+        value: jsonEncode(state.configs.map((c) => c.toJson()).toList()));
+    await _prefs.setString(_kActive, state.activeId);
   }
 
   void upsert(LlmConfig config) {
@@ -120,7 +136,10 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
 
 final configProvider =
     StateNotifierProvider<ConfigNotifier, ConfigState>((ref) {
-  return ConfigNotifier(ref.watch(sharedPreferencesProvider));
+  return ConfigNotifier(
+    ref.watch(sharedPreferencesProvider),
+    const FlutterSecureStorage(),
+  );
 });
 
 // ---------------- 会话与聊天 ----------------
@@ -202,7 +221,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       updatedAt: DateTime.now(),
     );
     state = state.copyWith(sessions: [s, ...state.sessions], activeSessionId: s.id, clearError: true);
-    _persist();
+    _storage.insertSession(s);
   }
 
   void selectSession(String id) {
@@ -215,21 +234,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
         ? (remaining.isEmpty ? null : remaining.first.id)
         : state.activeSessionId;
     state = state.copyWith(sessions: remaining, activeSessionId: newActive);
-    _persist();
+    _storage.deleteSession(id);
   }
 
   Future<void> clearAllSessions() async {
     state = ChatState(sessions: const [], activeSessionId: null);
-    await _storage.saveSessions(const []);
-  }
-
-  void _persist() {
-    _storage.saveSessions(state.sessions);
+    await _storage.clearSessions();
   }
 
   void _touch(ChatSession updated) {
     final sessions = state.sessions.map((s) => s.id == updated.id ? updated : s).toList();
     state = state.copyWith(sessions: sessions);
+    _storage.updateSessionMeta(updated);
   }
 
   Future<void> send(String text) async {
@@ -262,7 +278,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
           content.length > 16 ? '${content.substring(0, 16)}…' : content;
     }
     _touch(updated);
-    _persist();
+    _storage.insertMessage(session.id, userMsg);
 
     state = state.copyWith(
       isStreaming: true,
@@ -310,7 +326,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       s2.messages.add(answer);
       s2.updatedAt = DateTime.now();
       _touch(s2);
-      _persist();
+      _storage.insertMessage(s2.id, answer);
     }
 
     state = state.copyWith(isStreaming: false, streamingContent: '', steps: []);

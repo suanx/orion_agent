@@ -1,61 +1,57 @@
-import 'dart:convert';
-import 'dart:io';
-
-import 'package:path_provider/path_provider.dart';
+import 'package:drift/drift.dart';
 
 import '../models/memory_note.dart';
+import 'database.dart';
 
-/// 长期记忆服务：JSON 文件持久化。
+/// 长期记忆服务：Drift(SQLite) 持久化，内存缓存供同步读取。
 class MemoryService {
-  static const _fileName = 'memory_notes.json';
+  MemoryService(this._db);
+
+  final AppDatabase _db;
 
   final List<MemoryNote> _notes = [];
   bool _loaded = false;
 
   List<MemoryNote> get notes => List.unmodifiable(_notes);
 
-  Future<File> _file() async {
-    final dir = await getApplicationDocumentsDirectory();
-    return File('${dir.path}/$_fileName');
-  }
-
   Future<void> load() async {
     if (_loaded) return;
     _loaded = true;
-    try {
-      final file = await _file();
-      if (!await file.exists()) return;
-      final decoded = jsonDecode(await file.readAsString());
-      if (decoded is List) {
-        _notes
-          ..clear()
-          ..addAll(
-              decoded.whereType<Map<String, dynamic>>().map(MemoryNote.fromJson));
-      }
-    } catch (_) {
-      // 记忆文件损坏时静默重建
-    }
-  }
-
-  Future<void> _save() async {
-    final file = await _file();
-    await file.writeAsString(jsonEncode(_notes.map((n) => n.toJson()).toList()));
+    final rows = await (_db.select(_db.memoryNoteRows)
+          ..orderBy([(n) => OrderingTerm.asc(n.createdAt)]))
+        .get();
+    _notes
+      ..clear()
+      ..addAll(rows
+          .map((r) => MemoryNote(
+                id: r.id,
+                text: r.body,
+                createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt),
+              ))
+          .toList());
   }
 
   Future<void> addNote(String text) async {
     await load();
-    _notes.add(MemoryNote(
+    final note = MemoryNote(
       id: 'mem_${DateTime.now().millisecondsSinceEpoch}',
       text: text,
       createdAt: DateTime.now(),
-    ));
-    await _save();
+    );
+    await _db.into(_db.memoryNoteRows).insert(
+          MemoryNoteRowsCompanion(
+            id: Value(note.id),
+            body: Value(note.text),
+            createdAt: Value(note.createdAt.millisecondsSinceEpoch),
+          ),
+        );
+    _notes.add(note);
   }
 
   Future<void> removeNote(String id) async {
     await load();
+    await (_db.delete(_db.memoryNoteRows)..where((n) => n.id.equals(id))).go();
     _notes.removeWhere((n) => n.id == id);
-    await _save();
   }
 
   /// 注入到 system prompt 的记忆文本。

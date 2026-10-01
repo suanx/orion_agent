@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'providers/providers.dart';
+import 'services/database.dart';
+import 'services/memory_service.dart';
 import 'services/storage_service.dart';
 import 'ui/home_shell.dart';
 
@@ -10,12 +12,17 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   final prefs = await SharedPreferences.getInstance();
-  final sessions = await StorageService().loadSessions();
+  final db = AppDatabase();
+  final sessions = await StorageService(db).loadSessions();
+  final memory = MemoryService(db);
+  await memory.load();
 
   runApp(ProviderScope(
     overrides: [
       sharedPreferencesProvider.overrideWithValue(prefs),
       initialSessionsProvider.overrideWithValue(sessions),
+      databaseProvider.overrideWithValue(db),
+      memoryServiceProvider.overrideWithValue(memory),
     ],
     child: const PocketAgentApp(),
   ));

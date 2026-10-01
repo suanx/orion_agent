@@ -29,8 +29,14 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
+      - name: Drift codegen
+        run: dart run build_runner build --delete-conflicting-outputs
+
       - name: Analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Test
+        run: flutter test
 
       - name: Build APK
         run: flutter build apk --release
