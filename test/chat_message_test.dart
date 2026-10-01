@@ -3,7 +3,7 @@ import 'package:pocket_agent/models/chat_message.dart';
 
 void main() {
   test('带图片的 user 消息转为多段 content API 格式', () {
-    const m = ChatMessage(
+    final m = ChatMessage(
       id: 'u1',
       role: 'user',
       content: '这是什么？',
@@ -19,7 +19,7 @@ void main() {
   });
 
   test('只有图片没有文本时不含 text 段', () {
-    const m = ChatMessage(
+    final m = ChatMessage(
       id: 'u2',
       role: 'user',
       content: '',
@@ -31,12 +31,12 @@ void main() {
   });
 
   test('纯文本消息保持字符串 content', () {
-    const m = ChatMessage(id: 'u3', role: 'user', content: '你好');
+    final m = ChatMessage(id: 'u3', role: 'user', content: '你好');
     expect(m.toApiJson(), {'role': 'user', 'content': '你好'});
   });
 
   test('assistant 消息不受 images 影响', () {
-    const m = ChatMessage(
+    final m = ChatMessage(
       id: 'a1',
       role: 'assistant',
       content: '回答',
@@ -48,7 +48,7 @@ void main() {
   });
 
   test('toJson/fromJson 往返保留图片', () {
-    const m = ChatMessage(
+    final m = ChatMessage(
       id: 'u4',
       role: 'user',
       content: '看图',
