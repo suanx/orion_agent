@@ -273,9 +273,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _storage.updateSessionMeta(updated);
   }
 
-  Future<void> send(String text) async {
+  Future<void> send(String text, {List<String> images = const []}) async {
     final content = text.trim();
-    if (content.isEmpty || state.isStreaming) return;
+    if ((content.isEmpty && images.isEmpty) || state.isStreaming) return;
 
     final config = _getConfig();
     if (config == null) {
@@ -294,13 +294,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
       id: 'u_${DateTime.now().millisecondsSinceEpoch}',
       role: 'user',
       content: content,
+      images: images,
     );
     final updated = session
       ..messages.add(userMsg)
       ..updatedAt = DateTime.now();
     if (session.title == '新对话') {
-      updated.title =
-          content.length > 16 ? '${content.substring(0, 16)}…' : content;
+      updated.title = content.isEmpty
+          ? '[图片]'
+          : (content.length > 16 ? '${content.substring(0, 16)}…' : content);
     }
     _touch(updated);
     _storage.insertMessage(session.id, userMsg);

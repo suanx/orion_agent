@@ -1,9 +1,30 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../models/chat_message.dart';
 import '../providers/providers.dart';
+
+Uint8List _decodeImage(String dataUrl) {
+  final b64 = dataUrl.contains(',') ? dataUrl.split(',')[1] : dataUrl;
+  return base64Decode(b64);
+}
+
+void _showImageViewer(BuildContext context, String dataUrl) {
+  showDialog(
+    context: context,
+    builder: (_) => Dialog.fullscreen(
+      backgroundColor: Colors.black,
+      child: InteractiveViewer(
+        maxScale: 4,
+        child: Center(child: Image.memory(_decodeImage(dataUrl))),
+      ),
+    ),
+  );
+}
 
 /// 对话 Tab（body，无 Scaffold；drawer 由 HomeShell 提供）。
 class ChatScreen extends ConsumerStatefulWidget {
@@ -18,6 +39,7 @@ class ChatScreen extends ConsumerStatefulWidget {
 class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
+  final _pendingImages = <String>[]; // data URL
   bool _hasText = false;
 
   @override
@@ -38,10 +60,49 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _send() {
     final text = _inputController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty && _pendingImages.isEmpty) return;
+    final images = List<String>.of(_pendingImages);
     _inputController.clear();
-    ref.read(chatProvider.notifier).send(text);
+    setState(_pendingImages.clear);
+    ref.read(chatProvider.notifier).send(text, images: images);
     Future.delayed(const Duration(milliseconds: 300), _scrollToBottom);
+  }
+
+  Future<void> _addImage() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.photo_camera_outlined),
+              title: const Text('拍照'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_outlined),
+              title: const Text('从相册选择'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+    try {
+      final picked = await ImagePicker()
+          .pickImage(source: source, imageQuality: 80, maxWidth: 1600);
+      if (picked == null) return;
+      final bytes = await picked.readAsBytes();
+      setState(() =>
+          _pendingImages.add('data:image/jpeg;base64,${base64Encode(bytes)}'));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('获取图片失败：$e')));
+      }
+    }
   }
 
   void _scrollToBottom() {
@@ -171,13 +232,50 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   itemBuilder: (_, i) => items[i],
                 ),
         ),
+        // ------- 待发送图片 -------
+        if (_pendingImages.isNotEmpty)
+          SizedBox(
+            height: 64,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              itemCount: _pendingImages.length,
+              itemBuilder: (_, i) => Stack(
+                children: [
+                  Container(
+                    margin: const EdgeInsets.only(right: 8),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: Image.memory(_decodeImage(_pendingImages[i]),
+                          width: 56, height: 56, fit: BoxFit.cover),
+                    ),
+                  ),
+                  Positioned(
+                    top: 0,
+                    right: 0,
+                    child: GestureDetector(
+                      onTap: () => setState(() => _pendingImages.removeAt(i)),
+                      child: Container(
+                        decoration: const BoxDecoration(
+                            color: Colors.white, shape: BoxShape.circle),
+                        child: const Icon(Icons.cancel_rounded,
+                            size: 18, color: Colors.black54),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         // ------- 输入栏 -------
         _InputBar(
           controller: _inputController,
           hasText: _hasText,
+          hasImages: _pendingImages.isNotEmpty,
           isStreaming: chat.isStreaming,
           onSend: _send,
           onStop: () => ref.read(chatProvider.notifier).stop(),
+          onAddImage: _addImage,
         ),
         const SizedBox(height: 72), // 给磨砂底导航留出空间
       ],
@@ -256,11 +354,14 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (message.role == 'user') {
+      final hasImages = message.images.isNotEmpty;
       return Align(
         alignment: Alignment.centerRight,
         child: Container(
           margin: const EdgeInsets.symmetric(vertical: 4),
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          padding: hasImages
+              ? const EdgeInsets.all(6)
+              : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           constraints: BoxConstraints(
               maxWidth: MediaQuery.of(context).size.width * 0.78),
           decoration: BoxDecoration(
@@ -268,8 +369,38 @@ class _MessageBubble extends StatelessWidget {
             borderRadius: BorderRadius.circular(18)
                 .copyWith(bottomRight: const Radius.circular(6)),
           ),
-          child: SelectableText(message.content,
-              style: const TextStyle(color: Colors.white, fontSize: 15)),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final url in message.images)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: GestureDetector(
+                    onTap: () => _showImageViewer(context, url),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: Image.memory(
+                        _decodeImage(url),
+                        width: 180,
+                        height: 180,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 180,
+                          height: 100,
+                          color: Colors.white24,
+                          child: const Icon(Icons.broken_image_outlined,
+                              color: Colors.white54),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              if (message.content.isNotEmpty)
+                SelectableText(message.content,
+                    style: const TextStyle(color: Colors.white, fontSize: 15)),
+            ],
+          ),
         ),
       );
     }
@@ -371,16 +502,20 @@ class _InputBar extends StatelessWidget {
   const _InputBar({
     required this.controller,
     required this.hasText,
+    required this.hasImages,
     required this.isStreaming,
     required this.onSend,
     required this.onStop,
+    required this.onAddImage,
   });
 
   final TextEditingController controller;
   final bool hasText;
+  final bool hasImages;
   final bool isStreaming;
   final VoidCallback onSend;
   final VoidCallback onStop;
+  final VoidCallback onAddImage;
 
   @override
   Widget build(BuildContext context) {
@@ -401,12 +536,14 @@ class _InputBar extends StatelessWidget {
         ),
         child: Row(
           children: [
-            Container(
+            SizedBox(
               width: 40,
               height: 40,
-              alignment: Alignment.center,
-              child: const Icon(Icons.add_rounded,
-                  size: 24, color: Colors.black54),
+              child: IconButton(
+                icon: const Icon(Icons.add_rounded,
+                    size: 24, color: Colors.black54),
+                onPressed: onAddImage,
+              ),
             ),
             Expanded(
               child: TextField(
@@ -414,7 +551,7 @@ class _InputBar extends StatelessWidget {
                 minLines: 1,
                 maxLines: 4,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (_) => hasText ? onSend() : null,
+                onSubmitted: (_) => (hasText || hasImages) ? onSend() : null,
                 decoration: InputDecoration(
                   hintText: '请在此输入任务',
                   hintStyle: TextStyle(
@@ -435,7 +572,7 @@ class _InputBar extends StatelessWidget {
                   onPressed: onStop,
                 ),
               )
-            else if (hasText)
+            else if (hasText || hasImages)
               GestureDetector(
                 onTap: onSend,
                 child: Container(

@@ -30,6 +30,7 @@ class MessageRows extends Table {
   TextColumn get toolCallsJson => text().withDefault(const Constant('[]'))();
   TextColumn get toolCallId => text().nullable()();
   TextColumn get toolName => text().nullable()();
+  TextColumn get imagesJson => text().withDefault(const Constant('[]'))();
   IntColumn get createdAt => integer()();
 }
 
@@ -71,7 +72,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'pocket_agent'));
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -79,6 +80,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 2) {
             await m.createTable(knowledgeDocs);
             await m.createTable(knowledgeChunks);
+          }
+          if (from < 3) {
+            await m.addColumn(messageRows, messageRows.imagesJson);
           }
         },
       );
@@ -94,6 +98,9 @@ List<ToolCall> decodeToolCalls(String json) => (jsonDecode(json) as List? ?? [])
     .map(ToolCall.fromJson)
     .toList();
 
+List<String> decodeStringList(String json) =>
+    (jsonDecode(json) as List? ?? const []).whereType<String>().toList();
+
 ChatMessage messageFromRow(MessageRow r) => ChatMessage(
       id: r.mid,
       role: r.role,
@@ -101,6 +108,7 @@ ChatMessage messageFromRow(MessageRow r) => ChatMessage(
       toolCalls: decodeToolCalls(r.toolCallsJson),
       toolCallId: r.toolCallId,
       toolName: r.toolName,
+      images: decodeStringList(r.imagesJson),
       createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt),
     );
 
@@ -113,6 +121,7 @@ MessageRowsCompanion messageToCompanion(String sessionId, ChatMessage m) =>
       toolCallsJson: Value(encodeToolCalls(m.toolCalls)),
       toolCallId: Value(m.toolCallId),
       toolName: Value(m.toolName),
+      imagesJson: Value(jsonEncode(m.images)),
       createdAt: Value(m.createdAt.millisecondsSinceEpoch),
     );
 

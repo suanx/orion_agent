@@ -33,6 +33,7 @@ class ChatMessage {
   final List<ToolCall> toolCalls; // assistant 消息可能携带
   final String? toolCallId; // role == tool 时必填
   final String? toolName;
+  final List<String> images; // data URL（base64），user 消息可附带
   final DateTime createdAt;
 
   ChatMessage({
@@ -42,6 +43,7 @@ class ChatMessage {
     this.toolCalls = const [],
     this.toolCallId,
     this.toolName,
+    this.images = const [],
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
@@ -50,7 +52,19 @@ class ChatMessage {
   bool get isToolResult => role == 'tool';
 
   /// 转成 OpenAI Chat Completions API 的消息格式。
+  /// 带图片的 user 消息用多段 content（text + image_url）。
   Map<String, dynamic> toApiJson() {
+    if (role == 'user' && images.isNotEmpty) {
+      final parts = <Map<String, dynamic>>[
+        if (content.isNotEmpty) {'type': 'text', 'text': content},
+        for (final url in images)
+          {
+            'type': 'image_url',
+            'image_url': {'url': url},
+          },
+      ];
+      return {'role': role, 'content': parts};
+    }
     final m = <String, dynamic>{'role': role, 'content': content};
     if (toolCalls.isNotEmpty) {
       m['tool_calls'] = toolCalls.map((t) => t.toApiJson()).toList();
@@ -69,6 +83,7 @@ class ChatMessage {
         'toolCalls': toolCalls.map((t) => t.toJson()).toList(),
         'toolCallId': toolCallId,
         'toolName': toolName,
+        'images': images,
         'createdAt': createdAt.millisecondsSinceEpoch,
       };
 
@@ -81,6 +96,7 @@ class ChatMessage {
             .toList(),
         toolCallId: j['toolCallId'] as String?,
         toolName: j['toolName'] as String?,
+        images: (j['images'] as List? ?? []).whereType<String>().toList(),
         createdAt: DateTime.fromMillisecondsSinceEpoch(
           (j['createdAt'] as num?)?.toInt() ?? 0,
         ),
