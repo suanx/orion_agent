@@ -357,7 +357,7 @@ class _EmptyGreeting extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       children: [
         const SizedBox(height: 24),
-        SizedBox(width: 84, height: 84, child: ClipOval(child: Image.asset(mascotAsset(context), fit: BoxFit.cover, cacheWidth: 252))),
+        SizedBox(width: 84, height: 84, child: ClipOval(child: Transform.scale(scale: 1.6, alignment: Alignment.topCenter, child: Image.asset(mascotAsset(context), fit: BoxFit.cover, cacheWidth: 480)))),
         const SizedBox(height: 24),
         const Text('你好，今天想做什么？',
             style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
