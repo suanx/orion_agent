@@ -15,6 +15,7 @@ import '../services/memory_service.dart';
 import '../services/rag_service.dart';
 import '../services/storage_service.dart';
 import '../services/tools.dart';
+import '../services/voice_service.dart';
 
 /// 在 main() 中 override 注入。
 final sharedPreferencesProvider =
@@ -63,6 +64,8 @@ final orchestratorProvider = Provider<AgentOrchestrator>((ref) => AgentOrchestra
       tools: ref.watch(toolRegistryProvider),
       memory: ref.watch(memoryServiceProvider),
     ));
+
+final voiceProvider = Provider<VoiceService>((ref) => VoiceService());
 
 // ---------------- 模型配置 ----------------
 
@@ -216,11 +219,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
     required AgentOrchestrator orchestrator,
     required RagService rag,
     required LlmClient llm,
+    required VoiceService voice,
+    required bool Function() ttsEnabled,
     required LlmConfig? Function() getConfig,
   })  : _storage = storage,
         _orchestrator = orchestrator,
         _rag = rag,
         _llm = llm,
+        _voice = voice,
+        _ttsEnabled = ttsEnabled,
         _getConfig = getConfig,
         super(ChatState(
           sessions: initialSessions,
@@ -231,6 +238,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final AgentOrchestrator _orchestrator;
   final RagService _rag;
   final LlmClient _llm;
+  final VoiceService _voice;
+  final bool Function() _ttsEnabled;
   final LlmConfig? Function() _getConfig;
 
   CancelToken? _cancelToken;
@@ -367,6 +376,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       s2.updatedAt = DateTime.now();
       _touch(s2);
       _storage.insertMessage(s2.id, answer);
+      if (_ttsEnabled()) {
+        _voice.speak(answer.content);
+      }
     }
 
     state = state.copyWith(isStreaming: false, streamingContent: '', steps: []);
@@ -388,6 +400,9 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     orchestrator: ref.watch(orchestratorProvider),
     rag: ref.watch(ragServiceProvider),
     llm: ref.watch(llmClientProvider),
+    voice: ref.watch(voiceProvider),
+    ttsEnabled: () =>
+        ref.read(sharedPreferencesProvider).getBool('tts_enabled') ?? false,
     getConfig: () => ref.read(configProvider).activeConfig,
   );
 });

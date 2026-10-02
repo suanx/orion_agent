@@ -42,6 +42,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _scrollController = ScrollController();
   final _pendingImages = <String>[]; // data URL
   bool _hasText = false;
+  bool _listening = false;
 
   @override
   void initState() {
@@ -67,6 +68,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     setState(_pendingImages.clear);
     ref.read(chatProvider.notifier).send(text, images: images);
     Future.delayed(const Duration(milliseconds: 300), _scrollToBottom);
+  }
+
+  Future<void> _toggleMic() async {
+    final voice = ref.read(voiceProvider);
+    if (voice.isListening) {
+      await voice.stopListening();
+      if (mounted) setState(() => _listening = false);
+      return;
+    }
+    final ok = await voice.startListening(onText: (text) {
+      if (!mounted || text.isEmpty) return;
+      setState(() {
+        _inputController.text = text;
+        _inputController.selection =
+            TextSelection.collapsed(offset: text.length);
+      });
+    });
+    if (!mounted) return;
+    if (ok) {
+      setState(() => _listening = true);
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('语音识别不可用，请检查麦克风权限')));
+    }
   }
 
   Future<void> _addImage() async {
@@ -274,9 +299,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           hasText: _hasText,
           hasImages: _pendingImages.isNotEmpty,
           isStreaming: chat.isStreaming,
+          isListening: _listening,
           onSend: _send,
           onStop: () => ref.read(chatProvider.notifier).stop(),
           onAddImage: _addImage,
+          onMic: _toggleMic,
         ),
         const SizedBox(height: 72), // 给磨砂底导航留出空间
       ],
@@ -505,18 +532,22 @@ class _InputBar extends StatelessWidget {
     required this.hasText,
     required this.hasImages,
     required this.isStreaming,
+    required this.isListening,
     required this.onSend,
     required this.onStop,
     required this.onAddImage,
+    required this.onMic,
   });
 
   final TextEditingController controller;
   final bool hasText;
   final bool hasImages;
   final bool isStreaming;
+  final bool isListening;
   final VoidCallback onSend;
   final VoidCallback onStop;
   final VoidCallback onAddImage;
+  final VoidCallback onMic;
 
   @override
   Widget build(BuildContext context) {
@@ -589,8 +620,17 @@ class _InputBar extends StatelessWidget {
               SizedBox(
                 width: 40,
                 height: 40,
-                child: Icon(Icons.mic_none_rounded,
-                    size: 24, color: Colors.black.withOpacity(0.35)),
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  icon: Icon(
+                    isListening ? Icons.mic_rounded : Icons.mic_none_rounded,
+                    size: 24,
+                    color: isListening
+                        ? const Color(0xFFD93025)
+                        : Colors.black.withOpacity(0.35),
+                  ),
+                  onPressed: onMic,
+                ),
               ),
           ],
         ),

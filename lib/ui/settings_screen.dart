@@ -4,6 +4,41 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/llm_config.dart';
 import '../providers/providers.dart';
 
+/// 语音播报开关（写在 shared_preferences，聊天完成后生效）。
+class _TtsToggle extends ConsumerStatefulWidget {
+  const _TtsToggle();
+
+  @override
+  ConsumerState<_TtsToggle> createState() => _TtsToggleState();
+}
+
+class _TtsToggleState extends ConsumerState<_TtsToggle> {
+  @override
+  Widget build(BuildContext context) {
+    final prefs = ref.watch(sharedPreferencesProvider);
+    final on = prefs.getBool('tts_enabled') ?? false;
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: SwitchListTile(
+        title: const Text('语音播报回答',
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+        subtitle: Text('回答完成后用系统语音朗读',
+            style: TextStyle(
+                fontSize: 12, color: Colors.black.withOpacity(0.4))),
+        value: on,
+        onChanged: (v) {
+          prefs.setBool('tts_enabled', v);
+          setState(() {});
+        },
+      ),
+    );
+  }
+}
+
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
@@ -19,8 +54,12 @@ class SettingsScreen extends ConsumerWidget {
         icon: const Icon(Icons.add),
         label: const Text('添加模型服务'),
       ),
-      body: config.configs.isEmpty
-          ? const Center(
+      body: ListView(
+        padding: const EdgeInsets.only(bottom: 80),
+        children: [
+          const _TtsToggle(),
+          if (config.configs.isEmpty)
+            const Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
@@ -35,38 +74,36 @@ class SettingsScreen extends ConsumerWidget {
                 ),
               ),
             )
-          : ListView.builder(
-              padding: const EdgeInsets.only(bottom: 80),
-              itemCount: config.configs.length,
-              itemBuilder: (_, i) {
-                final c = config.configs[i];
-                final active = c.id == config.activeConfig?.id;
-                return ListTile(
-                  leading: Icon(
-                    active ? Icons.radio_button_checked : Icons.radio_button_off,
-                    color: active ? Theme.of(context).colorScheme.primary : null,
-                  ),
-                  title: Text(c.name.isEmpty ? c.model : c.name),
-                  subtitle: Text('${c.model}\n${c.baseUrl}'),
-                  isThreeLine: true,
-                  onTap: () => ref.read(configProvider.notifier).setActive(c.id),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.edit_outlined),
-                        onPressed: () => _editConfig(context, ref, c),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        onPressed: () =>
-                            ref.read(configProvider.notifier).remove(c.id),
-                      ),
-                    ],
-                  ),
-                );
-              },
-            ),
+          else
+            ...config.configs.map((c) {
+              final active = c.id == config.activeConfig?.id;
+              return ListTile(
+                leading: Icon(
+                  active ? Icons.radio_button_checked : Icons.radio_button_off,
+                  color: active ? Theme.of(context).colorScheme.primary : null,
+                ),
+                title: Text(c.name.isEmpty ? c.model : c.name),
+                subtitle: Text('${c.model}\n${c.baseUrl}'),
+                isThreeLine: true,
+                onTap: () => ref.read(configProvider.notifier).setActive(c.id),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.edit_outlined),
+                      onPressed: () => _editConfig(context, ref, c),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () =>
+                          ref.read(configProvider.notifier).remove(c.id),
+                    ),
+                  ],
+                ),
+              );
+            }),
+        ],
+      ),
     );
   }
 

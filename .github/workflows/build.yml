@@ -21,10 +21,10 @@ jobs:
         # 本地不提交平台目录，在 CI 中按当前 Flutter stable 生成，保证版本一致
         run: flutter create --platforms android --project-name pocket_agent .
 
-      - name: Add INTERNET permission
+      - name: Add INTERNET and microphone permissions
         run: |
-          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application|' android/app/src/main/AndroidManifest.xml
-          grep -n "INTERNET" android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <application|' android/app/src/main/AndroidManifest.xml
+          grep -n "INTERNET\|RECORD_AUDIO" android/app/src/main/AndroidManifest.xml
 
       - name: Pub get
         run: flutter pub get
