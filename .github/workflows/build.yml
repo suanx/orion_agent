@@ -176,7 +176,19 @@ jobs:
         run: dart run build_runner build --delete-conflicting-outputs
 
       - name: Analyze
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        # 分析结果同时以 annotation 形式暴露，便于无 repo 管理员权限时排查
+        run: |
+          set +e
+          flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee /tmp/analyze.txt
+          RC=${PIPESTATUS[0]}
+          if [ "$RC" -ne 0 ]; then
+            grep -E '^\s*(error|warning|info)' /tmp/analyze.txt | head -60 | \
+              awk '{printf "::error ::%s\n", $0}'
+            echo "::error ::flutter analyze 退出码 $RC"
+          fi
+          echo "--- error 行汇总 ---"
+          grep -c 'error •' /tmp/analyze.txt || true
+          exit "$RC"
 
       - name: Test
         run: flutter test
