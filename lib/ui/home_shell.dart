@@ -118,7 +118,7 @@ class _FrostedNavBar extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
           decoration: BoxDecoration(
-            color: surface(context).withOpacity(0.72),
+            color: surface(context).withValues(alpha: 0.72),
             border: Border(
               top: BorderSide(color: onSurface(context, 0.06)),
             ),

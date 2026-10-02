@@ -259,8 +259,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                             fontSize: 13, color: Color(0xFFD93025))),
                   ),
                   GestureDetector(
-                    onTap: () => ref.read(chatProvider.notifier).state =
-                        chat.copyWith(clearError: true),
+                    onTap: () =>
+                        ref.read(chatProvider.notifier).clearError(),
                     child: const Icon(Icons.close_rounded,
                         size: 16, color: Color(0xFFD93025)),
                   ),

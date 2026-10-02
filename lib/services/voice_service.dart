@@ -91,10 +91,10 @@ class VoiceService {
     _listening = true;
     await _stt.listen(
       onResult: (r) => onText(r.recognizedWords),
-      localeId: locale,
       listenOptions: SpeechListenOptions(
         partialResults: true,
         cancelOnError: true,
+        localeId: locale,
       ),
     );
     return true;
@@ -403,5 +403,5 @@ String stripMarkdownForSpeech(String s) {
   t = t.replaceAll(RegExp(r'[*_>~\[\]]'), '');
   t = t.replaceAll(RegExp(r'\n{2,}'), '。');
   t = t.trim();
-  return t.length > 400 ? '${t.substring(0, 400)}' : t;
+  return t.length > 400 ? t.substring(0, 400) : t;
 }

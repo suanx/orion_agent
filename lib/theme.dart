@@ -55,7 +55,7 @@ AppTheme themeById(String id) =>
 Color surface(BuildContext context) => Theme.of(context).colorScheme.surface;
 
 Color onSurface(BuildContext context, double opacity) =>
-    Theme.of(context).colorScheme.onSurface.withOpacity(opacity);
+    Theme.of(context).colorScheme.onSurface.withValues(alpha: opacity);
 
 /// 吉祥物素材：深色模式用深底版本，浅色模式用白底版本。
 String mascotAsset(BuildContext context) =>
@@ -125,7 +125,7 @@ ThemeData buildAppTheme(AppTheme t, {bool dark = false}) {
         fontWeight: FontWeight.w500,
       ),
     ),
-    dividerColor: (dark ? Colors.white : Colors.black).withOpacity(0.06),
+    dividerColor: (dark ? Colors.white : Colors.black).withValues(alpha: 0.06),
     splashFactory: InkSparkle.splashFactory,
   );
 }

@@ -314,7 +314,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
     double Function()? getTtsVolume,
     bool Function()? notifyOnAnswer,
     bool Function()? notifyPreview,
-    bool Function()? notifySilent,
   })  : _storage = storage,
         _orchestrator = orchestrator,
         _rag = rag,
@@ -329,7 +328,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _getTtsVolume = getTtsVolume ?? (() => 1.0),
         _notifyOnAnswer = notifyOnAnswer ?? (() => false),
         _notifyPreview = notifyPreview ?? (() => true),
-        _notifySilent = notifySilent ?? (() => false),
         super(ChatState(
           sessions: initialSessions,
           activeSessionId: initialSessions.isEmpty ? null : initialSessions.first.id,
@@ -349,7 +347,6 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final double Function() _getTtsVolume;
   final bool Function() _notifyOnAnswer;
   final bool Function() _notifyPreview;
-  final bool Function() _notifySilent;
 
   /// 由外部注入的通知发送回调（在 Provider 里绑定 NotificationService）。
   Future<void> Function(String title, String body)? onAnswerNotification;
@@ -372,6 +369,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   void selectSession(String id) {
     state = state.copyWith(activeSessionId: id, clearError: true);
+  }
+
+  /// 清除当前错误提示（供 UI 关闭错误条使用）。
+  void clearError() {
+    if (state.error == null) return;
+    state = state.copyWith(clearError: true);
   }
 
   void deleteSession(String id) {
@@ -547,7 +550,6 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     getTtsVolume: () => ref.read(ttsVolumeProvider),
     notifyOnAnswer: () => ref.read(notifyOnAnswerProvider),
     notifyPreview: () => ref.read(notifyPreviewProvider),
-    notifySilent: () => ref.read(notifySilentProvider),
   );
 
   // 绑定通知：读设置并在发送时遵循静音开关

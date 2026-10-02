@@ -128,14 +128,15 @@ class FileStorageService {
       if (!dir.existsSync()) continue;
       for (final e in dir.listSync(followLinks: false)) {
         try {
-          final isDir = e is Directory;
+          final entity = e;
           var size = 0;
-          if (isDir) {
-            size = _measure(e as Directory).bytes;
-          } else if (e is File) {
-            size = e.lengthSync();
+          // 直接判断类型，让 Dart 做类型提升，避免多余的类型转换
+          if (entity is Directory) {
+            size = _measure(entity).bytes;
+          } else if (entity is File) {
+            size = entity.lengthSync();
           }
-          e.deleteSync(recursive: true);
+          entity.deleteSync(recursive: true);
           freed += size;
         } catch (_) {}
       }

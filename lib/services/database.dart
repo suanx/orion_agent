@@ -5,7 +5,6 @@ import 'package:drift_flutter/drift_flutter.dart';
 
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
-import '../models/memory_note.dart';
 
 part 'database.g.dart';
 
