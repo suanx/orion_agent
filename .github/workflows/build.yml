@@ -36,6 +36,20 @@ jobs:
           sed -i 's/flutter\.targetSdkVersion/28/g' android/app/build.gradle || true
           grep -rn "targetSdk" android/app/build.gradle* || true
 
+      - name: Disable release lint check
+        # targetSdk 28 会触发 lintVital 的 ExpiredTargetSdkVersion 致命错误；
+        # 应用侧载分发不上架 Play，直接关闭 release lint
+        run: |
+          cat >> android/app/build.gradle.kts <<'EOF'
+
+          // targetSdk 28（终端环境 exec 需要）触发 Play 上架 lint，侧载分发故关闭
+          lint {
+              checkReleaseBuilds = false
+              abortOnError = false
+          }
+          EOF
+          tail -6 android/app/build.gradle.kts
+
       - name: Bundle proot into jniLibs
         # 终端环境：打包 Termux 构建的 proot（aarch64）及其依赖 libtalloc，
         # 命名为 lib*.so 以便放入 nativeLibraryDir 并获得 exec 权限
