@@ -36,12 +36,12 @@ class SkillsScreen extends ConsumerWidget {
               children: [
                 const Text('探索发现',
                     style:
-                        TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+                        TextStyle(fontSize: 26, fontWeight: FontWeight.w500)),
                 const SizedBox(width: 16),
                 Text('技能',
                     style: TextStyle(
                         fontSize: 22,
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w500,
                         color: onSurface(context, 0.3))),
               ],
             ),
@@ -56,14 +56,14 @@ class SkillsScreen extends ConsumerWidget {
                 children: [
                   const Text('我的快捷指令',
                       style:
-                          TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                          TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
                   const Spacer(),
                   TextButton.icon(
                     onPressed: () => _addSkill(context, ref),
                     icon: const Icon(Icons.add_rounded, size: 18),
                     label: const Text('新建',
                         style: TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w600)),
+                            fontSize: 13, fontWeight: FontWeight.w500)),
                   ),
                 ],
               ),
@@ -99,7 +99,7 @@ class SkillsScreen extends ConsumerWidget {
                         leading: const Icon(Icons.bolt_rounded),
                         title: Text('/${s.name}',
                             style: const TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.w600)),
+                                fontSize: 15, fontWeight: FontWeight.w500)),
                         subtitle: Text(s.template,
                             maxLines: 1, overflow: TextOverflow.ellipsis),
                         onTap: () => onUseSkill('/${s.name} '),
@@ -112,7 +112,7 @@ class SkillsScreen extends ConsumerWidget {
               const SizedBox(height: 16),
               // ------- 内置工具 -------
               const Text('内置工具',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
               const SizedBox(height: 8),
               GridView.builder(
                 shrinkWrap: true,
@@ -152,7 +152,7 @@ class SkillsScreen extends ConsumerWidget {
                           const Spacer(),
                           Text(title,
                               style: const TextStyle(
-                                  fontSize: 15, fontWeight: FontWeight.w700)),
+                                  fontSize: 15, fontWeight: FontWeight.w500)),
                           const SizedBox(height: 2),
                           Text(desc,
                               maxLines: 2,

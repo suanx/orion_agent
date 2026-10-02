@@ -25,7 +25,7 @@ class SessionDrawer extends ConsumerWidget {
                 padding: EdgeInsets.fromLTRB(4, 24, 0, 16),
                 child: Text(
                   'Pocket Agent',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w800),
+                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w600),
                 ),
               ),
               SizedBox(
@@ -45,7 +45,7 @@ class SessionDrawer extends ConsumerWidget {
                   },
                   icon: const Icon(Icons.add_comment_outlined, size: 20),
                   label: const Text('新建对话',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500)),
                 ),
               ),
               const SizedBox(height: 8),
@@ -80,7 +80,7 @@ class SessionDrawer extends ConsumerWidget {
                               style: TextStyle(
                                 fontSize: 15,
                                 fontWeight: active
-                                    ? FontWeight.w700
+                                    ? FontWeight.w500
                                     : FontWeight.w500,
                               ),
                             ),

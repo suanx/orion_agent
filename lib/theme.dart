@@ -86,7 +86,7 @@ ThemeData buildAppTheme(AppTheme t, {bool dark = false}) {
       titleTextStyle: TextStyle(
         color: dark ? Colors.white : Colors.black,
         fontSize: 18,
-        fontWeight: FontWeight.w700,
+        fontWeight: FontWeight.w500,
       ),
     ),
     dividerColor: (dark ? Colors.white : Colors.black).withOpacity(0.06),

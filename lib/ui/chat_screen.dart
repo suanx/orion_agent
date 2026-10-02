@@ -209,7 +209,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     children: [
                       const Text('Pocket Agent',
                           style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w800)),
+                              fontSize: 18, fontWeight: FontWeight.w600)),
                       Row(
                         children: [
                           Container(
@@ -360,7 +360,7 @@ class _EmptyGreeting extends StatelessWidget {
         SizedBox(width: 84, height: 84, child: ClipOval(child: Transform.scale(scale: 1.6, alignment: Alignment.topCenter, child: Image.asset(mascotAsset(context), fit: BoxFit.cover, cacheWidth: 480)))),
         const SizedBox(height: 24),
         const Text('你好，今天想做什么？',
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w600)),
         const SizedBox(height: 20),
         for (final (emoji, text) in _suggestions)
           Padding(

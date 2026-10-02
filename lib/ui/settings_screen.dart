@@ -26,7 +26,7 @@ class _TtsToggleState extends ConsumerState<_TtsToggle> {
       ),
       child: SwitchListTile(
         title: const Text('语音播报回答',
-            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
         subtitle: Text('回答完成后用系统语音朗读',
             style: TextStyle(
                 fontSize: 12, color: onSurface(context, 0.4))),

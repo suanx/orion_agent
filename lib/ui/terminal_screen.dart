@@ -227,7 +227,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                                 Text(t.name,
                                     style: const TextStyle(
                                         fontSize: 14,
-                                        fontWeight: FontWeight.w600)),
+                                        fontWeight: FontWeight.w500)),
                                 Text(t.description,
                                     style: TextStyle(
                                         fontSize: 11,
@@ -377,7 +377,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             ),
             title: Text(t.name,
                 style: const TextStyle(
-                    fontSize: 14, fontWeight: FontWeight.w600)),
+                    fontSize: 14, fontWeight: FontWeight.w500)),
             subtitle: Text(
                 '${t.command}\n${TerminalService.specs[t.distro]!.displayName}'
                 '${t.enabled ? ' · 开机自启' : ' · 手动'}',
@@ -508,7 +508,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
         child: Text(s,
             style: TextStyle(
                 fontSize: 13,
-                fontWeight: FontWeight.w600,
+                fontWeight: FontWeight.w500,
                 color: onSurface(context, 0.4))),
       );
 
@@ -536,7 +536,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
         !checked ? '未检测' : (ready ? 'ready' : 'lost'),
         style: TextStyle(
           fontSize: 12,
-          fontWeight: FontWeight.w600,
+          fontWeight: FontWeight.w500,
           color: !checked
               ? onSurface(context, 0.45)
               : (ready ? const Color(0xFF137333) : const Color(0xFFC5221F)),

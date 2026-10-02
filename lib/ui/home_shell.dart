@@ -149,7 +149,7 @@ class _FrostedNavBar extends StatelessWidget {
                               style: TextStyle(
                                 fontSize: 11,
                                 fontWeight:
-                                    i == index ? FontWeight.w700 : FontWeight.w500,
+                                    i == index ? FontWeight.w500 : FontWeight.w500,
                                 color: i == index
                                     ? primary
                                     : onSurface(context, 0.35),

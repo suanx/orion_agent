@@ -25,7 +25,7 @@ class TasksScreen extends StatelessWidget {
               children: [
                 const Text('自动任务',
                     style:
-                        TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+                        TextStyle(fontSize: 26, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 6),
                 Row(
                   children: [
@@ -53,7 +53,7 @@ class TasksScreen extends StatelessWidget {
             children: [
               const Spacer(flex: 3),
               const Text('开启你的第一个自动任务吧',
-                  style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800)),
+                  style: TextStyle(fontSize: 21, fontWeight: FontWeight.w600)),
               const SizedBox(height: 20),
               GestureDetector(
                 onTap: () => ScaffoldMessenger.of(context).showSnackBar(
@@ -76,7 +76,7 @@ class TasksScreen extends StatelessWidget {
                           style: TextStyle(
                               color: Theme.of(context).colorScheme.onPrimary,
                               fontSize: 16,
-                              fontWeight: FontWeight.w700)),
+                              fontWeight: FontWeight.w500)),
                     ],
                   ),
                 ),
@@ -105,7 +105,7 @@ class TasksScreen extends StatelessWidget {
                                 child: Text(title,
                                     style: const TextStyle(
                                         fontSize: 15,
-                                        fontWeight: FontWeight.w600)),
+                                        fontWeight: FontWeight.w500)),
                               ),
                               Text('非定时',
                                   style: TextStyle(

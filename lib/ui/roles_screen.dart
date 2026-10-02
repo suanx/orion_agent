@@ -34,7 +34,7 @@ class RolesScreen extends ConsumerWidget {
                   activeId.isEmpty ? Theme.of(context).colorScheme.primary : null,
             ),
             title: const Text('默认助手',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
             subtitle: Text('通用智能助手，无人设限定',
                 style: TextStyle(
                     fontSize: 12, color: onSurface(context, 0.4))),
@@ -52,7 +52,7 @@ class RolesScreen extends ConsumerWidget {
                 ),
                 title: Text(r.name,
                     style: const TextStyle(
-                        fontSize: 15, fontWeight: FontWeight.w600)),
+                        fontSize: 15, fontWeight: FontWeight.w500)),
                 subtitle: Text(r.prompt,
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,

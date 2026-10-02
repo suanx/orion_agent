@@ -52,7 +52,7 @@ class ProfileScreen extends ConsumerWidget {
                   children: [
                     const Text('主题配色',
                         style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w600)),
+                            fontSize: 16, fontWeight: FontWeight.w500)),
                     const Spacer(),
                     for (final t in appThemes)
                       GestureDetector(
@@ -103,7 +103,7 @@ class ProfileScreen extends ConsumerWidget {
                   children: [
                     const Text('Pocket Agent',
                         style: TextStyle(
-                            fontSize: 22, fontWeight: FontWeight.w800)),
+                            fontSize: 22, fontWeight: FontWeight.w600)),
                     const SizedBox(height: 6),
                     Text('我 24 小时在线，能搜索、算数、读网页，还有记性。',
                         style: TextStyle(
@@ -124,7 +124,7 @@ class ProfileScreen extends ConsumerWidget {
                                 child: Text(t,
                                     style: const TextStyle(
                                         fontSize: 12,
-                                        fontWeight: FontWeight.w600)),
+                                        fontWeight: FontWeight.w500)),
                               ))
                           .toList(),
                     ),
@@ -234,7 +234,7 @@ class ProfileScreen extends ConsumerWidget {
               style: TextStyle(
                   color: Color(0xFFD93025),
                   fontSize: 16,
-                  fontWeight: FontWeight.w600),
+                  fontWeight: FontWeight.w500),
             ),
           ),
         ),
@@ -301,7 +301,7 @@ class _CardGroup extends StatelessWidget {
                         children: [
                           Text(items[i].title,
                               style: const TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w600)),
+                                  fontSize: 16, fontWeight: FontWeight.w500)),
                           if (items[i].subtitle != null)
                             Text(items[i].subtitle!,
                                 style: TextStyle(

@@ -81,7 +81,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                       const SizedBox(width: 12),
                       Text('欢迎使用 Pocket Agent',
                           style: const TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w800)),
+                              fontSize: 18, fontWeight: FontWeight.w600)),
                     ],
                   ),
                   const SizedBox(height: 8),
@@ -126,7 +126,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               onPressed: _busy ? null : _skip,
               child: Text(
                 _installed.values.any((v) => v) ? '完成，进入应用' : '暂不安装，进入应用',
-                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
               ),
             ),
           ],
@@ -154,7 +154,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                   children: [
                     Text(spec.displayName,
                         style: const TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w700)),
+                            fontSize: 16, fontWeight: FontWeight.w500)),
                     const SizedBox(width: 8),
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -168,7 +168,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                       child: Text(installed ? '已就绪' : '未安装',
                           style: TextStyle(
                               fontSize: 11,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.w500,
                               color: installed
                                   ? const Color(0xFF137333)
                                   : onSurface(context, 0.45))),

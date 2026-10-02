@@ -136,7 +136,7 @@ class _McpScreenState extends ConsumerState<McpScreen> {
                       leading: const Icon(Icons.dns_outlined),
                       title: Text(s.name,
                           style: const TextStyle(
-                              fontSize: 15, fontWeight: FontWeight.w600)),
+                              fontSize: 15, fontWeight: FontWeight.w500)),
                       subtitle: Text(s.url,
                           maxLines: 1, overflow: TextOverflow.ellipsis),
                       trailing: Row(
