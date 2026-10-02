@@ -30,9 +30,7 @@ void _showImageViewer(BuildContext context, String dataUrl) {
 
 /// 对话 Tab（body，无 Scaffold；drawer 由 HomeShell 提供）。
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key, required this.onJumpToTab});
-
-  final VoidCallback onJumpToTab;
+  const ChatScreen({super.key});
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();

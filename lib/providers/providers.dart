@@ -213,7 +213,6 @@ class ChatState {
   ChatState copyWith({
     List<ChatSession>? sessions,
     String? activeSessionId,
-    bool clearActiveSession = false,
     bool? isStreaming,
     String? streamingContent,
     List<String>? steps,
@@ -222,9 +221,7 @@ class ChatState {
   }) =>
       ChatState(
         sessions: sessions ?? this.sessions,
-        activeSessionId: clearActiveSession
-            ? null
-            : (activeSessionId ?? this.activeSessionId),
+        activeSessionId: activeSessionId ?? this.activeSessionId,
         isStreaming: isStreaming ?? this.isStreaming,
         streamingContent: streamingContent ?? this.streamingContent,
         steps: steps ?? this.steps,

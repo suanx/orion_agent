@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_agent/services/database.dart';
 import 'package:pocket_agent/services/mcp_client.dart';
 import 'package:pocket_agent/services/mcp_service.dart';
+import 'package:pocket_agent/services/memory_service.dart';
 import 'package:pocket_agent/services/tools.dart';
 
 class _EchoTool extends Tool {

@@ -34,7 +34,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       body: IndexedStack(
         index: _tab,
         children: [
-          ChatScreen(onJumpToTab: _goChat),
+          const ChatScreen(),
           const TasksScreen(),
           SkillsScreen(onUseSkill: (text) {
             if (text.isNotEmpty) {

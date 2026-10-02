@@ -58,12 +58,6 @@ class VoiceService {
       await _tts.speak(plain);
     } catch (_) {}
   }
-
-  Future<void> stopSpeak() async {
-    try {
-      await _tts.stop();
-    } catch (_) {}
-  }
 }
 
 /// 为朗读做最小化 markdown 清理：代码块不读，去掉常见标记符号。

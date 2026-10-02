@@ -47,10 +47,6 @@ class ChatMessage {
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
-  bool get isUser => role == 'user';
-  bool get isAssistant => role == 'assistant';
-  bool get isToolResult => role == 'tool';
-
   /// 转成 OpenAI Chat Completions API 的消息格式。
   /// 带图片的 user 消息用多段 content（text + image_url）。
   Map<String, dynamic> toApiJson() {
@@ -75,30 +71,4 @@ class ChatMessage {
     }
     return m;
   }
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'role': role,
-        'content': content,
-        'toolCalls': toolCalls.map((t) => t.toJson()).toList(),
-        'toolCallId': toolCallId,
-        'toolName': toolName,
-        'images': images,
-        'createdAt': createdAt.millisecondsSinceEpoch,
-      };
-
-  factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
-        id: j['id'] as String? ?? '',
-        role: j['role'] as String? ?? 'user',
-        content: j['content'] as String? ?? '',
-        toolCalls: (j['toolCalls'] as List? ?? [])
-            .map((t) => ToolCall.fromJson(t as Map<String, dynamic>))
-            .toList(),
-        toolCallId: j['toolCallId'] as String?,
-        toolName: j['toolName'] as String?,
-        images: (j['images'] as List? ?? []).whereType<String>().toList(),
-        createdAt: DateTime.fromMillisecondsSinceEpoch(
-          (j['createdAt'] as num?)?.toInt() ?? 0,
-        ),
-      );
 }

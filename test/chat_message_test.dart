@@ -46,17 +46,4 @@ void main() {
     expect(api['content'], '回答');
     expect(api.containsKey('tool_calls'), isFalse);
   });
-
-  test('toJson/fromJson 往返保留图片', () {
-    final m = ChatMessage(
-      id: 'u4',
-      role: 'user',
-      content: '看图',
-      images: ['data:image/png;base64,WFla', 'data:image/png;base64,MTIz'],
-    );
-    final restored = ChatMessage.fromJson(m.toJson());
-    expect(restored.images, m.images);
-    expect(restored.content, m.content);
-    expect(restored.role, m.role);
-  });
 }
