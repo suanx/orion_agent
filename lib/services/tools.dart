@@ -4,6 +4,8 @@ import 'dart:math' as math;
 
 import 'package:dio/dio.dart';
 
+import 'package:characters/characters.dart';
+
 import 'memory_service.dart';
 import 'rag_service.dart';
 import 'terminal_service.dart';
@@ -18,8 +20,16 @@ abstract class Tool {
   Future<String> execute(Map<String, dynamic> args);
 }
 
-String _truncate(String s, int max) =>
-    s.length <= max ? s : '${s.substring(0, max)}…（已截断）';
+/// 按字素簇安全截断。
+/// String.length 统计的是 UTF-16 code unit，直接 substring(0, max) 会把代理对
+/// （emoji 如 😀 = U+D83D U+DE00、扩展汉字如 𠮷）劈开，产生孤立代理项。
+/// Dart 在 jsonEncode / utf8.encode 时会把孤立代理项静默替换为 U+FFFD，
+/// 于是知识库与回答里的 emoji 变成"�"——不报错，只是内容被悄悄改坏。
+String _truncate(String s, int max) {
+  if (max <= 0) return s;
+  if (s.characters.length <= max) return s;
+  return '${s.characters.take(max).toString()}…（已截断）';
+}
 
 String _stripTags(String html) {
   var s = html;
@@ -60,9 +70,17 @@ class DateTimeTool extends Tool {
     final hh = now.hour.toString().padLeft(2, '0');
     final mm = now.minute.toString().padLeft(2, '0');
     final ss = now.second.toString().padLeft(2, '0');
-    return '${now.year}年${now.month}月${now.day}日 星期${weekdays[now.weekday - 1]} $hh:$mm:$ss'
-        '（设备本地时间，时区 UTC${now.timeZoneOffset.isNegative ? '-' : '+'}'
-        '${now.timeZoneOffset.inHours}）';
+    // Duration.inHours 对非整小时偏移做截断：Asia/Kolkata(+05:30) 会输出 UTC+5，
+    // America/St_Johns(-03:30) 会输出 UTC-3。错误的时区会让模型算错跨时区时间。
+    final off = now.timeZoneOffset;
+    final sign = off.isNegative ? '-' : '+';
+    final abs = off.abs();
+    final tz = off.inMinutes % 60 == 0
+        ? 'UTC$sign${abs.inHours}'
+        : 'UTC$sign${abs.inHours}:${(abs.inMinutes % 60).toString().padLeft(2, '0')}';
+    return '${now.year}年${now.month}月${now.day}日 '
+        '星期${weekdays[now.weekday - 1]} $hh:$mm:$ss'
+        '（设备本地时间，时区 $tz）';
   }
 }
 
@@ -89,10 +107,39 @@ class CalculatorTool extends Tool {
     if (expr.trim().isEmpty) return '错误：表达式为空';
     try {
       final value = _Parser(expr).parseWhole();
-      return '$expr = $value';
+      // math.pow 在实数域无定义时返回 NaN（负数的非整数次幂），除以极小数返回
+      // Infinity。这些都不是异常，会被原样拼进结果字符串，于是 Agent 把
+      // "(-8)^0.33 = NaN" 当成正确答案复述给用户。必须显式拦掉。
+      if (value.isNaN) {
+        return '错误：表达式 "$expr" 在实数域无定义（如负数的非整数次幂）';
+      }
+      if (value.isInfinite) {
+        return '错误：表达式 "$expr" 结果溢出（除数过小或幂过大）';
+      }
+      return '$expr = ${_fmtNum(value)}';
     } catch (e) {
       return '错误：无法计算表达式 "$expr"（${e.toString().replaceFirst('Exception: ', '')}）';
     }
+  }
+
+  /// 格式化计算结果。全程 double 直接 toString 会输出 "2.0"、"0.30000000000000004"，
+  /// 与工具 description 承诺的「精确计算」不符，也让用户怀疑结果可信度。
+  static String _fmtNum(double v) {
+    if (v == v.roundToDouble() && v.abs() < 1e15) {
+      return v.toInt().toString();
+    }
+    var s = v.toStringAsPrecision(15);
+    if (s.contains('.')) {
+      s = s.replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+    }
+    // toStringAsPrecision 可能产出科学计数法（1e+20），转成可读形式
+    final exp = RegExp(r'^([+-]?[\d.]+)e([+-]?\d+)$').firstMatch(s);
+    if (exp != null) {
+      final mant = double.parse(exp.group(1)!);
+      return mant.toStringAsFixed((int.parse(exp.group(2)!) - 1).clamp(0, 20)) +
+          'e${exp.group(2)}';
+    }
+    return s;
   }
 }
 
@@ -138,16 +185,16 @@ class _Parser {
   }
 
   double _term() {
-    var v = _power();
+    var v = _unary();
     while (true) {
       if (_eat('*')) {
-        v *= _power();
+        v *= _unary();
       } else if (_eat('/')) {
-        final d = _power();
+        final d = _unary();
         if (d == 0) throw Exception('除以零');
         v /= d;
       } else if (_eat('%')) {
-        final d = _power();
+        final d = _unary();
         if (d == 0) throw Exception('对零取余');
         v %= d;
       } else {
@@ -156,13 +203,8 @@ class _Parser {
     }
   }
 
-  double _power() {
-    // 右结合：2^3^2 = 2^(3^2)
-    final base = _unary();
-    if (_eat('^')) return math.pow(base, _power()).toDouble();
-    return base;
-  }
-
+  /// 一元负号优先级【高于】幂运算：标准数学约定 -2^2 = -(2^2) = -4。
+  /// 原来 _power 先调 _unary，负号被贪婪吃掉，等价于强制 (-2)^2 = 4。
   double _unary() {
     _skip();
     if (_pos < s.length && s[_pos] == '-') {
@@ -173,7 +215,14 @@ class _Parser {
       _pos++;
       return _unary();
     }
-    return _primary();
+    return _power();
+  }
+
+  double _power() {
+    // 右结合：2^3^2 = 2^(3^2)。指数取 _unary 以支持 2^-3。
+    final base = _primary();
+    if (_eat('^')) return math.pow(base, _unary()).toDouble();
+    return base;
   }
 
   double _primary() {
@@ -278,28 +327,59 @@ class WebSearchTool extends Tool {
         ),
       );
       final html = resp.data ?? '';
-      final titles = RegExp(
-        r'class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)</a>',
-      ).allMatches(html).toList();
-      final snippets = RegExp(
-        r'class="result__snippet"[^>]*>([\s\S]*?)</a>',
-      ).allMatches(html).toList();
+      // title 与 snippet 必须按【出现位置】配对。原来用两条独立正则分别 allMatches、
+      // 再按下标 i 配对，一旦某条结果没有摘要（或 snippet 内含嵌套 </a> 导致跨条
+      // 吞并），摘要就会被安到错误的标题上，Agent 引用错误"事实"作答。
+      // 这里改为：按顺序取每个标题，再取它【之后最近的那条】摘要，天然对齐。
+      final aRe = RegExp(
+        r'<a\b([^>]*\bclass="[^"]*\bresult__a\b[^"]*"[^>]*)>([\s\S]*?)</a>',
+        caseSensitive: false,
+      );
+      final snipRe = RegExp(
+        r'<a\b[^>]*\bclass="[^"]*\bresult__snippet\b[^"]*"[^>]*>([\s\S]*?)</a>',
+        caseSensitive: false,
+      );
+      final titles = aRe.allMatches(html).toList();
 
-      if (titles.isEmpty) return '错误：没有搜索到结果，或搜索服务暂时不可用。';
+      if (titles.isEmpty) {
+        // 区分"确实没有结果"与"页面结构变了 / 被反爬拦截"：后者若也报"没有结果"，
+        // 会让 Agent 与用户一起误判，且不留任何排查线索。
+        final blocked = html.contains('anomaly') ||
+            html.contains('Unfortunately') ||
+            html.contains('captcha') ||
+            html.contains('blocked');
+        return blocked
+            ? '错误：搜索服务拒绝了本次请求（可能触发反爬拦截），请稍后重试或换个说法。'
+            : '错误：没有搜索到结果，请换个关键词。';
+      }
 
       final buf = StringBuffer();
-      for (var i = 0; i < titles.length && i < 5; i++) {
-        var href = titles[i].group(1) ?? '';
+      var used = 0;
+      for (var i = 0; i < titles.length && used < 5; i++) {
+        final t = titles[i];
+        final title = _stripTags(t.group(2) ?? '');
+        if (title.isEmpty) continue;
+
+        // 摘要必须属于【当前这条】结果，所以搜索范围要截到下一条标题为止。
+        // 否则本条没有摘要时会去"借用"下一条的摘要——这正是原 bug 的错位，
+        // 只是从"按下标配对"换成"向后贪心"，错位依旧。
+        final limit = (i + 1 < titles.length) ? titles[i + 1].start : html.length;
+        final tail = html.substring(t.end, limit);
+        final m = snipRe.firstMatch(tail);
+        final snippet = (m != null && m.start < 4000) ? _stripTags(m.group(1) ?? '') : '';
+
         // DDG 链接是重定向形式 //duckduckgo.com/l/?uddg=<encoded>
+        var href = RegExp(r'href="([^"]*)"').firstMatch(t.group(1) ?? '')?.group(1) ?? '';
         final uddg = RegExp(r'uddg=([^&]+)').firstMatch(href)?.group(1);
         if (uddg != null) href = Uri.decodeComponent(uddg);
-        final title = _stripTags(titles[i].group(2) ?? '');
-        final snippet = i < snippets.length ? _stripTags(snippets[i].group(1) ?? '') : '';
-        buf.writeln('${i + 1}. $title');
-        if (href.isNotEmpty) buf.writeln('   链接: $href');
+
+        buf.writeln('${used + 1}. $title');
+        if (href.startsWith('http')) buf.writeln('   链接: $href');
         if (snippet.isNotEmpty) buf.writeln('   摘要: $snippet');
         buf.writeln();
+        used++;
       }
+      if (buf.isEmpty) return '错误：搜索结果解析后为空，请换个关键词。';
       return _truncate(buf.toString(), 4000);
     } on DioException catch (e) {
       return '错误：搜索失败（${e.response?.statusCode ?? e.message}），可建议用户稍后重试。';
@@ -415,13 +495,16 @@ class RunCommandTool extends Tool {
   Future<String> execute(Map<String, dynamic> args) async {
     final command = args['command']?.toString() ?? '';
     if (command.trim().isEmpty) return '错误：命令为空';
+    // 必须把【检查过的那个】distro 显式传给 runOn。activeDistro 是可变字段，
+    // 若这里调 run()（内部再读一次 activeDistro），用户若在另一页切换了发行版，
+    // 就会在未初始化的文件系统上执行命令，行为不可预期。
     final distro = _terminal.activeDistro;
     if (!await _terminal.isInstalled(distro)) {
       return '错误：当前终端环境（${distro.name}）尚未安装。'
           '请提示用户到「我的 → 终端环境」中选择发行版并一键安装。';
     }
     try {
-      final r = await _terminal.run(command);
+      final r = await _terminal.runOn(distro, command);
       final output =
           r.output.trim().isEmpty ? '（无输出）' : _truncate(r.output.trim(), 4000);
       return '退出码 ${r.exitCode}\n$output';
@@ -465,6 +548,18 @@ class ToolRegistry {
       _tools.add(tool);
     }
   }
+
+  /// 注销名字以 [prefix] 开头的所有工具。
+  ///
+  /// MCP 必需：register() 对同名工具直接跳过，所以没有这个方法时，
+  /// 「重连」会保留所有旧 McpTool（持有旧 client / 旧 Dio），新连接被丢弃；
+  /// 「停用 / 删除服务器」后工具也不会消失，Agent 继续调用已停用的端点。
+  void unregisterPrefix(String prefix) {
+    _tools.removeWhere((t) => t.name.startsWith(prefix));
+  }
+
+  /// 当前已注册的工具名（供测试与调试）。
+  List<String> get toolNames => _tools.map((t) => t.name).toList();
 
   /// 转成 OpenAI tools 参数格式。
   List<Map<String, dynamic>> toOpenAiTools() => _tools

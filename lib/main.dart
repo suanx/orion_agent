@@ -52,11 +52,23 @@ Future<void> main() async {
   final db = AppDatabase();
   final sessions = await StorageService(db).loadSessions();
   final memory = MemoryService(db);
-  await memory.load();
   final skills = SkillService(db);
-  await skills.load();
   final roles = RoleService(db);
-  await roles.load();
+
+  // 这些 load() 都在 runApp 之前，任一抛异常都会让整个 App 起不来。
+  // 各自的 load() 失败后已允许重试（不再用「已开始」语义的前置置位），
+  // 这里降级为「先用空缓存启动」，避免数据层偶发故障直接阻断启动。
+  Future<void> guard(String what, Future<void> Function() op) async {
+    try {
+      await op();
+    } catch (e) {
+      debugPrint('启动预加载失败（$what），已用空数据继续：$e');
+    }
+  }
+
+  await guard('长期记忆', memory.load);
+  await guard('技能', skills.load);
+  await guard('角色', roles.load);
 
   final container = ProviderContainer(overrides: [
     sharedPreferencesProvider.overrideWithValue(prefs),

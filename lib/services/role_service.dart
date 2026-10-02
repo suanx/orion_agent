@@ -10,18 +10,27 @@ class RoleService {
 
   final List<AgentRole> _cache = [];
   bool _loaded = false;
+  bool _loading = false;
 
   List<AgentRole> get roles => List.unmodifiable(_cache);
 
+  /// 与 SkillService/MemoryService 保持一致：只在查询成功后置 _loaded。
+  /// 原实现 await 之前就置位，查询失败后 _loaded 仍为 true 而 _cache 为空，
+  /// 此后 load() 永久 no-op，角色功能整个App 生命周期内失效且无法重试。
   Future<void> load() async {
-    if (_loaded) return;
-    _loaded = true;
-    final rows = await (_db.select(_db.agentRoles)
-          ..orderBy([(r) => OrderingTerm.desc(r.createdAt)]))
-        .get();
-    _cache
-      ..clear()
-      ..addAll(rows);
+    if (_loaded || _loading) return;
+    _loading = true;
+    try {
+      final rows = await (_db.select(_db.agentRoles)
+            ..orderBy([(r) => OrderingTerm.desc(r.createdAt)]))
+          .get();
+      _cache
+        ..clear()
+        ..addAll(rows);
+      _loaded = true;
+    } finally {
+      _loading = false;
+    }
   }
 
   Future<void> addRole(String name, String prompt) async {

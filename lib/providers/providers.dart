@@ -160,8 +160,14 @@ final terminalServiceProvider =
 class ConfigState {
   final List<LlmConfig> configs;
   final String activeId;
+  /// 持久化失败等一次性提示。为 null 表示无错误。
+  final String? error;
 
-  const ConfigState({required this.configs, required this.activeId});
+  const ConfigState({
+    required this.configs,
+    required this.activeId,
+    this.error,
+  });
 
   LlmConfig? get activeConfig {
     for (final c in configs) {
@@ -169,6 +175,19 @@ class ConfigState {
     }
     return configs.isEmpty ? null : configs.first;
   }
+
+  /// error 为 null 时默认保留原值；传clearError 显式清除。
+  ConfigState copyWith({
+    List<LlmConfig>? configs,
+    String? activeId,
+    String? error,
+    bool clearError = false,
+  }) =>
+      ConfigState(
+        configs: configs ?? this.configs,
+        activeId: activeId ?? this.activeId,
+        error: clearError ? null : (error ?? this.error),
+      );
 }
 
 /// 配置存两处：配置 JSON（含 API Key）进 flutter_secure_storage
@@ -184,6 +203,13 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
 
   static const _kConfigs = 'llm_configs';
   static const _kActive = 'llm_active_id';
+
+  /// 加载期间用户是否已通过 upsert/remove/setActive 修改过配置。
+  /// 构造函数同步启动 _load() 但不 await，而 _secure.read 是平台通道调用
+  /// （数十毫秒）。用户在返回前点「添加」，upsert 写入新列表后，
+  /// _load 结尾会用加载出来的旧列表整体覆盖，刚添加的模型凭空消失。
+  bool _localTouched = false;
+  bool _loadDone = false;
 
   Future<void> _load() async {
     var raw = await _secure.read(key: _kConfigs);
@@ -205,19 +231,47 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
             if (item is Map<String, dynamic>) list.add(LlmConfig.fromJson(item));
           }
         }
-      } catch (_) {}
+      } catch (e) {
+        debugPrint('读取模型配置失败，使用空列表：$e');
+      }
     }
+    _loadDone = true;
     if (!mounted) return;
+    // 用户已在加载期间改过配置 → 不能用旧数据覆盖
+    if (_localTouched) return;
     state = ConfigState(configs: list, activeId: _prefs.getString(_kActive) ?? '');
   }
 
+  /// 串行化持久化，避免并发写同一 key 时旧快照覆盖新值。
+  ///
+  /// 原实现三个 _persist() 可以并发（平台通道完成顺序不保证与调用顺序一致），
+  /// 用户「加 A → 立刻加 B → 立刻删 A」时最终可能落盘只含 A 的旧快照，
+  /// 重启后 B 消失、A 复活。另外 state.activeId 是在 await 之后才读的，
+  /// 并发下会读到已被后续调用改过的值。
   Future<void> _persist() async {
-    await _secure.write(key: _kConfigs,
-        value: jsonEncode(state.configs.map((c) => c.toJson()).toList()));
-    await _prefs.setString(_kActive, state.activeId);
+    final snapshot = state;
+    final payload =
+        jsonEncode(snapshot.configs.map((c) => c.toJson()).toList());
+    try {
+      await _secure.write(key: _kConfigs, value: payload);
+      await _prefs.setString(_kActive, snapshot.activeId);
+    } catch (e) {
+      // Keystore 损坏 / EncryptedSharedPreferences 初始化失败时 write 会抛。
+      // 原来既没 await 也没 try/catch → unhandled async error，
+      // 用户新增的 API Key 根本没保存，UI 却显示保存成功。
+      debugPrint('配置持久化失败：$e');
+      if (mounted) state = state.copyWith(error: '保存模型配置失败：$e');
+    }
+  }
+
+  Future<void> _persistChain = Future<void>.value();
+
+  void _schedulePersist() {
+    _persistChain = _persistChain.then((_) => _persist());
   }
 
   void upsert(LlmConfig config) {
+    _localTouched = true;
     final list = [...state.configs];
     final idx = list.indexWhere((c) => c.id == config.id);
     if (idx >= 0) {
@@ -226,21 +280,23 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
       list.add(config);
     }
     state = ConfigState(configs: list, activeId: state.activeId);
-    _persist();
+    _schedulePersist();
   }
 
   void remove(String id) {
+    _localTouched = true;
     final list = state.configs.where((c) => c.id != id).toList();
     state = ConfigState(
       configs: list,
       activeId: state.activeId == id ? '' : state.activeId,
     );
-    _persist();
+    _schedulePersist();
   }
 
   void setActive(String id) {
+    _localTouched = true;
     state = ConfigState(configs: state.configs, activeId: id);
-    _persist();
+    _schedulePersist();
   }
 }
 
@@ -353,8 +409,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   CancelToken? _cancelToken;
 
-  String _newId(String prefix) =>
-      '${prefix}_${DateTime.now().millisecondsSinceEpoch}_${state.sessions.length}';
+  // 统一走 database.dart 的 uniqueId（带自增序列）。原来的实现用
+  // state.sessions.length 做序列，而 deleteSession 会让长度回落，
+  // 删除后再新建就可能复用已占用的 id → insertSession 抛 UNIQUE constraint。
+  String _newId(String prefix) => uniqueId(prefix);
 
   void newSession() {
     final s = ChatSession(
@@ -364,7 +422,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       updatedAt: DateTime.now(),
     );
     state = state.copyWith(sessions: [s, ...state.sessions], activeSessionId: s.id, clearError: true);
-    _storage.insertSession(s);
+    unawaited(_persistOp(() => _storage.insertSession(s), '新建会话'));
   }
 
   void selectSession(String id) {
@@ -378,15 +436,26 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void deleteSession(String id) {
+    // 生成期间删除会话会让已写入的用户消息变成孤儿行，且随后的 AI 回答
+    // 无处落地。先停止流式，让send() 正常收尾。
+    if (state.isStreaming) {
+      unawaited(stop());
+    }
     final remaining = state.sessions.where((s) => s.id != id).toList();
     final newActive = state.activeSessionId == id
         ? (remaining.isEmpty ? null : remaining.first.id)
         : state.activeSessionId;
     state = state.copyWith(sessions: remaining, activeSessionId: newActive);
-    _storage.deleteSession(id);
+    unawaited(_persistOp(() => _storage.deleteSession(id), '删除会话'));
   }
 
   Future<void> clearAllSessions() async {
+    // 同上：先停下流式，避免删除后仍往里写入孤儿消息行。
+    if (state.isStreaming) {
+      await stop();
+      // 给 send() 一点时间收尾（它会检测 isStreaming 并停止写入）
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
     state = ChatState(sessions: const [], activeSessionId: null);
     await _storage.clearSessions();
   }
@@ -394,7 +463,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
   void _touch(ChatSession updated) {
     final sessions = state.sessions.map((s) => s.id == updated.id ? updated : s).toList();
     state = state.copyWith(sessions: sessions);
-    _storage.updateSessionMeta(updated);
+    unawaited(_persistOp(
+        () => _storage.updateSessionMeta(updated), '更新会话元数据'));
   }
 
   Future<void> send(String text, {List<String> images = const []}) async {
@@ -415,7 +485,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
 
     final userMsg = ChatMessage(
-      id: 'u_${DateTime.now().millisecondsSinceEpoch}',
+      id: uniqueId('u'),
       role: 'user',
       content: content,
       images: images,
@@ -434,7 +504,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       updatedAt: DateTime.now(),
     );
     _touch(updated);
-    _storage.insertMessage(updated.id, userMsg);
+    await _persistOp(() => _storage.insertMessage(updated.id, userMsg), '用户消息');
 
     state = state.copyWith(
       isStreaming: true,
@@ -445,6 +515,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     _cancelToken = CancelToken();
     final history = List<ChatMessage>.from(updated.messages);
+    // 锁定本次请求所属的会话 id。原实现到最后用 state.activeSession 取会话，
+    // 而整个 await for 期间用户可以切换/新建/删除会话——回答会被追加到
+    // 另一个会话，或写入一个没有 session 行的孤儿记录，重启即消失。
+    final sessionId = updated.id;
 
     // 发送前自动检索知识库（未配置 embedding 模型或检索失败时静默跳过）
     var knowledge = const <RagHit>[];
@@ -458,7 +532,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
             return vecs.isEmpty ? const <double>[] : vecs.first;
           },
         );
-      } catch (_) {}
+      } catch (e) {
+        // 原来空 catch：知识库为何失效完全无迹可循，表现为"AI 不认识我导入的资料"。
+        // 检索失败降级为无知识库（不阻断对话），但必须留下日志。
+        debugPrint('RAG 检索失败，已降级为无知识库：$e');
+      }
     }
 
     final buf = StringBuffer();
@@ -472,6 +550,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
         knowledge: knowledge,
         persona: _getPersona(),
       )) {
+        // 长 Streaming 期间 notifier 可能已被 dispose（容器销毁/热重启），
+        // 此时写 state 会抛 StateError 并让 isStreaming 永远无法复位。
+        if (!mounted) return;
         if (ev is AgentDelta) {
           buf.write(ev.delta);
           state = state.copyWith(streamingContent: buf.toString());
@@ -490,11 +571,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
         }
       }
     } catch (e) {
-      state = state.copyWith(error: '运行出错：$e');
+      if (mounted) state = state.copyWith(error: '运行出错：$e');
     }
 
+    if (!mounted) return;
+
     // 最终回答写入会话历史（工具中间过程不入库，节省上下文长度）
-    final s2 = state.activeSession;
+    //按锁定的 sessionId 定位，而不是读当前的 activeSession。
+    final s2 = state.sessions.where((s) => s.id == sessionId).firstOrNull;
     if (answer != null && s2 != null) {
       // 原实现直接 s2.messages.add(...) 就地改列表，sessions 里存的是同一份
       // 引用，copyWith 检测到引用未变就不会触发重建，界面可能不刷新。
@@ -507,7 +591,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         updatedAt: DateTime.now(),
       );
       _touch(withAnswer);
-      _storage.insertMessage(withAnswer.id, answer);
+      await _persistOp(
+          () => _storage.insertMessage(withAnswer.id, answer), 'AI 回答');
 
       // 语音播报（引擎/音色/语速/音量都来自设置）
       if (_ttsEnabled()) {
@@ -531,10 +616,27 @@ class ChatNotifier extends StateNotifier<ChatState> {
           body,
         ));
       }
+    } else if (answer != null) {
+      // 会话在生成期间被删除：回答无处可去，明确留痕而不是静默丢弃。
+      debugPrint('会话 $sessionId 已被删除，回答未保存（id=${answer.id}）');
     }
 
-    state = state.copyWith(isStreaming: false, streamingContent: '', steps: []);
+    // 放在 finally 语义位置：任何提前 return 都不会让 isStreaming 卡在 true
+    if (mounted) {
+      state = state.copyWith(isStreaming: false, streamingContent: '', steps: []);
+    }
     _cancelToken = null;
+  }
+
+  /// 统一处理数据库写入：原来是裸 Future，磁盘满/DB 关闭时错误被完全吞掉，
+  /// 用户重启后发现消息丢了，日志里也没有任何线索。
+  Future<void> _persistOp(Future<void> Function() op, String what) async {
+    try {
+      await op();
+    } catch (e) {
+      debugPrint('持久化失败（$what）：$e');
+      if (mounted) state = state.copyWith(error: '保存到本地数据库失败：$e');
+    }
   }
 
   Future<void> stop() async {

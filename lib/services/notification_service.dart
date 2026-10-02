@@ -12,11 +12,24 @@ class NotificationService {
   static const _channelId = 'pocket_agent_agent';
   static const _channelName = 'Agent 通知';
   static const _channelDesc = '回答完成、任务结束等提醒';
+  /// 静音专用渠道。Android O 起通知重要度由渠道决定，实例级 importance
+  /// 会被向上钳制到渠道，不能低于渠道——所以静音必须靠独立渠道实现。
+  static const _silentChannelId = 'pocket_agent_answer_silent';
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
   bool _ready = false;
+  /// 进行中的初始化。并发调用共享同一个 Future：
+  /// 原实现没有并发保护，main.dart 的 init() 与 show() 里的 init() 可能同时进入，
+  /// 输的一方在 _plugin.initialize 处抛异常后走catch，把赢家刚设的
+  /// _ready = true 改回 false —— 此后每次 show() 都失败，
+  /// 通知【永久失效】且只有重启App 才能恢复。
+  Future<bool>? _initializing;
+  /// 点击回调单独存字段：原来 onTap 作为参数被 initialize 闭包捕获，
+  /// 而 main.dart 先用无参 init() 占位，导致后续传入的 onTap 永远不会被注册，
+  /// notifyAnswerDone里精心设置的 payload 成了死代码。
+  void Function(String? payload)? _onTap;
 
   /// 是否已就绪（未初始化成功时所有发送调用都会被静默忽略）。
   bool get isReady => _ready;
@@ -25,7 +38,14 @@ class NotificationService {
   Future<bool> init({
     void Function(String? payload)? onTap,
   }) async {
+    // 允许后补回调：_ready 短路时也要把新的 onTap 接上。
+    if (onTap != null) _onTap = onTap;
     if (_ready) return true;
+    final pending = _initializing;
+    if (pending != null) return pending;
+
+    final completer = Completer<bool>();
+    _initializing = completer.future;
     try {
       const android = AndroidInitializationSettings('@mipmap/ic_launcher');
       const ios = DarwinInitializationSettings(
@@ -35,18 +55,29 @@ class NotificationService {
       );
       await _plugin.initialize(
         const InitializationSettings(android: android, iOS: ios),
-        onDidReceiveNotificationResponse: (r) => onTap?.call(r.payload),
+        // 读字段而非捕获参数，这样后补的回调也能生效
+        onDidReceiveNotificationResponse: (r) => _onTap?.call(r.payload),
       );
       await _createChannel();
       _ready = true;
+      completer.complete(true);
     } catch (e) {
       debugPrint('通知初始化失败：$e');
       _ready = false;
+      completer.complete(false);
+    } finally {
+      // 允许失败后重试
+      _initializing = null;
     }
-    return _ready;
+    return completer.future;
   }
 
   /// Android 8+ 需要显式创建渠道，否则通知不显示。
+  ///
+  /// 必须建【两个】渠道：Android O 起通知的重要度由渠道决定，实例级的
+  /// importance 会被向上钳制到渠道的重要度，不能低于渠道。若只有 defaultImportance
+  /// 的渠道，「静音通知」开关（实例设low）会被系统忽略，仍然响铃震动，
+  /// 设置页承诺的"仅横幅提示"完全失效。
   Future<void> _createChannel() async {
     if (!Platform.isAndroid) return;
     final android = _plugin.resolvePlatformSpecificImplementation<
@@ -56,6 +87,12 @@ class NotificationService {
       _channelName,
       description: _channelDesc,
       importance: Importance.defaultImportance,
+    ));
+    await android?.createNotificationChannel(const AndroidNotificationChannel(
+      _silentChannelId,
+      '$_channelName（静音）',
+      description: '$_channelDesc（不响铃不震动）',
+      importance: Importance.low,
     ));
   }
 
@@ -91,6 +128,14 @@ class NotificationService {
             AndroidFlutterLocalNotificationsPlugin>();
         return await android?.areNotificationsEnabled() ?? false;
       }
+      if (Platform.isIOS) {
+        // 原来 iOS 直接返回 true：用户可能已拒绝授权，设置页却显示
+        // "通知权限已开启"，"授权"按钮也不出现，用户无从知道通知被静音了。
+        final ios = _plugin.resolvePlatformSpecificImplementation<
+            IOSFlutterLocalNotificationsPlugin>();
+        final granted = await ios?.checkPermissions();
+        return granted?.isAuthorized ?? false;
+      }
       return true;
     } catch (_) {
       return false;
@@ -107,21 +152,26 @@ class NotificationService {
   }) async {
     if (!await init()) return;
     try {
+      // 按 silent 路由到不同渠道：Android O 起实例级 importance 会被
+      // 钳制到渠道级别，单渠道方案下静音开关等于没做。
+      final channelId = silent ? _silentChannelId : _channelId;
       await _plugin.show(
         id,
         title,
         body,
         NotificationDetails(
           android: AndroidNotificationDetails(
-            _channelId,
-            _channelName,
+            channelId,
+            silent ? '$_channelName（静音）' : _channelName,
             channelDescription: _channelDesc,
             importance: silent
                 ? Importance.low
                 : Importance.defaultImportance,
             priority: silent ? Priority.low : Priority.defaultPriority,
             playSound: !silent,
-            onlyAlertOnce: true,
+            // 原来为 true：同 id 通知已在屏幕上时不重复提醒，
+            // 而 notifyAnswerDone 固定用 id 1001，于是"第二条回答以后就不响了"。
+            onlyAlertOnce: false,
             styleInformation:
                 (body != null && body.isNotEmpty && body.length > 40)
                     ? BigTextStyleInformation(body)

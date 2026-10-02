@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// 一个可清理的存储类别。
@@ -50,6 +51,10 @@ String formatBytes(int bytes) {
 /// - 数据库与偏好设置：会话/记忆/知识库（在「我的 → 清空会话」处理）
 class FileStorageService {
   /// 递归统计目录大小（软链接不计入，避免死循环）。
+  ///
+  /// 必须在后台 isolate 上跑（见 [_measureAsync]）。这里全是同步 IO，
+  /// 而 alpine/debian-rootfs 是解压后的完整发行版（数万文件、几百 MB），
+  /// 在 UI isolate 上同步遍历会让主线程卡死数秒到数十秒，直接触发 ANR。
   static ({int bytes, int files}) _measure(Directory dir) {
     if (!dir.existsSync()) return (bytes: 0, files: 0);
     var bytes = 0;
@@ -67,13 +72,27 @@ class FileStorageService {
     return (bytes: bytes, files: files);
   }
 
-  static StorageEntry _entry(String label, Directory dir, {bool deletable = true, String? note}) {
-    final m = _measure(dir);
+  /// 把统计放到后台 isolate，避免阻塞 UI。
+  static Future<({int bytes, int files})> _measureAsync(Directory dir) =>
+      compute(_measureIsolate, dir.path);
+
+  /// compute 入口：必须是顶层函数或静态方法，且参数可跨isolate 传递。
+  static ({int bytes, int files}) _measureIsolate(String path) =>
+      _measure(Directory(path));
+
+  static StorageEntry _entry(
+    String label,
+    Directory dir,
+    int bytes,
+    int files, {
+    bool deletable = true,
+    String? note,
+  }) {
     return StorageEntry(
       label: label,
       path: dir.path,
-      bytes: m.bytes,
-      fileCount: m.files,
+      bytes: bytes,
+      fileCount: files,
       deletable: deletable,
       note: note,
     );
@@ -95,41 +114,80 @@ class FileStorageService {
   static Future<Directory> _temp() => getTemporaryDirectory();
 
   /// 统计全部存储占用。
+  ///
+  /// 各类别的统计范围必须【互斥】，否则同一批文件会被计入多个条目，
+  /// 展示的占用与合计明显虚高：
+  /// - temp/tts 是 temp 的子目录 → 「临时文件」必须减去它
+  /// - alpine-rootfs / debian-rootfs 是 support 的子目录 → 「应用数据」必须减去它们
   static Future<List<StorageEntry>> scan() async {
     final support = await _support();
     final temp = await _temp();
     final ws = await workspaceDir();
 
+    final alpineDir = Directory('${support.path}/alpine-rootfs');
+    final debianDir = Directory('${support.path}/debian-rootfs');
+    final ttsDir = Directory('${temp.path}/tts');
+
+    // 全部在后台 isolate 上并行统计，同一批文件只扫一次
+    final results = await Future.wait([
+      _measureAsync(ws),
+      _measureAsync(alpineDir),
+      _measureAsync(debianDir),
+      _measureAsync(ttsDir),
+      _measureAsync(temp),
+      _measureAsync(support),
+    ]);
+    final wsM = results[0], alpineM = results[1], debianM = results[2];
+    final ttsM = results[3], tempM = results[4], supportM = results[5];
+
+    final rootfsBytes = alpineM.bytes + debianM.bytes;
+    final rootfsFiles = alpineM.files + debianM.files;
+
     return [
-      _entry('工作区', ws,
+      _entry('工作区', ws, wsM.bytes, wsM.files,
           note: 'Agent 与终端共享，挂载为 /workspace，系统文件管理器可直接访问'),
-      _entry('Alpine 终端环境', Directory('${support.path}/alpine-rootfs'),
+      _entry('Alpine 终端环境', alpineDir, alpineM.bytes, alpineM.files,
           deletable: false, note: '删除后需重新安装'),
-      _entry('Debian 终端环境', Directory('${support.path}/debian-rootfs'),
+      _entry('Debian 终端环境', debianDir, debianM.bytes, debianM.files,
           deletable: false, note: '删除后需重新安装'),
-      _entry('TTS 音频缓存', Directory('${temp.path}/tts'),
+      _entry('TTS 音频缓存', ttsDir, ttsM.bytes, ttsM.files,
           note: 'Edge TTS 合成的临时音频，播完即删'),
+      // 减去 tts，避免与上一行重复计数
       _entry('临时文件', temp,
-          note: '系统临时目录（含下载过程中的缓存）'),
+          (tempM.bytes - ttsM.bytes).clamp(0, 1 << 62),
+          (tempM.files - ttsM.files).clamp(0, 1 << 31),
+          note: '系统临时目录（不含 TTS 音频缓存）'),
+      // 减去两个 rootfs，避免与上面两行重复计数
       _entry('应用数据', support,
-          deletable: false, note: '会话数据库、偏好设置等，请用「清空所有会话」处理'),
+          (supportM.bytes - rootfsBytes).clamp(0, 1 << 62),
+          (supportM.files - rootfsFiles).clamp(0, 1 << 31),
+          deletable: false,
+          note: '会话数据库、偏好设置等（不含终端环境），请用「清空所有会话」处理'),
     ];
   }
 
-  /// 清理缓存类目录（TTS 音频 + 临时目录），返回释放的字节数。
+  /// 可安全清理的缓存子目录白名单。
   ///
-  /// 注意：`temp/tts` 本身位于 `temp` 之内，遍历 `temp` 时就会把它一并删掉，
-  /// 因此这里只以 `temp` 为唯一遍历目标，避免同一文件被统计两次导致
-  /// 释放量虚高（原实现把两个目录都列进 targets 会重复计数）。
+  /// 不能无差别清空整个 temp：终端环境安装过程中，下载/解压的临时文件也在
+  /// temp 下，用户在安装过程中点「清理缓存」会把进行中的安装破坏掉。
+  static const _cacheWhitelist = {'tts'};
+
+  /// 清理缓存类目录（仅白名单子目录），返回释放的字节数。
   static Future<int> clearCache() async {
     var freed = 0;
     final temp = await _temp();
     if (!temp.existsSync()) return 0;
     for (final e in temp.listSync(followLinks: false)) {
+      // 不能用 pathSegments.lastOrNull：实测 pathSegments 会保留结尾的空串
+      // （'file:///a/b/c/' → [a, b, c, '']），lastOrNull 会返回空串而非目录名，
+      // 白名单永远匹配不上。这里过滤掉空段再取最后一个。
+      final segs = e.uri.pathSegments.where((s) => s.isNotEmpty).toList();
+      if (segs.isEmpty) continue;
+      final name = segs.last;
+      if (!_cacheWhitelist.contains(name)) continue;
       try {
         final entity = e;
         var size = 0;
-        // 直接判断类型，让 Dart 做类型提升，避免多余的类型转换
         if (entity is Directory) {
           size = _measure(entity).bytes;
         } else if (entity is File) {

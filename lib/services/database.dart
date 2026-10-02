@@ -31,6 +31,15 @@ class MessageRows extends Table {
   TextColumn get toolName => text().nullable()();
   TextColumn get imagesJson => text().withDefault(const Constant('[]'))();
   IntColumn get createdAt => integer()();
+
+  /// sessionId 没有索引时，按会话查消息是全表扫描。
+  /// 启动加载全部会话消息曾因此产生 N+1 次全表扫描（已改为一次查询 + 内存分组），
+  /// 这里补上复合索引让「按会话取消息并排序」也能走索引。
+  @override
+  List<String> get customConstraints => [
+        'CREATE INDEX IF NOT EXISTS idx_message_rows_session '
+        'ON message_rows (session_id, id)',
+      ];
 }
 
 /// 长期记忆表。
@@ -113,7 +122,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'pocket_agent'));
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -131,6 +140,14 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 5) {
             await m.createTable(mcpServers);
+          }
+          if (from < 6) {
+            // MessageRows 的 customConstraints 只在建表时生效，
+            // 已有安装必须在这里补建索引，否则升级后依然全表扫描。
+            await customStatement(
+              'CREATE INDEX IF NOT EXISTS idx_message_rows_session '
+              'ON message_rows (session_id, id)',
+            );
           }
         },
       );

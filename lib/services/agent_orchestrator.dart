@@ -73,7 +73,22 @@ class AgentOrchestrator {
       ...history.map((m) => m.toApiJson()),
     ];
 
+    // 模型在「决定调工具」的那一轮通常会先说一句自然语言（"好的，我查一下…"）。
+    // 这些文本也会以 AgentDelta 推给 UI，但最终落库的 answer 只取最后一轮，
+    // 于是用户看到自己已读的文字凭空消失。这里把各轮可见文本累积起来。
+    final lead = StringBuffer();
+    // 记录最后一次可见内容：达到 _maxSteps 时据此交付进展，而不是全部丢弃。
+    var lastVisible = '';
+    // 同一工具 + 同一参数连续重复调用说明模型卡住了，提前收尾避免空转烧 token。
+    String? prevSig;
+    var repeatCount = 0;
+
     for (var step = 0; step < _maxSteps; step++) {
+      if (cancelToken?.isCancelled ?? false) {
+        yield const AgentFailure('已取消。');
+        return;
+      }
+
       ChatMessage? assistant;
       try {
         await for (final ev in _llm.chatStream(
@@ -89,6 +104,12 @@ class AgentOrchestrator {
           }
         }
       } on DioException catch (e) {
+        // 用户主动点「停止」时 Dio 抛 cancel，状态码为 null。若不区分，
+        // _dioError 会把它渲染成"请求失败（HTTP null）"，让用户以为 App 坏了。
+        if (e.type == DioExceptionType.cancel) {
+          yield const AgentFailure('已取消。');
+          return;
+        }
         yield AgentFailure(_dioError(e));
         return;
       } catch (e) {
@@ -102,26 +123,84 @@ class AgentOrchestrator {
       }
 
       if (assistant.toolCalls.isEmpty) {
-        yield AgentAnswer(assistant);
+        // 空内容当作正常答案落库会留下一条永久的空消息，并触发 TTS 播报空串。
+        if (assistant.content.trim().isEmpty) {
+          yield const AgentFailure('模型返回了空内容（可能被内容过滤拦截），请换个说法再试。');
+          return;
+        }
+        final prefix = lead.toString();
+        yield AgentAnswer(
+          prefix.isEmpty
+              ? assistant
+              : ChatMessage(
+                  id: assistant.id,
+                  role: 'assistant',
+                  content: '$prefix${assistant.content}',
+                  createdAt: assistant.createdAt,
+                ),
+        );
         return;
       }
 
       // 有工具调用：执行并把结果回填，进入下一轮
       messages.add(assistant.toApiJson());
+      if (assistant.content.trim().isNotEmpty) {
+        lastVisible = assistant.content;
+        // 各轮文本之间补换行，否则两段会被直接粘在一起。
+        if (lead.isNotEmpty) lead.writeln();
+        lead.write(assistant.content);
+      }
+
       for (final call in assistant.toolCalls) {
-        if (call.name.isEmpty) continue;
-        yield AgentStatus('正在调用工具 ${call.name} …');
-        final result = await _tools.execute(call.name, call.arguments);
-        yield AgentToolDone(call.name, result);
+        // OpenAI 兼容协议要求：assistant 消息里的每个 tool_call 都必须紧跟一条
+        // role:"tool" 且 tool_call_id 匹配的回复。原来对空 name 直接 continue，
+        // 会让请求里留下一个没有回填结果的 tool_call，下一轮被服务端以
+        // 400 Invalid parameter 拒绝，整轮 Agent 直接终止。
+        final String result;
+        if (call.name.isEmpty) {
+          result = '错误：模型返回了缺少函数名的工具调用，无法执行。';
+          yield AgentToolDone('(未命名工具)', result);
+        } else {
+          final sig = '${call.name}:${call.arguments}';
+          if (sig == prevSig) {
+            repeatCount++;
+          } else {
+            prevSig = sig;
+            repeatCount = 1;
+          }
+          if (repeatCount >= 3) {
+            yield AgentFailure('模型在重复调用同一个工具（${call.name}），已提前中止以避免空转。');
+            return;
+          }
+          yield AgentStatus('正在调用工具 ${call.name} …');
+          result = await _tools.execute(call.name, call.arguments);
+          yield AgentToolDone(call.name, result);
+        }
         messages.add({
           'role': 'tool',
-          'tool_call_id': call.id,
+          'tool_call_id': call.id.isEmpty ? 'call_${messages.length}' : call.id,
           'name': call.name,
           'content': result,
         });
       }
+
+      if (cancelToken?.isCancelled ?? false) {
+        yield const AgentFailure('已取消。');
+        return;
+      }
     }
-    yield const AgentFailure('已达最大工具调用轮数（$_maxSteps），任务中止。');
+
+    // 走到这里说明耗尽了 _maxSteps 轮。8 轮里用户已经看到的工具结果与推理文本
+    // 不该白费——交付当前进展，并说明是被轮数上限截断。
+    if (lastVisible.trim().isNotEmpty) {
+      yield AgentAnswer(ChatMessage(
+        id: 'asst_partial_${DateTime.now().millisecondsSinceEpoch}',
+        role: 'assistant',
+        content: '$lastVisible\n\n（已达到最大推理轮数 $_maxSteps，以上为当前进展。）',
+      ));
+    } else {
+      yield const AgentFailure('已达最大工具调用轮数（$_maxSteps），任务中止。');
+    }
   }
 
   String _systemPrompt(List<RagHit> knowledge, String persona) {

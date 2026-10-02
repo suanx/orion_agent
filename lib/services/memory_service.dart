@@ -1,4 +1,6 @@
+import 'package:characters/characters.dart';
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/memory_note.dart';
 import 'database.dart';
@@ -7,16 +9,36 @@ import 'database.dart';
 class MemoryService {
   MemoryService(this._db);
 
+  /// 最多持久化/保留的条数（超出淘汰最旧的）。
+  static const _maxStored = 200;
+  /// 注入 prompt 的上限：最多 60 条、每条 200 字，约 12k 字符以内。
+  static const _maxNotes = 60;
+  static const _maxCharsPerNote = 200;
+
   final AppDatabase _db;
 
   final List<MemoryNote> _notes = [];
-  bool _loaded = false;
+  // 并发加载共享同一个 Future：原实现用bool _loaded 做「已开始」标记，
+  // 并发调用方会看到空列表；而 await 之前就置位意味着查询失败后 _loaded 仍为 true，
+  // 长期记忆从此永久失效（只能重启 App），且异常被完全吞掉。
+  Future<void>? _loading;
 
   List<MemoryNote> get notes => List.unmodifiable(_notes);
 
   Future<void> load() async {
-    if (_loaded) return;
-    _loaded = true;
+    final pending = _loading;
+    if (pending != null) return pending;
+    final fut = _doLoad();
+    _loading = fut;
+    try {
+      await fut;
+    } finally {
+      // 失败后清空，允许下次重试
+      _loading = null;
+    }
+  }
+
+  Future<void> _doLoad() async {
     final rows = await (_db.select(_db.memoryNoteRows)
           ..orderBy([(n) => OrderingTerm.asc(n.createdAt)]))
         .get();
@@ -33,9 +55,16 @@ class MemoryService {
 
   Future<void> addNote(String text) async {
     await load();
+    final body = text.trim();
+    // 去重：Agent 在 ReAct 循环里可能对同一件事反复 save_memory，
+    // 不去重会让记忆库和prompt 一起膨胀。
+    if (_notes.any((n) => n.text.trim() == body)) {
+      debugPrint('memory: 跳过重复记忆「$body」');
+      return;
+    }
     final note = MemoryNote(
       id: uniqueId('mem'),
-      text: text,
+      text: body,
       createdAt: DateTime.now(),
     );
     await _db.into(_db.memoryNoteRows).insert(
@@ -46,6 +75,12 @@ class MemoryService {
           ),
         );
     _notes.add(note);
+    // 超出保留上限时淘汰最旧的，避免数据库与内存无界增长。
+    // 注意必须在 insert 之后删，否则新记录可能被当成最旧的删掉。
+    while (_notes.length > _maxStored) {
+      final dropped = _notes.removeAt(0);
+      await (_db.delete(_db.memoryNoteRows)..where((n) => n.id.equals(dropped.id))).go();
+    }
   }
 
   Future<void> removeNote(String id) async {
@@ -55,9 +90,23 @@ class MemoryService {
   }
 
   /// 注入到 system prompt 的记忆文本。
+  ///
+  /// 必须有上限：save_memory 每调用一次就永久追加一条，既无条数上限也无单条长度上限。
+  /// 长期使用（尤其 Agent 在 ReAct 循环里反复保存同一件事）会让 system prompt
+  /// 无界膨胀，最终触发 API 的 context length 限制，或把模型注意力稀释到失效。
+  /// 同一产品的 RAG 侧已有 _defaultTopK / _minScore 做边界控制，这里保持一致。
   String memoryPrompt() {
     if (_notes.isEmpty) return '';
-    final lines = _notes.map((n) => '- ${n.text}').join('\n');
-    return '\n以下是关于用户的已知长期信息，回答时可自然使用：\n$lines';
+    final recent = _notes.length > _maxNotes
+        ? _notes.sublist(_notes.length - _maxNotes)
+        : _notes;
+    final buf = StringBuffer();
+    for (final n in recent) {
+      final t = n.text.characters.length > _maxCharsPerNote
+          ? '${n.text.characters.take(_maxCharsPerNote).toString()}…'
+          : n.text;
+      buf.writeln('- $t');
+    }
+    return '\n以下是关于用户的已知长期信息，回答时可自然使用：\n${buf.toString().trimRight()}';
   }
 }

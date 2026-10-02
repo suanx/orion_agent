@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 
 import 'database.dart';
 import 'text_chunker.dart';
@@ -62,10 +63,25 @@ class RagService {
     final embeddings = <List<double>>[];
     for (var i = 0; i < parts.length; i += _embedBatchSize) {
       final group = parts.sublist(i, math.min(i + _embedBatchSize, parts.length));
-      embeddings.addAll(await embed(group));
+      final vecs = await embed(group);
+      // 必须逐批校验长度。只在最后比总数的话，两批互相抵消
+      // （首批少 1 条、末批多 1 条）会顺利通过检查，但从 i 起所有分块的向量
+      // 全部错位——A 文档检索出 B 文档的内容，且已永久写进数据库。
+      if (vecs.length != group.length) {
+        throw Exception(
+          'Embedding 第 ${i ~/ _embedBatchSize + 1} 批返回 ${vecs.length} 条，'
+          '与请求的 ${group.length} 条不符，已中止入库（避免向量与分块错位）',
+        );
+      }
+      embeddings.addAll(vecs);
     }
     if (embeddings.length != parts.length) {
       throw Exception('Embedding 返回数量（${embeddings.length}）与分块数量（${parts.length}）不一致');
+    }
+    // 维度必须处处一致且非空，否则余弦相似度恒为 0，检索形同虚设。
+    final dims = embeddings.map((e) => e.length).toSet();
+    if (dims.length != 1 || dims.first == 0) {
+      throw Exception('Embedding 返回了不一致或为空的向量维度：$dims');
     }
 
     final id = uniqueId('doc');
@@ -112,11 +128,28 @@ class RagService {
     final chunks = await (_db.select(_db.knowledgeChunks)).get();
 
     final hits = <RagHit>[];
+    var skipped = 0;
     for (final c in chunks) {
-      final vec = (jsonDecode(c.embeddingJson) as List? ?? const [])
-          .whereType<num>()
-          .map((e) => e.toDouble())
-          .toList();
+      // 单条脏数据（写入时截断、历史迁移遗留、手动改库）会让 jsonDecode 抛
+      // FormatException 并毁掉【整次】检索——所有查询归零，且上游多半是空catch，
+      // 用户只看到"AI 不认识我导入的资料了"。这里改为跳过并计数。
+      List<double> vec;
+      try {
+        final decoded = jsonDecode(c.embeddingJson);
+        if (decoded is! List) {
+          skipped++;
+          continue;
+        }
+        vec = decoded.whereType<num>().map((e) => e.toDouble()).toList();
+      } on FormatException {
+        skipped++;
+        continue;
+      }
+      // 维度与查询向量不一致时余弦无意义（会被当成 0 分），直接跳过。
+      if (vec.length != qv.length || vec.isEmpty) {
+        skipped++;
+        continue;
+      }
       final score = cosineSimilarity(qv, vec);
       if (score >= _minScore) {
         hits.add(RagHit(
@@ -125,6 +158,9 @@ class RagService {
           score: score,
         ));
       }
+    }
+    if (skipped > 0) {
+      debugPrint('RAG: 跳过 $skipped/${chunks.length} 个损坏或维度不符的分块');
     }
     hits.sort((a, b) => b.score.compareTo(a.score));
     return hits.take(topK).toList();

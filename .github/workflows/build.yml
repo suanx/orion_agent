@@ -40,6 +40,11 @@ jobs:
         # targetSdk 28 会触发 lintVital 的 ExpiredTargetSdkVersion 致命错误；
         # 应用侧载分发不上架 Play，直接关闭 release lint。
         # flutter_local_notifications 用到 java.time，需要 core library desugaring。
+        #
+        # 注意：这里【追加】第二个 android {} 块是有意为之，不是重复定义。
+        # Kotlin DSL 允许多个同名配置块，Gradle 会把它们合并到同一个 android 容器，
+        # 模板里已有的 compileOptions 与这里注入的会叠加生效。不要"顺手合并"，
+        # 也不要改成改写模板——那正是之前反复引入构建失败的原因。
         run: |
           cat >> android/app/build.gradle.kts <<'EOF'
 
@@ -72,51 +77,59 @@ jobs:
             exit 1
           fi
           python3 - <<'PYCHK'
-          import sys
+          import re, sys
           src = open('android/app/build.gradle.kts', encoding='utf-8').read()
-          if src.count('{') != src.count('}'):
-              print('::error ::花括号不配平 { =%d } =%d' % (src.count('{'), src.count('}')))
+          # 计数前先剥掉字符串与注释，否则 "com.android.tools:desugar_jdk_libs:2.1.4"
+          # 之类内容里的括号/引号会让朴素计数产生假阳性。
+          code = re.sub(r'/\*[\s\S]*?\*/', '', src)          # 块注释
+          code = re.sub(r'//[^\n]*', '', code)                # 行注释
+          code = re.sub(r'"""[\s\S]*?"""', '""', code)         # 三引号字符串
+          code = re.sub(r'"(?:\\.|[^"\\\n])*"', '""', code)     # 普通字符串
+          if code.count('{') != code.count('}'):
+              print('::error ::花括号不配平 { =%d } =%d' % (code.count('{'), code.count('}')))
               sys.exit(1)
-          if src.count('"') % 2 != 0:
+          if code.count('"') % 2 != 0:
               print('::error ::双引号不配对，heredoc 可能被提前截断')
               sys.exit(1)
           print('注入自检通过')
           PYCHK
 
-      - name: Align Kotlin jvmTarget with Java (17)
-        # Gradle 会校验 Java 与 Kotlin 两侧的 jvmTarget 是否一致，
-        # 不一致直接拒绝构建。这里显式把 Kotlin 侧也钉到 17。
+      - name: Verify Kotlin jvmTarget alignment (no deprecated kotlinOptions)
+        # flutter create 生成的模板【已自带】kotlin { compilerOptions { jvmTarget = JVM_17 } }，
+        # 与 compileOptions 的 VERSION_17 一致，Gradle 两侧 jvmTarget 校验本来就能通过。
+        #
+        # 历史教训：曾在这里注入 kotlinOptions { jvmTarget = ... } 想「显式对齐」，
+        # 但 Kotlin 2.x 已废弃该 DSL，脚本编译阶段就直接失败：
+        #   Script compilation errors:
+        #   e: ...build.gradle.kts:12:9: 'var jvmTarget: String' is deprecated.
+        #     Please migrate to the compilerOptions DSL.
+        # 于是白等一轮 CI 才定位到。故改为只校验、不注入。
         run: |
           set -e
-          for f in android/app/build.gradle.kts android/app/build.gradle; do
-            [ -f "$f" ] || continue
-            # 已有 kotlinOptions 就不重复注入，保持幂等
-            if grep -q "kotlinOptions" "$f"; then
-              echo "$f 已有 kotlinOptions，跳过"
-              continue
-            fi
-            # 用 python 而非 sed：KTS 里有大量特殊字符，sed 转义容易出错
-            python3 - "$f" <<'PY'
-          import sys, re
-          path = sys.argv[1]
-          src = open(path, encoding='utf-8').read()
-          block = (
-              "    kotlinOptions {\n"
-              "        jvmTarget = JavaVersion.VERSION_17.toString()\n"
-              "    }\n"
-          )
-          # 插到第一个 compileOptions 之前；若没有则追加到 android {} 之后
-          m = re.search(r'^(\s*)compileOptions\s*\{', src, re.M)
-          if m:
-              src = src[:m.start()] + block + src[m.start():]
-              open(path, 'w', encoding='utf-8').write(src)
-              print(f'{path}: 已在 compileOptions 前插入 kotlinOptions')
-          else:
-              open(path, 'a', encoding='utf-8').write('\n' + block)
-              print(f'{path}: 未找到 compileOptions，已追加 kotlinOptions')
-          PY
-          done
-          grep -n "kotlinOptions" -A 2 android/app/build.gradle* || true
+          F=android/app/build.gradle.kts
+          [ -f "$F" ] || F=android/app/build.gradle
+          echo "检查文件: $F"
+          grep -nE 'compileOptions|jvmTarget|sourceCompatibility|targetCompatibility|kotlinOptions|compilerOptions' "$F" || true
+          # kotlinOptions 是 Kotlin 2.x 废弃的 DSL，一旦出现必然编译失败
+          if grep -q "kotlinOptions" "$F"; then
+            echo "::error ::检测到已废弃的 kotlinOptions DSL，Kotlin 2.x 下会导致脚本编译失败"
+            exit 1
+          fi
+          # 模板若结构变化导致 compilerOptions 缺失，Java/Kotlin 两侧 jvmTarget
+          # 就无法保证一致，立即报错而不是等 Gradle 抛晦涩的不一致错误。
+          grep -q "compilerOptions" "$F" || {
+            echo "::error ::未找到 kotlin compilerOptions（Flutter 模板结构可能已变化）"
+            exit 1
+          }
+          grep -qE 'jvmTarget\s*=\s*.*(JVM_17|VERSION_17)' "$F" || {
+            echo "::error ::Kotlin jvmTarget 未钉到 17"
+            exit 1
+          }
+          grep -q "VERSION_17" "$F" || {
+            echo "::error ::compileOptions 未钉到 VERSION_17"
+            exit 1
+          }
+          echo "Kotlin/Java jvmTarget 均为 17，校验通过"
 
       - name: Enable edge-to-edge window layout
         # 沉浸式状态栏：CI 用 flutter create 生成的 styles.xml 在部分 Flutter

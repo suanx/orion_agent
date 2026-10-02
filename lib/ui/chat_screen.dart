@@ -1,4 +1,5 @@
 import '../theme.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -15,15 +16,30 @@ import '../services/skill_service.dart';
 ///
 /// 历史数据里可能存在被截断或手工编辑过的 base64，直接 base64Decode 会抛
 /// FormatException 并让整棵消息树渲染失败，这里返回 null 由调用方降级展示占位图。
+///
+/// 结果按 dataUrl 缓存：Image.memory 的缓存键取自 MemoryImage 持有的 bytes
+/// 【对象身份】，每次 build 新建的 Uint8List 会让缓存永不命中，导致每帧都重新
+/// base64 解码 + JPEG 解码。流式期间 build 每秒跑几十次，一个 20 条消息、
+/// 每条带 1600px 照片的会话每帧要解码数 MB，表现为滚动卡顿。
 Uint8List? _decodeImage(String dataUrl) {
+  final hit = _imageCache[dataUrl];
+  if (hit != null) return hit;
+  Uint8List? bytes;
   try {
     final b64 = dataUrl.contains(',') ? dataUrl.split(',').last : dataUrl;
-    final bytes = base64Decode(b64);
-    return bytes.isEmpty ? null : bytes;
+    final decoded = base64Decode(b64);
+    bytes = decoded.isEmpty ? null : decoded;
   } catch (_) {
-    return null;
+    bytes = null;
   }
+  // 上限保护：长会话里无限增长会吃掉可观的内存。
+  if (_imageCache.length > 32) _imageCache.clear();
+  if (bytes != null) _imageCache[dataUrl] = bytes;
+  return bytes;
 }
+
+/// 以 data URL 为键的解码缓存（进程内有效即可，图片不会在会话外被改写）。
+final Map<String, Uint8List> _imageCache = {};
 
 void _showImageViewer(BuildContext context, String dataUrl) {
   final bytes = _decodeImage(dataUrl);
@@ -58,6 +74,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _pendingImages = <String>[]; // data URL
   bool _hasText = false;
   bool _listening = false;
+  /// 上次触发自动滚动的流式内容长度，避免每帧都注册 post-frame 回调。
+  int _lastScrollLen = -1;
 
   @override
   void initState() {
@@ -85,6 +103,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    // 释放麦克风：若在识别过程中销毁 widget 而不停止，平台会一直持有录音，
+    // 用户下次进页面无法启动识别。
+    unawaited(ref.read(voiceProvider).stopListening());
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -110,6 +131,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
 
     if (text.isEmpty && _pendingImages.isEmpty) return;
+    // 必须在清空输入框【之前】拦截。并发守卫在 ChatNotifier.send() 里，
+    // 而那时输入框和图片列表已经被清空了：流式期间按回车，用户刚输入的文字
+    // 和已选图片会被静默销毁，send() 直接 return，没有任何提示。
+    if (ref.read(chatProvider).isStreaming) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('正在生成回答，请先点击「停止」')),
+      );
+      return;
+    }
     final images = List<String>.of(_pendingImages);
     _inputController.clear();
     setState(_pendingImages.clear);
@@ -168,13 +198,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           .pickImage(source: source, imageQuality: 80, maxWidth: 1600);
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
+      // readAsBytes 是异步间隙，widget 可能已被销毁（路由被pop、热重载、
+      // 宿主 Activity 销毁）。不检查就 setState 会抛
+      // "setState() called after dispose()"。下面的 catch 里有 mounted 判断，
+      // 说明这个风险已被识别，只是正常路径漏了。
+      if (!mounted) return;
       setState(() =>
           _pendingImages.add('data:image/jpeg;base64,${base64Encode(bytes)}'));
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('获取图片失败：$e')));
-      }
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('获取图片失败：$e')));
     }
   }
 
@@ -193,9 +227,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final chat = ref.watch(chatProvider);
     final session = chat.activeSession;
 
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (chat.isStreaming) _scrollToBottom();
-    });
+    // 原来无条件在 build 里注册 post-frame 回调。流式期间每个 AgentDelta
+    // 都会 copyWith 触发一次 build，于是每秒注册几十个回调，每个都重启
+    // 250ms 的animateTo —— 滚动抖动且动画永远推不到底，回调队列持续膨胀。
+    // 改为只在【内容长度真的变了】时注册一次。
+    final streamingLen = chat.streamingContent.length;
+    if (chat.isStreaming && streamingLen != _lastScrollLen) {
+      _lastScrollLen = streamingLen;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToBottom();
+      });
+    }
 
     final items = <Widget>[];
     if (session != null) {

@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 
 import 'database.dart';
 
@@ -287,18 +288,33 @@ class SkillService {
 
   final List<SkillItem> _cache = [];
   bool _loaded = false;
+  bool _loading = false;
 
   List<SkillItem> get skills => List.unmodifiable(_cache);
 
+  /// 只在查询【成功后】才置 _loaded。
+  /// 原实现 await 之前就置位，若查询抛异常（首次打开、DB 损坏、schema 迁移中），
+  /// _loaded 已是 true 而 _cache 仍为空 —— 此后整个 App 生命周期内 load() 都是
+  /// no-op：isInstalled() 恒false（用户可重复安装同一技能、不断插重复行），
+  /// findByName() 恒null（`/技能名` 触发全部失效）。
   Future<void> load() async {
-    if (_loaded) return;
-    _loaded = true;
-    final rows = await (_db.select(_db.skillItems)
-          ..orderBy([(s) => OrderingTerm.desc(s.createdAt)]))
-        .get();
-    _cache
-      ..clear()
-      ..addAll(rows);
+    if (_loaded || _loading) return;
+    _loading = true;
+    try {
+      final rows = await (_db.select(_db.skillItems)
+            ..orderBy([(s) => OrderingTerm.desc(s.createdAt)]))
+          .get();
+      _cache
+        ..clear()
+        ..addAll(rows);
+      _loaded = true;
+    } catch (e) {
+      debugPrint('技能列表加载失败：$e');
+      rethrow;
+    } finally {
+      // 失败后允许重试
+      _loading = false;
+    }
   }
 
   Future<void> addSkill(String name, String template) async {

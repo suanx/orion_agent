@@ -11,19 +11,28 @@ class StorageService {
   final AppDatabase _db;
 
   /// 启动时全量加载（会话按 updatedAt 倒序，消息按插入顺序）。
+  ///
+  /// 原实现对每个会话单独查一次消息（N+1）。messageRows.sessionId 没有索引，
+  /// 于是加载 200 个会话 = 1 + 200 次查询，每次都是 messageRows 全表扫描+排序。
+  /// 而 main.dart 在 runApp 之前 await本方法，数据量积累后启动会出现长白屏。
+  /// 改为一次性取出全部消息再按 sessionId 分组。
   Future<List<ChatSession>> loadSessions() async {
     final rows = await (_db.select(_db.sessionRows)
           ..orderBy([(s) => OrderingTerm.desc(s.updatedAt)]))
         .get();
-    final result = <ChatSession>[];
-    for (final s in rows) {
-      final msgs = await (_db.select(_db.messageRows)
-            ..where((m) => m.sessionId.equals(s.id))
-            ..orderBy([(m) => OrderingTerm.asc(m.id)]))
-          .get();
-      result.add(sessionFromRow(s, msgs.map(messageFromRow).toList()));
+
+    final allMsgs = await (_db.select(_db.messageRows)
+          ..orderBy([(m) => OrderingTerm.asc(m.id)]))
+        .get();
+    final bySession = <String, List<ChatMessage>>{};
+    for (final m in allMsgs) {
+      (bySession[m.sessionId] ??= []).add(messageFromRow(m));
     }
-    return result;
+
+    return [
+      for (final s in rows)
+        sessionFromRow(s, bySession[s.id] ?? const <ChatMessage>[]),
+    ];
   }
 
   Future<void> insertSession(ChatSession s) =>

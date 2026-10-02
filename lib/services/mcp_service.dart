@@ -1,5 +1,6 @@
 import 'package:dio/dio.dart';
 import 'package:drift/drift.dart';
+import 'package:flutter/foundation.dart';
 
 import 'database.dart';
 import 'mcp_client.dart';
@@ -50,15 +51,28 @@ class McpService {
   Future<int> connectAll({
     Duration timeout = const Duration(seconds: 8),
   }) async {
+    final servers = await listServers();
+
+    // 先注销本服务此前注册的全部工具，否则重连是【静默空操作】：
+    // register() 遇到同名工具会直接跳过，于是旧 McpTool（持有旧 client / 旧 Dio）
+    // 被永久保留，新建的连接被丢弃。用户反复点「连接」或把开关 off→on，
+    // 工具调用仍走旧会话。同样，停用/删除服务器后工具也不会消失，
+    // 用户明明关掉了它，Agent 却还在调用。
+    for (final s in servers) {
+      _registry.unregisterPrefix('${McpTool.sanitizePublic(s.name)}__');
+    }
+
     var count = 0;
-    for (final s in await listServers()) {
+    for (final s in servers) {
       if (!s.enabled) continue;
+      // 每次连接独立 Dio，失败时必须显式关闭，否则重连会累积连接。
+      final dio = Dio(BaseOptions(
+        connectTimeout: timeout,
+        receiveTimeout: timeout,
+      ));
       try {
         final client = McpClient(
-          dio: Dio(BaseOptions(
-            connectTimeout: timeout,
-            receiveTimeout: timeout,
-          )),
+          dio: dio,
           name: s.name,
           url: s.url,
         );
@@ -70,8 +84,12 @@ class McpService {
               .register(McpTool(client: client, info: info, prefix: prefix));
           count++;
         }
-      } catch (_) {
-        // 忽略不可用的服务器
+      } catch (e) {
+        // 原来 catch (_) 把「URL 写错 / 鉴权失败 / DNS 失败 / 协议不兼容 / 超时」
+        // 全部归为同一结果且不打日志，界面只能显示"没有连接到可用的 MCP 服务器"，
+        // 无法区分配置错误与服务暂时不可达。这里至少留下可排查的线索。
+        debugPrint('MCP 服务器「${s.name}」(${s.url}) 连接失败：$e');
+        dio.close(force: true);
       }
     }
     return count;

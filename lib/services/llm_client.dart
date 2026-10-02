@@ -81,50 +81,88 @@ class LlmClient {
           const LineSplitter(),
         );
 
-    await for (final line in lines) {
-      if (!line.startsWith('data:')) continue;
-      final data = line.substring(5).trim();
-      if (data.isEmpty) continue;
-      if (data == '[DONE]') break;
+    // SSE 是长连接：服务端建立连接后若不再写入也不关闭（代理挂起、云函数缩容、
+    // keep-alive 复用），await for 会永久阻塞，界面卡在"生成中"。
+    // Dio 的 receiveTimeout 在流式场景不生效（响应头已到达，计时器停止），
+    // 因此这里显式加单行空闲超时。
+    const idle = Duration(seconds: 60);
 
-      final Map<String, dynamic> json;
-      try {
-        json = jsonDecode(data) as Map<String, dynamic>;
-      } catch (_) {
-        continue; // 跳过无法解析的行
-      }
+    try {
+      await for (final line in lines.timeout(
+        idle,
+        onTimeout: (sink) => sink.addError(
+          Exception('模型响应超时（连续 $idle 秒未收到任何数据）'),
+        ),
+      )) {
+        if (!line.startsWith('data:')) continue;
+        final data = line.substring(5).trim();
+        if (data.isEmpty) continue;
+        if (data == '[DONE]') break;
 
-      final choices = json['choices'] as List?;
-      if (choices == null || choices.isEmpty) continue;
-      final choice = choices.first as Map<String, dynamic>;
-      final delta = choice['delta'] as Map<String, dynamic>? ?? const {};
+        final Object? decoded;
+        try {
+          decoded = jsonDecode(data);
+        } catch (_) {
+          continue; // 跳过无法解析的行
+        }
+        // 网关有时返回 {"error": {...}} 之类结构，这里逐层做类型收敛而不是强转。
+        // 原来的 `as Map<String, dynamic>` 在 delta 是 String 时抛 TypeError，
+        // 异常从 async* 抛出后响应体未被关闭，反复触发会耗尽连接池。
+        if (decoded is! Map) continue;
+        final json = decoded.cast<String, dynamic>();
 
-      final c = delta['content'];
-      if (c is String && c.isNotEmpty) {
-        contentBuf.write(c);
-        yield ContentDelta(c);
-      }
+        final Object? rawChoices = json['choices'];
+        if (rawChoices is! List || rawChoices.isEmpty) continue;
+        final Object? rawChoice = rawChoices.first;
+        if (rawChoice is! Map) continue;
+        final choice = rawChoice.cast<String, dynamic>();
 
-      final tcs = delta['tool_calls'] as List?;
-      if (tcs != null) {
-        for (final tc in tcs) {
-          if (tc is! Map<String, dynamic>) continue;
-          final idx = (tc['index'] as num?)?.toInt() ?? 0;
-          final acc = toolAcc.putIfAbsent(idx, () => _ToolCallAcc());
-          if (tc['id'] is String && (acc.id == null || acc.id!.isEmpty)) {
-            acc.id = tc['id'] as String;
-          }
-          final fn = tc['function'];
-          if (fn is Map<String, dynamic>) {
-            final n = fn['name'];
-            if (n is String && n.isNotEmpty) {
-              acc.name = acc.name == null ? n : acc.name! + n;
+        final Object? rawDelta = choice['delta'];
+        final delta = rawDelta is Map ? rawDelta.cast<String, dynamic>() : const <String, dynamic>{};
+
+        final c = delta['content'];
+        if (c is String && c.isNotEmpty) {
+          contentBuf.write(c);
+          yield ContentDelta(c);
+        }
+
+        final Object? rawTcs = delta['tool_calls'];
+        if (rawTcs is List) {
+          for (final tc in rawTcs) {
+            if (tc is! Map) continue;
+            final tcm = tc.cast<String, dynamic>();
+            // index 缺失时退化为"按到达顺序追加"，避免并行 tool_call 全被并进同一个累加器。
+            final idx = (tcm['index'] as num?)?.toInt() ?? toolAcc.length;
+            final acc = toolAcc.putIfAbsent(idx, () => _ToolCallAcc());
+            final id = tcm['id'];
+            if (id is String && id.isNotEmpty && (acc.id == null || acc.id!.isEmpty)) {
+              acc.id = id;
             }
-            final a = fn['arguments'];
-            if (a is String) acc.arguments.write(a);
+            final Object? fn = tcm['function'];
+            if (fn is Map) {
+              final f = fn.cast<String, dynamic>();
+              final n = f['name'];
+              if (n is String && n.isNotEmpty) {
+                // 增量分片是主流行为（arguments 同理），但部分网关会在每个 chunk
+                // 重复下发完整 name。若无条件拼接会得到 web_searchweb_search...，
+                // 工具查找必然失败。两种行为都兼容：完全相同→忽略，是真前缀→忽略。
+                final cur = acc.name;
+                if (cur == null || cur.isEmpty) {
+                  acc.name = n;
+                } else if (cur != n && !n.startsWith(cur)) {
+                  acc.name = cur + n;
+                }
+              }
+              final a = f['arguments'];
+              if (a is String) acc.arguments.write(a);
+            }
           }
         }
       }
+    } finally {
+      // 异常路径（超时/解析错误/调用方提前 break）下必须关闭响应体，
+      // 否则底层连接不释放，多次触发后连接池耗尽、后续请求全部超时。
+      body0.close();
     }
 
     final entries = toolAcc.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
@@ -166,18 +204,66 @@ class LlmClient {
       }),
     );
 
-    final data = resp.data?['data'] as List? ?? const [];
-    final pairs = <MapEntry<int, List<double>>>[];
-    for (final item in data) {
-      if (item is! Map<String, dynamic>) continue;
-      final idx = (item['index'] as num?)?.toInt() ?? 0;
-      final vec = (item['embedding'] as List? ?? const [])
-          .whereType<num>()
-          .map((e) => e.toDouble())
-          .toList();
-      pairs.add(MapEntry(idx, vec));
+    final data = resp.data?['data'];
+    if (data is! List) {
+      throw Exception('Embedding 接口返回结构异常（缺少 data 数组），请确认该服务支持 /embeddings');
     }
-    pairs.sort((a, b) => a.key.compareTo(b.key));
-    return pairs.map((e) => e.value).toList();
+    // 按 index 显式对齐：某些网关返回顺序不保证与请求一致，
+    // 若按到达顺序建表会让「分块 i」写入「分块 j 的向量」而永久错位。
+    final slots = <int, List<double>>{};
+    var anyIndex = false;
+    for (final item in data) {
+      if (item is! Map) continue;
+      final m = item.cast<String, dynamic>();
+      final idx = (m['index'] as num?)?.toInt();
+      if (idx == null) continue;
+      anyIndex = true;
+      final rawVec = m['embedding'];
+      if (rawVec is! List) continue;
+      final vec = rawVec.whereType<num>().map((e) => e.toDouble()).toList();
+      // 空向量会让余弦相似度恒为 0，等于往知识库里塞入一条永远检索不到、
+      // 又会在 search 里触发维度不匹配的数据，直接丢弃。
+      if (vec.isEmpty) continue;
+      slots[idx] = vec;
+    }
+    // 少数服务不返回 index 字段，此时按响应顺序对应（OpenAI 规范要求 index，
+    // 但不能因此直接判失败）。仅当一条都没带 index 时才退回顺序对齐。
+    final List<double> ordered;
+    if (!anyIndex) {
+      final vecs = <List<double>>[];
+      for (final item in data) {
+        if (item is! Map) continue;
+        final rawVec = item.cast<String, dynamic>()['embedding'];
+        if (rawVec is! List) continue;
+        final vec = rawVec.whereType<num>().map((e) => e.toDouble()).toList();
+        if (vec.isEmpty) continue;
+        vecs.add(vec);
+      }
+      if (vecs.length != inputs.length) {
+        throw Exception(
+          'Embedding 返回 ${vecs.length} 条有效向量，与请求的 ${inputs.length} 条不符',
+        );
+      }
+      _checkDims(vecs);
+      return vecs;
+    }
+
+    if (slots.length != inputs.length) {
+      throw Exception(
+        'Embedding 返回 ${slots.length} 条有效向量，与请求的 ${inputs.length} 条不符',
+      );
+    }
+    _checkDims(slots.values);
+    ordered = List<List<double>>.filled(inputs.length, const <double>[]);
+    slots.forEach((i, v) => ordered[i] = v);
+    return ordered;
+  }
+
+  /// 维度必须处处一致且非空，否则余弦相似度恒为 0，检索形同虚设。
+  static void _checkDims(Iterable<List<double>> vectors) {
+    final dims = vectors.map((e) => e.length).toSet();
+    if (dims.length != 1 || dims.first == 0) {
+      throw Exception('Embedding 返回了不一致或为空的向量维度：$dims');
+    }
   }
 }

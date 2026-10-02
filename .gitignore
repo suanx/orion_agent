@@ -23,3 +23,7 @@ lib/services/database.g.dart
 # Misc
 *.log
 .DS_Store
+
+# Python：CI 里用 python 做 gradle 文本校验，会留下 __pycache__
+__pycache__/
+*.pyc

@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
@@ -60,11 +61,15 @@ class VoiceService {
 
   bool _sttReady = false;
   bool _listening = false;
-
   /// 当前播放进程，用于打断播报。
   Process? _player;
   bool _speaking = false;
-  bool _cancelled = false;
+  /// 播报世代号：每次 stopSpeaking 自增，用来作废所有在途的播报流程。
+  /// 原实现用共享bool _cancelled，新一次 speak 会把它重置为 false，
+  /// 于是上一段仍在合成/播放的流程"复活"，两段声音重叠；
+  /// 且 _player 在 Process.start 的 await 之后才赋值，用户在那个窗口点停止
+  /// 会杀不掉进程。现在每个流程携带自己的世代号，过期即自杀。
+  int _generation = 0;
 
   bool get isListening => _listening;
   bool get isSpeaking => _speaking;
@@ -83,21 +88,45 @@ class VoiceService {
   }
 
   /// 开始聆听，识别结果（含中间结果）通过 onText 回调整段返回。
+  ///
+  /// 必须注册 [SpeechToText.onError] / [SpeechToText.onDone]：配了
+  /// `cancelOnError: true` 后，任何识别错误（静音超时、权限被回收、音频通道被抢占）
+  /// 都会让底层自动停止监听，但 `_listening` 若不同步复位，UI 仍显示红色麦克风，
+  /// 用户必须点两次才能恢复——观感是"麦克风坏了"。
   Future<bool> startListening({
     required void Function(String text) onText,
     String locale = 'zh_CN',
   }) async {
     if (!await ensureSpeech()) return false;
+    // 幂等：重复调用先停掉上一次，避免回调重复注册。
+    if (_listening) await stopListening();
     _listening = true;
-    await _stt.listen(
-      onResult: (r) => onText(r.recognizedWords),
-      listenOptions: SpeechListenOptions(
-        partialResults: true,
-        cancelOnError: true,
-        localeId: locale,
-      ),
-    );
-    return true;
+    try {
+      await _stt.listen(
+        onResult: (r) {
+          if (r.finalResult) _listening = false;
+          onText(r.recognizedWords);
+        },
+        onError: (e) {
+          debugPrint('语音识别错误：$e');
+          _listening = false;
+        },
+        onDone: () {
+          // 底层结束（静音超时/被取消）时同步状态，否则 UI 与实际状态脱节。
+          _listening = false;
+        },
+        listenOptions: SpeechListenOptions(
+          partialResults: true,
+          cancelOnError: true,
+          localeId: locale,
+        ),
+      );
+    } catch (e) {
+      _listening = false;
+      debugPrint('启动语音识别失败：$e');
+      return false;
+    }
+    return _listening;
   }
 
   Future<void> stopListening() async {
@@ -121,15 +150,19 @@ class VoiceService {
     double volume = 1.0,
   }) async {
     final plain = stripMarkdownForSpeech(text);
-    if (plain.isEmpty) return;
+    // 先无条件停掉上一段，再判断是否需要读。若反过来，空文本（纯代码块）
+    // 会提前返回而不打断当前播放，用户听到的是上一条回答的音频，声画不同步。
     await stopSpeaking();
-    _cancelled = false;
+    if (plain.isEmpty) return;
+    final gen = _generation;
 
     if (engine == TtsEngine.edge) {
       try {
-        await _speakEdge(plain, edgeVoice, rate, volume);
+        await _speakEdge(plain, edgeVoice, rate, volume, gen);
         return;
       } catch (e) {
+        // 被新的一次 speak/stop 作废时不算失败，静默退出避免误回退系统 TTS
+        if (gen != _generation) return;
         debugPrint('Edge TTS 失败，回退系统 TTS：$e');
       }
     }
@@ -137,8 +170,10 @@ class VoiceService {
   }
 
   /// 停止播报（Edge 播放进程与系统 TTS 都停）。
+  ///
+  /// 自增世代号，作废所有在途的合成/播放流程。
   Future<void> stopSpeaking() async {
-    _cancelled = true;
+    _generation++;
     try {
       _player?.kill();
     } catch (_) {}
@@ -175,7 +210,7 @@ class VoiceService {
       'Edg/$_chromiumFull';
 
   Future<void> _speakEdge(
-      String text, String voice, double rate, double volume) async {
+      String text, String voice, double rate, double volume, int gen) async {
     final audio = await synthesizeEdge(
       text: text,
       voice: voice,
@@ -183,7 +218,8 @@ class VoiceService {
       volume: volume,
     );
     if (audio.isEmpty) throw Exception('Edge TTS 返回空音频');
-    if (_cancelled) return;
+    // 合成期间可能已被新的 speak/停止作废
+    if (gen != _generation) return;
 
     final tmp = await getTemporaryDirectory();
     final dir = Directory('${tmp.path}/tts');
@@ -192,11 +228,20 @@ class VoiceService {
         '${dir.path}/edge_${DateTime.now().millisecondsSinceEpoch}.mp3');
     await file.writeAsBytes(audio, flush: true);
 
+    // 写文件期间也可能被作废
+    if (gen != _generation) {
+      try {
+        if (file.existsSync()) file.deleteSync();
+      } catch (_) {}
+      return;
+    }
+
     _speaking = true;
     try {
-      await _playAudio(file.path);
+      await _playAudio(file.path, gen);
     } finally {
-      _speaking = false;
+      // 只有仍是当前世代才复位，避免过期流程把新流程的状态清掉
+      if (gen == _generation) _speaking = false;
       try {
         if (file.existsSync()) file.deleteSync();
       } catch (_) {}
@@ -211,21 +256,39 @@ class VoiceService {
     double volume = 1.0,
     Duration timeout = const Duration(seconds: 30),
   }) async {
+    // 同一次请求必须复用同一个 ConnectionId 与 X-Timestamp。
+    // 原实现分别调用了两次 edgeConnectionId()，产生两个不同的随机 ID，
+    // 服务端无法把两条日志关联到同一请求；两个 X-Timestamp 也跨越了
+    // 潜在的手势握手，一致性校验可能失败。
+    final connectionId = edgeConnectionId();
+    final timestamp = edgeTimestamp();
     final url = Uri.parse('$_wsBase'
         '?TrustedClientToken=$trustedClientToken'
         '&Sec-MS-GEC=${edgeSecMsGec()}'
         '&Sec-MS-GEC-Version=1-$_chromiumFull'
-        '&ConnectionId=${edgeConnectionId()}');
+        '&ConnectionId=$connectionId');
 
-    final ws = await WebSocket.connect(
-      url.toString(),
-      headers: {
-        'Origin': _origin,
-        'User-Agent': _userAgent,
-        'Pragma': 'no-cache',
-        'Cache-Control': 'no-cache',
-      },
-    ).timeout(const Duration(seconds: 15));
+    final headers = {
+      'Origin': _origin,
+      'User-Agent': _userAgent,
+      'Pragma': 'no-cache',
+      'Cache-Control': 'no-cache',
+    };
+
+    // timeout 只中断「等待的 Future」，不会关闭正在进行的握手：
+    // 握手超时后连接仍会建立完成且无人持有引用，反复超时累积 socket 直到
+    // 达到 fd 上限。所以这里保留原始 Future，超时时补一次关闭。
+    final connect = WebSocket.connect(url.toString(), headers: headers);
+    final WebSocket ws;
+    try {
+      ws = await connect.timeout(const Duration(seconds: 15));
+    } on TimeoutException {
+      // 连上了就立刻关掉；连不上则忽略（原始 Future 已完成并带错误）。
+      unawaited(connect
+          .then<void>((s) => s.close())
+          .catchError((Object _) {}));
+      rethrow;
+    }
 
     final audio = BytesBuilder(copy: false);
     final done = Completer<void>();
@@ -253,7 +316,7 @@ class VoiceService {
       cancelOnError: true,
     );
 
-    ws.add(utf8.encode('X-Timestamp:${edgeTimestamp()}\r\n'
+    ws.add(utf8.encode('X-Timestamp:$timestamp\r\n'
         'Content-Type:application/json; charset=utf-8\r\n'
         'Path:speech.config\r\n\r\n'
         '{"context":{"synthesis":{"audio":{"metadataoptions":'
@@ -270,9 +333,9 @@ class VoiceService {
         'volume="${volPct >= 0 ? '+' : ''}$volPct%" pitch="+0Hz">'
         '${escapeXml(text)}</prosody></voice></speak>';
 
-    ws.add(utf8.encode('X-RequestId:${edgeConnectionId()}\r\n'
+    ws.add(utf8.encode('X-RequestId:$connectionId\r\n'
         'Content-Type:application/ssml+xml\r\n'
-        'X-Timestamp:${edgeTimestamp()}\r\n'
+        'X-Timestamp:$timestamp\r\n'
         'Path:ssml\r\n\r\n$ssml'));
 
     try {
@@ -288,20 +351,30 @@ class VoiceService {
 
   /// 播放 MP3。Android 侧优先用系统 stagefright 播放器，
   /// 该路径无需额外依赖；不可用时抛出，由调用方回退系统 TTS。
-  Future<void> _playAudio(String path) async {
-    final candidates = <List<String>>[
-      ['/system/bin/stagefright', path],
-      ['/system/bin/toybox', 'play', path],
-      ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', path],
-    ];
-    for (final cmd in candidates) {
+  ///
+  /// [gen] 是本次播报的世代号：`Process.start` 是异步的，用户点「停止」可能
+  /// 落在 await 与 `_player = p` 之间的窗口，此时 stopSpeaking() 杀不到进程，
+  /// 音频会完整播完。启动后立刻校验世代号，过期就立即 kill 并放弃。
+  Future<void> _playAudio(String path, int gen) async {
+    const playTimeout = Duration(seconds: 120);
+    for (final cmd in _playerCandidates(path)) {
       try {
         final exe = File(cmd.first);
         // 非绝对路径时交给 PATH 解析（ffplay 走终端环境）
         if (cmd.first.startsWith('/') && !exe.existsSync()) continue;
         final p = await Process.start(cmd.first, cmd.sublist(1));
+        if (gen != _generation) {
+          p.kill(ProcessSignal.sigkill);
+          return;
+        }
         _player = p;
-        final code = await p.exitCode;
+        // 加超时：进程挂住时 await p.exitCode 永不返回，
+        // 会导致 isSpeaking 永久为 true、临时 mp3 永不删除。
+        final code = await p.exitCode.timeout(playTimeout, onTimeout: () {
+          p.kill(ProcessSignal.sigkill);
+          return -1;
+        });
+        if (gen != _generation) return;
         if (code == 0) return;
       } catch (_) {
         continue;
@@ -309,6 +382,13 @@ class VoiceService {
     }
     throw Exception('无可用的音频播放器');
   }
+
+  /// 播放器候选命令（抽成方法便于测试与复用）。
+  static List<List<String>> _playerCandidates(String path) => [
+        ['/system/bin/stagefright', path],
+        ['/system/bin/toybox', 'play', path],
+        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', path],
+      ];
 
   Future<void> _speakSystem(String plain, double rate, double volume) async {
     try {
@@ -407,5 +487,8 @@ String stripMarkdownForSpeech(String s) {
   t = t.replaceAll(RegExp(r'[*_>~\[\]]'), '');
   t = t.replaceAll(RegExp(r'\n{2,}'), '。');
   t = t.trim();
-  return t.length > 400 ? t.substring(0, 400) : t;
+  // 必须按字素簇截断：裸 substring(0, 400) 会劈开代理对（emoji、扩展汉字），
+  // 产生孤立代理项。Dart 在 utf8.encode 时会把它静默替换成 U+FFFD，
+  // 于是 Edge 音色念出来就是"�"，而用户会以为是音色配置不对。
+  return t.characters.length > 400 ? t.characters.take(400).toString() : t;
 }
