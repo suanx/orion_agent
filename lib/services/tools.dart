@@ -406,7 +406,12 @@ class ToolRegistry {
 
   List<Tool> get all => List.unmodifiable(_tools);
 
-  void register(Tool tool) => _tools.add(tool);
+  /// 注册工具；同名工具（如 MCP 重复连接）不会重复注册。
+  void register(Tool tool) {
+    if (!_tools.any((t) => t.name == tool.name)) {
+      _tools.add(tool);
+    }
+  }
 
   /// 转成 OpenAI tools 参数格式。
   List<Map<String, dynamic>> toOpenAiTools() => _tools

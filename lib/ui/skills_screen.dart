@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import '../services/database.dart';
 import '../services/skill_service.dart';
 
 /// 技能 Tab：内置工具展示 + 我的快捷指令（提示词模板）管理。

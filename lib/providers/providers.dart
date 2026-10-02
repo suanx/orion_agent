@@ -11,6 +11,7 @@ import '../models/llm_config.dart';
 import '../services/agent_orchestrator.dart';
 import '../services/database.dart';
 import '../services/llm_client.dart';
+import '../services/mcp_service.dart';
 import '../services/memory_service.dart';
 import '../services/rag_service.dart';
 import '../services/role_service.dart';
@@ -82,6 +83,9 @@ final activeRoleIdProvider = StateProvider<String>((ref) {
 
 /// 技能页 → 聊天输入框的预填文本（用后即清）。
 final prefillProvider = StateProvider<String>((ref) => '');
+
+final mcpServiceProvider = Provider<McpService>((ref) =>
+    McpService(ref.watch(databaseProvider), ref.watch(toolRegistryProvider)));
 
 // ---------------- 模型配置 ----------------
 

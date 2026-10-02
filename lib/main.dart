@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -23,15 +25,20 @@ Future<void> main() async {
   final roles = RoleService(db);
   await roles.load();
 
-  runApp(ProviderScope(
-    overrides: [
-      sharedPreferencesProvider.overrideWithValue(prefs),
-      initialSessionsProvider.overrideWithValue(sessions),
-      databaseProvider.overrideWithValue(db),
-      memoryServiceProvider.overrideWithValue(memory),
-      skillServiceProvider.overrideWithValue(skills),
-      roleServiceProvider.overrideWithValue(roles),
-    ],
+  final container = ProviderContainer(overrides: [
+    sharedPreferencesProvider.overrideWithValue(prefs),
+    initialSessionsProvider.overrideWithValue(sessions),
+    databaseProvider.overrideWithValue(db),
+    memoryServiceProvider.overrideWithValue(memory),
+    skillServiceProvider.overrideWithValue(skills),
+    roleServiceProvider.overrideWithValue(roles),
+  ]);
+
+  // MCP 服务器后台连接（不阻塞启动），工具注册进 ToolRegistry
+  unawaited(container.read(mcpServiceProvider).connectAll());
+
+  runApp(UncontrolledProviderScope(
+    container: container,
     child: const PocketAgentApp(),
   ));
 }

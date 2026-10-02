@@ -86,6 +86,18 @@ class AgentRoles extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// MCP 服务器配置（Streamable HTTP 端点）。
+class McpServers extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get url => text()();
+  BoolColumn get enabled => boolean().withDefault(const Constant(true))();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DriftDatabase(tables: [
   SessionRows,
   MessageRows,
@@ -94,6 +106,7 @@ class AgentRoles extends Table {
   KnowledgeChunks,
   SkillItems,
   AgentRoles,
+  McpServers,
 ])
 class AppDatabase extends _$AppDatabase {
   /// 生产环境不传 executor；测试注入 NativeDatabase.memory()。
@@ -101,7 +114,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'pocket_agent'));
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -116,6 +129,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 4) {
             await m.createTable(skillItems);
             await m.createTable(agentRoles);
+          }
+          if (from < 5) {
+            await m.createTable(mcpServers);
           }
         },
       );

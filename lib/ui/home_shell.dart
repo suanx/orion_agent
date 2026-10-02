@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../providers/providers.dart';
 import 'chat_screen.dart';
 import 'sessions_drawer.dart';
 import 'skills_screen.dart';

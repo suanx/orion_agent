@@ -1,0 +1,171 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../providers/providers.dart';
+import '../services/database.dart';
+
+/// MCP 服务器管理：添加 Streamable HTTP 端点，启用/停用，删除。
+class McpScreen extends ConsumerStatefulWidget {
+  const McpScreen({super.key});
+
+  @override
+  ConsumerState<McpScreen> createState() => _McpScreenState();
+}
+
+class _McpScreenState extends ConsumerState<McpScreen> {
+  List<McpServer>? _servers;
+  bool _connecting = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  Future<void> _reload() async {
+    final servers = await ref.read(mcpServiceProvider).listServers();
+    if (mounted) setState(() => _servers = servers);
+  }
+
+  Future<void> _reloadAndConnect() async {
+    setState(() => _connecting = true);
+    try {
+      final n = await ref.read(mcpServiceProvider).connectAll();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(n > 0
+                ? '已连接，注册了 $n 个 MCP 工具'
+                : '没有连接到可用的 MCP 服务器')));
+      }
+    } finally {
+      await _reload();
+      if (mounted) setState(() => _connecting = false);
+    }
+  }
+
+  Future<void> _addServer() async {
+    final nameCtrl = TextEditingController();
+    final urlCtrl = TextEditingController(text: 'http://');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('添加 MCP 服务器'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(labelText: '名称（如：文件服务）'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: urlCtrl,
+              decoration: const InputDecoration(
+                labelText: '端点 URL（Streamable HTTP）',
+                hintText: 'http://192.168.1.10:3000/mcp',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('添加')),
+        ],
+      ),
+    );
+    if (saved != true) return;
+    final name = nameCtrl.text.trim();
+    final url = urlCtrl.text.trim();
+    if (name.isEmpty || !url.startsWith('http')) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('名称和 URL 不能为空，URL 需以 http 开头')));
+      }
+      return;
+    }
+    await ref.read(mcpServiceProvider).addServer(name, url);
+    await _reloadAndConnect();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final servers = _servers;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('MCP 服务器')),
+      floatingActionButton: _connecting
+          ? const FloatingActionButton.extended(
+              onPressed: null,
+              icon: SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2)),
+              label: Text('连接中…'),
+            )
+          : FloatingActionButton.extended(
+              onPressed: _addServer,
+              icon: const Icon(Icons.add),
+              label: const Text('添加服务器'),
+            ),
+      body: servers == null
+          ? const Center(child: CircularProgressIndicator())
+          : servers.isEmpty
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Text(
+                      '还没有配置 MCP 服务器。\n\n'
+                      'MCP（Model Context Protocol）让 Agent 使用\n'
+                      '外部工具服务：文件、日历、数据库等。\n\n'
+                      '需要运行中并可达的 MCP 端点（Streamable HTTP）。',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                )
+              : ListView.builder(
+                  padding: const EdgeInsets.only(bottom: 80),
+                  itemCount: servers.length,
+                  itemBuilder: (_, i) {
+                    final s = servers[i];
+                    return ListTile(
+                      leading: const Icon(Icons.dns_outlined),
+                      title: Text(s.name,
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w600)),
+                      subtitle: Text(s.url,
+                          maxLines: 1, overflow: TextOverflow.ellipsis),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Switch(
+                            value: s.enabled,
+                            onChanged: (v) async {
+                              await ref
+                                  .read(mcpServiceProvider)
+                                  .setEnabled(s.id, v);
+                              await _reload();
+                              if (v) await _reloadAndConnect();
+                            },
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 20),
+                            onPressed: () async {
+                              await ref
+                                  .read(mcpServiceProvider)
+                                  .removeServer(s.id);
+                              await _reload();
+                            },
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+    );
+  }
+}

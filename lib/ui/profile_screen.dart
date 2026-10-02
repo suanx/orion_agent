@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
 import 'knowledge_screen.dart';
+import 'mcp_screen.dart';
 import 'memory_screen.dart';
 import 'roles_screen.dart';
 import 'settings_screen.dart';
@@ -128,6 +129,13 @@ class ProfileScreen extends ConsumerWidget {
             trailing: () => const Icon(Icons.chevron_right_rounded),
             onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const RolesScreen())),
+          ),
+          _CardItem(
+            icon: Icons.dns_outlined,
+            title: 'MCP 服务器',
+            trailing: () => const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const McpScreen())),
           ),
         ]),
         const SizedBox(height: 12),
