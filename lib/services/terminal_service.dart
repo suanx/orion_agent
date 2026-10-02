@@ -31,6 +31,9 @@ class TerminalService {
 
   static const _channel = MethodChannel('pocket_agent/system');
 
+  /// 自启动任务在 shared_preferences 中的存储键。
+  static const tasksPrefsKey = 'terminal_tasks';
+
   static const specs = <TerminalDistro, DistroSpec>{
     TerminalDistro.alpine: DistroSpec(
       id: TerminalDistro.alpine,
@@ -67,9 +70,62 @@ class TerminalService {
   final Dio _dio;
   String? _nativeLibDir;
   final _rootfsCache = <TerminalDistro, String>{};
+  String? _workspaceDir;
+  final _runningTasks = <String, Process>{};
 
   /// 当前激活的发行版（由终端页设置并持久化，Agent 工具使用它）。
   TerminalDistro activeDistro = TerminalDistro.alpine;
+
+  // ---------------- Workspace 挂载 ----------------
+
+  /// 宿主侧工作区目录：应用外部存储目录（无需权限，系统文件管理器可见），
+  /// 在 guest 内固定挂载为 /workspace。
+  Future<String> workspaceDir() async {
+    if (_workspaceDir != null) return _workspaceDir!;
+    String base;
+    try {
+      base = (await getExternalStorageDirectory())?.path ?? '';
+    } catch (_) {
+      base = '';
+    }
+    base = base.isEmpty ? (await getApplicationSupportDirectory()).path : base;
+    final ws = Directory('$base/workspace');
+    try {
+      if (!ws.existsSync()) ws.createSync(recursive: true);
+    } catch (_) {}
+    return _workspaceDir = ws.path;
+  }
+
+  // ---------------- 自启动任务 ----------------
+
+  /// 启动一个常驻任务（同一名字重复调用会忽略）。
+  Future<void> startTask(TerminalTask task) async {
+    if (_runningTasks.containsKey(task.name)) return;
+    final proc =
+        await startOn(task.distro, '${task.command} 2>&1');
+    _runningTasks[task.name] = proc;
+    unawaited(proc.exitCode
+        .whenComplete(() => _runningTasks.remove(task.name)));
+  }
+
+  void stopTask(String name) {
+    _runningTasks[name]?.kill();
+  }
+
+  bool isTaskRunning(String name) => _runningTasks.containsKey(name);
+
+  /// App 启动时拉起所有已启用且环境就绪的任务（由 main 调用，不阻塞启动）。
+  Future<void> autostartTasks(List<TerminalTask> tasks) async {
+    for (final t in tasks) {
+      if (!t.enabled) continue;
+      try {
+        if (!await isInstalled(t.distro)) continue;
+        await startTask(t);
+      } catch (_) {
+        // 单个任务失败不影响其它
+      }
+    }
+  }
 
   Future<String> get nativeLibDir async {
     if (_nativeLibDir != null) return _nativeLibDir!;
@@ -211,6 +267,15 @@ class TerminalService {
     final libDir = await nativeLibDir;
     final tmp = await getTemporaryDirectory();
     final shell = d == TerminalDistro.alpine ? '/bin/sh' : '/bin/bash';
+    final binds = <String>[
+      '-b', '/dev',
+      '-b', '/proc',
+      '-b', '/sys',
+    ];
+    try {
+      final ws = await workspaceDir();
+      if (ws.isNotEmpty) binds.addAll(['-b', '$ws:/workspace']);
+    } catch (_) {}
     return Process.start(
       '$libDir/libproot.so',
       [
@@ -218,9 +283,7 @@ class TerminalService {
         '-0',
         '-w', '/root',
         '--link2symlink',
-        '-b', '/dev',
-        '-b', '/proc',
-        '-b', '/sys',
+        ...binds,
         shell, '-c', command,
       ],
       environment: {
@@ -258,5 +321,65 @@ class TerminalResult {
       return l.length > 60 ? '${l.substring(0, 60)}…' : l;
     }
     return null;
+  }
+}
+
+/// 自启动任务：App 启动时在终端环境内拉起的常驻命令。
+class TerminalTask {
+  final String name;
+  final String command;
+  final bool enabled;
+  final TerminalDistro distro;
+
+  const TerminalTask({
+    required this.name,
+    required this.command,
+    this.enabled = true,
+    this.distro = TerminalDistro.alpine,
+  });
+
+  TerminalTask copyWith({String? name, String? command, bool? enabled, TerminalDistro? distro}) =>
+      TerminalTask(
+        name: name ?? this.name,
+        command: command ?? this.command,
+        enabled: enabled ?? this.enabled,
+        distro: distro ?? this.distro,
+      );
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'command': command,
+        'enabled': enabled,
+        'distro': distro.name,
+      };
+
+  factory TerminalTask.fromJson(Map<String, dynamic> j) {
+    var d = TerminalDistro.alpine;
+    for (final v in TerminalDistro.values) {
+      if (v.name == j['distro']) d = v;
+    }
+    return TerminalTask(
+      name: j['name'] as String? ?? '',
+      command: j['command'] as String? ?? '',
+      enabled: j['enabled'] as bool? ?? true,
+      distro: d,
+    );
+  }
+
+  static String encodeList(List<TerminalTask> tasks) =>
+      jsonEncode(tasks.map((t) => t.toJson()).toList());
+
+  static List<TerminalTask> decodeList(String? raw) {
+    if (raw == null || raw.isEmpty) return const [];
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) return const [];
+      return decoded
+          .whereType<Map<String, dynamic>>()
+          .map(TerminalTask.fromJson)
+          .toList();
+    } catch (_) {
+      return const [];
+    }
   }
 }

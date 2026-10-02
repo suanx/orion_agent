@@ -10,6 +10,7 @@ import 'services/memory_service.dart';
 import 'services/role_service.dart';
 import 'services/skill_service.dart';
 import 'services/storage_service.dart';
+import 'services/terminal_service.dart';
 import 'theme.dart';
 import 'ui/home_shell.dart';
 
@@ -37,6 +38,12 @@ Future<void> main() async {
 
   // MCP 服务器后台连接（不阻塞启动），工具注册进 ToolRegistry
   unawaited(container.read(mcpServiceProvider).connectAll());
+
+  // 自启动任务：环境就绪的在后台拉起（不阻塞启动）
+  unawaited(container
+      .read(terminalServiceProvider)
+      .autostartTasks(TerminalTask.decodeList(prefs.getString(
+          TerminalService.tasksPrefsKey))));
 
   runApp(UncontrolledProviderScope(
     container: container,

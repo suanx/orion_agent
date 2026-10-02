@@ -282,6 +282,35 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                 ],
               ),
             ),
+            _sectionTitle('自启动任务'),
+            _card(_buildTasksSection()),
+            _sectionTitle('Workspace 挂载'),
+            _card(
+              FutureBuilder<String>(
+                future: _terminal.workspaceDir(),
+                builder: (context, snap) {
+                  final ws = snap.data ?? '…';
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('宿主目录：$ws',
+                          style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 11,
+                              color: Colors.black.withOpacity(0.55))),
+                      const SizedBox(height: 4),
+                      Text('已挂载到环境内的 /workspace，与命令控制台、'
+                          'Agent 的 run_command 看到同一份文件。'
+                          '该目录在系统文件管理器中可直接访问。',
+                          style: TextStyle(
+                              fontSize: 12,
+                              height: 1.4,
+                              color: Colors.black.withOpacity(0.45))),
+                    ],
+                  );
+                },
+              ),
+            ),
           ],
           if (_log.isNotEmpty)
             _card(
@@ -300,6 +329,182 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
         ],
       ),
     );
+  }
+
+  // ---------------- 自启动任务 ----------------
+
+  List<TerminalTask> _loadTasks() => TerminalTask.decodeList(
+      ref.read(sharedPreferencesProvider).getString(TerminalService.tasksPrefsKey));
+
+  void _saveTasks(List<TerminalTask> tasks) {
+    ref
+        .read(sharedPreferencesProvider)
+        .setString(TerminalService.tasksPrefsKey, TerminalTask.encodeList(tasks));
+    if (mounted) setState(() {});
+  }
+
+  Widget _buildTasksSection() {
+    final tasks = _loadTasks();
+    if (tasks.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('暂无任务。可添加如 `python app.py`、`node server.js` 之类的常驻命令，'
+              'App 启动时会自动在环境内拉起已启用的任务。',
+              style: TextStyle(
+                  fontSize: 12,
+                  height: 1.4,
+                  color: Colors.black.withOpacity(0.45))),
+          const SizedBox(height: 10),
+          FilledButton.tonalIcon(
+            onPressed: _busy ? null : () => _editTask(null),
+            icon: const Icon(Icons.add_rounded, size: 18),
+            label: const Text('新增任务'),
+          ),
+        ],
+      );
+    }
+    return Column(
+      children: [
+        for (final t in tasks)
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: Icon(
+              _terminal.isTaskRunning(t.name)
+                  ? Icons.circle_rounded
+                  : Icons.circle_outlined,
+              size: 14,
+              color: _terminal.isTaskRunning(t.name)
+                  ? const Color(0xFF137333)
+                  : Colors.black26,
+            ),
+            title: Text(t.name,
+                style: const TextStyle(
+                    fontSize: 14, fontWeight: FontWeight.w600)),
+            subtitle: Text(
+                '${t.command}\n${TerminalService.specs[t.distro]!.displayName}'
+                '${t.enabled ? ' · 开机自启' : ' · 手动'}',
+                style: TextStyle(
+                    fontFamily: 'monospace',
+                    fontSize: 11,
+                    height: 1.3,
+                    color: Colors.black.withOpacity(0.4))),
+            isThreeLine: true,
+            onTap: () => _editTask(t),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    _terminal.isTaskRunning(t.name)
+                        ? Icons.stop_circle_outlined
+                        : Icons.play_circle_outline_rounded,
+                    size: 22,
+                  ),
+                  onPressed: () async {
+                    if (_terminal.isTaskRunning(t.name)) {
+                      _terminal.stopTask(t.name);
+                      _appendLog('任务「${t.name}」已停止');
+                    } else {
+                      _appendLog('启动任务「${t.name}」：${t.command}');
+                      await _terminal.startTask(t);
+                    }
+                    if (mounted) setState(() {});
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, size: 20),
+                  onPressed: () {
+                    _terminal.stopTask(t.name);
+                    _saveTasks(
+                        tasks.where((x) => x.name != t.name).toList());
+                  },
+                ),
+              ],
+            ),
+          ),
+        const SizedBox(height: 4),
+        FilledButton.tonalIcon(
+          onPressed: _busy ? null : () => _editTask(null),
+          icon: const Icon(Icons.add_rounded, size: 18),
+          label: const Text('新增任务'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editTask(TerminalTask? existing) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final cmdCtrl = TextEditingController(text: existing?.command ?? '');
+    var enabled = existing?.enabled ?? true;
+    var distro = existing?.distro ?? _distro;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          title: Text(existing == null ? '新增任务' : '编辑任务'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                autofocus: true,
+                decoration: const InputDecoration(labelText: '任务名（如：web 服务）'),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: cmdCtrl,
+                decoration: const InputDecoration(
+                  labelText: '常驻命令',
+                  hintText: '如：python3 /workspace/app.py',
+                ),
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<TerminalDistro>(
+                segments: [
+                  for (final d in TerminalDistro.values)
+                    ButtonSegment(
+                        value: d,
+                        label: Text(TerminalService.specs[d]!.displayName)),
+                ],
+                selected: {distro},
+                onSelectionChanged: (s) => setDialog(() => distro = s.first),
+              ),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('开机自启', style: TextStyle(fontSize: 14)),
+                value: enabled,
+                onChanged: (v) => setDialog(() => enabled = v),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('取消')),
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('保存')),
+          ],
+        ),
+      ),
+    );
+    if (saved != true) return;
+    final name = nameCtrl.text.trim();
+    final command = cmdCtrl.text.trim();
+    if (name.isEmpty || command.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('任务名和命令不能为空')));
+      }
+      return;
+    }
+    final tasks = _loadTasks().where((t) => t.name != existing?.name).toList()
+      ..add(TerminalTask(
+          name: name, command: command, enabled: enabled, distro: distro));
+    _saveTasks(tasks);
   }
 
   Widget _sectionTitle(String s) => Padding(

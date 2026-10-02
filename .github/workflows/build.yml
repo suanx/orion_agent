@@ -62,7 +62,8 @@ jobs:
             exit 0
           fi
           sudo apt-get update -qq && sudo apt-get install -y -qq skopeo xz-utils
-          skopeo copy --override-os linux --override-arch arm64 docker://debian:bookworm-slim dir:/tmp/debimg
+          # --dest-compress 强制 gzip 层（Docker Hub 新镜像可能是 zstd）
+          skopeo copy --dest-compress --override-os linux --override-arch arm64 docker://debian:bookworm-slim dir:/tmp/debimg
           LAYER=$(grep -o '"digest":"sha256:[a-f0-9]*"' /tmp/debimg/manifest.json | head -1 | grep -o 'sha256:[a-f0-9]*' | cut -d: -f2)
           mkdir -p /tmp/droot
           sudo tar -xzf "/tmp/debimg/$LAYER" -C /tmp/droot

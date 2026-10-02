@@ -36,4 +36,23 @@ void main() {
     expect(TerminalService.specs[TerminalDistro.alpine]!.isGzip, isTrue);
     expect(TerminalService.specs[TerminalDistro.debian]!.isGzip, isFalse);
   });
+
+  test('TerminalTask JSON 往返与坏输入容错', () {
+    const task = TerminalTask(
+      name: 'web',
+      command: 'python3 /workspace/app.py',
+      enabled: false,
+      distro: TerminalDistro.debian,
+    );
+    final restored =
+        TerminalTask.decodeList(TerminalTask.encodeList([task])).single;
+    expect(restored.name, 'web');
+    expect(restored.command, contains('app.py'));
+    expect(restored.enabled, isFalse);
+    expect(restored.distro, TerminalDistro.debian);
+
+    expect(TerminalTask.decodeList(null), isEmpty);
+    expect(TerminalTask.decodeList('not json'), isEmpty);
+    expect(TerminalTask.decodeList('[{"name":"a"}]'), hasLength(1));
+  });
 }
