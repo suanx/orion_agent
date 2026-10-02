@@ -358,7 +358,7 @@ class _EmptyGreeting extends StatelessWidget {
       children: [
         const SizedBox(height: 24),
         ClipOval(
-          child: Image.asset('assets/images/mascot.webp',
+          child: Image.asset(mascotAsset(context),
               width: 84, height: 84, fit: BoxFit.cover),
         ),
         const SizedBox(height: 24),

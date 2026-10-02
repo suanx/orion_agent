@@ -96,7 +96,7 @@ class ProfileScreen extends ConsumerWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               ClipOval(
-                child: Image.asset('assets/images/mascot.webp',
+                child: Image.asset(mascotAsset(context),
                     width: 84, height: 84, fit: BoxFit.cover),
               ),
               const SizedBox(width: 16),

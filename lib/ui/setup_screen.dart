@@ -78,7 +78,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                   Row(
                     children: [
                       ClipOval(
-                        child: Image.asset('assets/images/mascot.webp',
+                        child: Image.asset(mascotAsset(context),
                             width: 56, height: 56, fit: BoxFit.cover),
                       ),
                       const SizedBox(width: 12),

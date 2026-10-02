@@ -57,6 +57,12 @@ Color surface(BuildContext context) => Theme.of(context).colorScheme.surface;
 Color onSurface(BuildContext context, double opacity) =>
     Theme.of(context).colorScheme.onSurface.withOpacity(opacity);
 
+/// 吉祥物素材：深色模式用深底版本。
+String mascotAsset(BuildContext context) =>
+    Theme.of(context).brightness == Brightness.dark
+        ? 'assets/images/mascot_dark.webp'
+        : 'assets/images/mascot.webp';
+
 ThemeData buildAppTheme(AppTheme t, {bool dark = false}) {
   final primary = dark ? t.darkPrimary : t.primary;
   return ThemeData(
