@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
 import '../services/database.dart';
-import '../services/rag_service.dart';
 
 /// 知识库管理页：导入文档（粘贴文本）、查看、删除。
 class KnowledgeScreen extends ConsumerStatefulWidget {

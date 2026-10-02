@@ -43,7 +43,7 @@ void main() {
     });
 
     test('多个段落合并成块，不超上限', () {
-      final para = '段落内容。\n\n';
+      const para = '段落内容。\n\n';
       final text = para * 30; // 30 段，每段 5 字
       final chunks = chunkText(text, maxLen: 800);
       expect(chunks.length, 1); // 30*5 + 29 个换行 = 179 字，全部合进一块

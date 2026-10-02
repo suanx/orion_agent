@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
 import '../services/database.dart';
-import '../services/role_service.dart';
 
 /// Agent 角色管理：人设列表、新建/编辑/删除、切换当前角色。
 class RolesScreen extends ConsumerWidget {

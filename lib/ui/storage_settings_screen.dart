@@ -1,6 +1,5 @@
 import '../theme.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open_filex/open_filex.dart';
 
@@ -31,11 +30,25 @@ class _StorageSettingsScreenState
     if (mounted) setState(() => _entries = list);
   }
 
-  int get _total => _entries?.fold(0, (a, e) => a + e.bytes) ?? 0;
-  int get _cacheBytes => _entries
-          ?.where((e) => e.label.contains('缓存') || e.label == '临时文件')
-          .fold(0, (a, e) => a + e.bytes) ??
-      0;
+  int get _total {
+    final list = _entries;
+    if (list == null) return 0;
+    var sum = 0;
+    for (final e in list) {
+      sum += e.bytes;
+    }
+    return sum;
+  }
+
+  int get _cacheBytes {
+    final list = _entries;
+    if (list == null) return 0;
+    var sum = 0;
+    for (final e in list) {
+      if (e.label.contains('缓存') || e.label == '临时文件') sum += e.bytes;
+    }
+    return sum;
+  }
 
   Future<void> _confirmClear({
     required String title,

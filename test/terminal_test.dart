@@ -3,7 +3,7 @@ import 'package:pocket_agent/services/terminal_service.dart';
 
 void main() {
   test('TerminalResult.versionLine 取首个非空行并截断', () {
-    final r = const TerminalResult(exitCode: 0, output: '\nNode.js v22.1.0\nmore\n');
+    const r = TerminalResult(exitCode: 0, output: '\nNode.js v22.1.0\nmore\n');
     expect(r.versionLine, 'Node.js v22.1.0');
     expect(r.ok, isTrue);
 
