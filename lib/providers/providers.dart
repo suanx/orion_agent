@@ -14,6 +14,7 @@ import '../services/database.dart';
 import '../services/llm_client.dart';
 import '../services/mcp_service.dart';
 import '../services/memory_service.dart';
+import '../services/notification_service.dart';
 import '../services/rag_service.dart';
 import '../services/role_service.dart';
 import '../services/skill_service.dart';
@@ -72,6 +73,49 @@ final orchestratorProvider = Provider<AgentOrchestrator>((ref) => AgentOrchestra
     ));
 
 final voiceProvider = Provider<VoiceService>((ref) => VoiceService());
+
+final notificationServiceProvider =
+    Provider<NotificationService>((ref) => NotificationService());
+
+/// 当前语音合成引擎（edge = 免 Key 在线合成，system = 系统 TTS）。
+final ttsEngineProvider = StateProvider<TtsEngine>((ref) {
+  return ref.watch(sharedPreferencesProvider).getString('tts_engine') == 'system'
+      ? TtsEngine.system
+      : TtsEngine.edge;
+});
+
+/// Edge TTS 音色 id。
+final ttsVoiceProvider = StateProvider<String>((ref) {
+  return ref
+          .watch(sharedPreferencesProvider)
+          .getString('tts_voice') ??
+      edgeVoices.first.id;
+});
+
+/// 朗读语速倍率（0.5 ~ 2.0）。
+final ttsRateProvider = StateProvider<double>((ref) {
+  return ref.watch(sharedPreferencesProvider).getDouble('tts_rate') ?? 1.0;
+});
+
+/// 朗读音量（0.0 ~ 1.0）。
+final ttsVolumeProvider = StateProvider<double>((ref) {
+  return ref.watch(sharedPreferencesProvider).getDouble('tts_volume') ?? 1.0;
+});
+
+/// 回答完成后发通知。
+final notifyOnAnswerProvider = StateProvider<bool>((ref) {
+  return ref.watch(sharedPreferencesProvider).getBool('notify_on_answer') ?? false;
+});
+
+/// 通知里显示回答摘要。
+final notifyPreviewProvider = StateProvider<bool>((ref) {
+  return ref.watch(sharedPreferencesProvider).getBool('notify_preview') ?? true;
+});
+
+/// 通知静音（只震动/横幅，不响铃）。
+final notifySilentProvider = StateProvider<bool>((ref) {
+  return ref.watch(sharedPreferencesProvider).getBool('notify_silent') ?? false;
+});
 
 final skillServiceProvider =
     Provider<SkillService>((ref) => SkillService(ref.watch(databaseProvider)));
@@ -263,6 +307,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
     required bool Function() ttsEnabled,
     required String Function() getPersona,
     required LlmConfig? Function() getConfig,
+    TtsEngine Function()? getTtsEngine,
+    String Function()? getTtsVoice,
+    double Function()? getTtsRate,
+    double Function()? getTtsVolume,
+    bool Function()? notifyOnAnswer,
+    bool Function()? notifyPreview,
+    bool Function()? notifySilent,
   })  : _storage = storage,
         _orchestrator = orchestrator,
         _rag = rag,
@@ -271,6 +322,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _ttsEnabled = ttsEnabled,
         _getPersona = getPersona,
         _getConfig = getConfig,
+        _getTtsEngine = getTtsEngine ?? (() => TtsEngine.edge),
+        _getTtsVoice = getTtsVoice ?? (() => edgeVoices.first.id),
+        _getTtsRate = getTtsRate ?? (() => 1.0),
+        _getTtsVolume = getTtsVolume ?? (() => 1.0),
+        _notifyOnAnswer = notifyOnAnswer ?? (() => false),
+        _notifyPreview = notifyPreview ?? (() => true),
+        _notifySilent = notifySilent ?? (() => false),
         super(ChatState(
           sessions: initialSessions,
           activeSessionId: initialSessions.isEmpty ? null : initialSessions.first.id,
@@ -284,6 +342,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final bool Function() _ttsEnabled;
   final String Function() _getPersona;
   final LlmConfig? Function() _getConfig;
+  final TtsEngine Function() _getTtsEngine;
+  final String Function() _getTtsVoice;
+  final double Function() _getTtsRate;
+  final double Function() _getTtsVolume;
+  final bool Function() _notifyOnAnswer;
+  final bool Function() _notifyPreview;
+  final bool Function() _notifySilent;
+
+  /// 由外部注入的通知发送回调（在 Provider 里绑定 NotificationService）。
+  Future<void> Function(String title, String body)? onAnswerNotification;
 
   CancelToken? _cancelToken;
 
@@ -420,8 +488,28 @@ class ChatNotifier extends StateNotifier<ChatState> {
       s2.updatedAt = DateTime.now();
       _touch(s2);
       _storage.insertMessage(s2.id, answer);
+
+      // 语音播报（引擎/音色/语速/音量都来自设置）
       if (_ttsEnabled()) {
-        _voice.speak(answer.content);
+        unawaited(_voice.speak(
+          answer.content,
+          engine: _getTtsEngine(),
+          edgeVoice: _getTtsVoice(),
+          rate: _getTtsRate(),
+          volume: _getTtsVolume(),
+        ));
+      }
+
+      // 回答完成通知
+      if (_notifyOnAnswer()) {
+        final brief = answer.content.replaceAll(RegExp(r'\s+'), ' ').trim();
+        final body = _notifyPreview()
+            ? (brief.length > 120 ? '${brief.substring(0, 120)}…' : brief)
+            : '';
+        unawaited(onAnswerNotification?.call(
+          s2.title,
+          body,
+        ));
       }
     }
 
@@ -438,7 +526,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 }
 
 final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
-  return ChatNotifier(
+  final notifier = ChatNotifier(
     initialSessions: ref.watch(initialSessionsProvider),
     storage: ref.watch(storageServiceProvider),
     orchestrator: ref.watch(orchestratorProvider),
@@ -452,5 +540,24 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
       return ref.read(roleServiceProvider).promptOf(id) ?? '';
     },
     getConfig: () => ref.read(configProvider).activeConfig,
+    getTtsEngine: () => ref.read(ttsEngineProvider),
+    getTtsVoice: () => ref.read(ttsVoiceProvider),
+    getTtsRate: () => ref.read(ttsRateProvider),
+    getTtsVolume: () => ref.read(ttsVolumeProvider),
+    notifyOnAnswer: () => ref.read(notifyOnAnswerProvider),
+    notifyPreview: () => ref.read(notifyPreviewProvider),
+    notifySilent: () => ref.read(notifySilentProvider),
   );
+
+  // 绑定通知：读设置并在发送时遵循静音开关
+  notifier.onAnswerNotification = (title, body) => ref
+      .read(notificationServiceProvider)
+      .notifyAnswerDone(
+        sessionTitle: title,
+        answer: body,
+        preview: body.isNotEmpty,
+        silent: ref.read(notifySilentProvider),
+      );
+
+  return notifier;
 });

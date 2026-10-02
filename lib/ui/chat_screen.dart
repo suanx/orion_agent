@@ -356,36 +356,49 @@ class _EmptyGreeting extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       children: [
-        const SizedBox(height: 24),
-        Center(child: SizedBox(width: 84, height: 84, child: ClipOval(child: Transform.scale(scale: 1.6, alignment: Alignment.topCenter, child: Image.asset(mascotAsset(context), fit: BoxFit.cover, cacheWidth: 480))))),
-        const SizedBox(height: 24),
-        const Text('你好，今天想做什么？',
-            style: TextStyle(fontSize: 26, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 20),
+        const SizedBox(height: 16),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: MascotAvatar(size: 64, image: mascotAsset(context)),
+        ),
+        const SizedBox(height: 18),
+        Text('你好，今天想做什么？',
+            style: TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w500,
+              color: onSurface(context, 1),
+            )),
+        const SizedBox(height: 18),
+        // 与效果图一致：左对齐、按内容宽度收缩的胶囊卡片
         for (final (emoji, text) in _suggestions)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
-            child: InkWell(
-              borderRadius: BorderRadius.circular(18),
-              onTap: () => onSuggestion(text),
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                decoration: BoxDecoration(
-                  color: surface(context),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(emoji, style: const TextStyle(fontSize: 18)),
-                    const SizedBox(width: 10),
-                    Flexible(
-                      child: Text(text,
-                          style: const TextStyle(
-                              fontSize: 15, fontWeight: FontWeight.w500)),
-                    ),
-                  ],
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: () => onSuggestion(text),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 11),
+                  decoration: BoxDecoration(
+                    color: surface(context),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(emoji, style: const TextStyle(fontSize: 17)),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(text,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                fontSize: 14, fontWeight: FontWeight.w400)),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),

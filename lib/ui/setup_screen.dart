@@ -77,7 +77,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 children: [
                   Row(
                     children: [
-                      Center(child: SizedBox(width: 56, height: 56, child: ClipOval(child: Transform.scale(scale: 1.6, alignment: Alignment.topCenter, child: Image.asset(mascotAsset(context), fit: BoxFit.cover, cacheWidth: 320))))),
+                      MascotAvatar(size: 48, image: mascotAsset(context)),
                       const SizedBox(width: 12),
                       Text('欢迎使用 Pocket Agent',
                           style: const TextStyle(

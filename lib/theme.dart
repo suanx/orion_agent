@@ -57,11 +57,47 @@ Color surface(BuildContext context) => Theme.of(context).colorScheme.surface;
 Color onSurface(BuildContext context, double opacity) =>
     Theme.of(context).colorScheme.onSurface.withOpacity(opacity);
 
-/// 吉祥物素材：深色模式用深底版本。
+/// 吉祥物素材：深色模式用深底版本，浅色模式用白底版本。
 String mascotAsset(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark
         ? 'assets/images/mascot_dark.webp'
         : 'assets/images/mascot.webp';
+
+/// 圆形吉祥物头像。
+///
+/// 原实现用 [ClipOval] + [Transform.scale] 硬裁，把方图放大 1.6 倍后裁成圆，
+/// 结果只剩一张大脸、看不到围巾和身体，视觉上又大又怪。
+/// 这里改为「整图等比缩放 + 白底/深底圆形容器」，
+/// 完整保留吉祥物的头、围巾和身体，并统一各处的尺寸与留白。
+class MascotAvatar extends StatelessWidget {
+  const MascotAvatar({super.key, required this.size, required this.image});
+
+  /// 头像直径。
+  final double size;
+
+  /// 素材路径（由 [mascotAsset] 按明暗模式给出）。
+  final String image;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: size,
+      height: size,
+      child: ClipOval(
+        child: Image.asset(
+          image,
+          fit: BoxFit.cover,
+          cacheWidth: (size * 3).round(),
+          errorBuilder: (_, __, ___) => ColoredBox(
+            color: surface(context),
+            child: Icon(Icons.smart_toy_outlined,
+                size: size * 0.55, color: onSurface(context, 0.4)),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
 ThemeData buildAppTheme(AppTheme t, {bool dark = false}) {
   final primary = dark ? t.darkPrimary : t.primary;

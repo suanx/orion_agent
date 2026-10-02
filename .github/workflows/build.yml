@@ -36,9 +36,10 @@ jobs:
           sed -i 's/flutter\.targetSdkVersion/28/g' android/app/build.gradle || true
           grep -rn "targetSdk" android/app/build.gradle* || true
 
-      - name: Disable release lint check
+      - name: Disable release lint check and enable desugaring
         # targetSdk 28 会触发 lintVital 的 ExpiredTargetSdkVersion 致命错误；
-        # 应用侧载分发不上架 Play，直接关闭 release lint
+        # 应用侧载分发不上架 Play，直接关闭 release lint。
+        # flutter_local_notifications 用到 java.time，需要 core library desugaring。
         run: |
           cat >> android/app/build.gradle.kts <<'EOF'
 
@@ -48,9 +49,48 @@ jobs:
                   checkReleaseBuilds = false
                   abortOnError = false
               }
+              // flutter_local_notifications 依赖 java.time，必须开启脱糖
+              compileOptions {
+                  isCoreLibraryDesugaringEnabled = true
+                  sourceCompatibility = JavaVersion.VERSION_11
+                  targetCompatibility = JavaVersion.VERSION_11
+              }
+          }
+
+          dependencies {
+              coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
           }
           EOF
-          tail -8 android/app/build.gradle.kts
+          tail -20 android/app/build.gradle.kts
+
+      - name: Enable edge-to-edge window layout
+        # 沉浸式状态栏：CI 用 flutter create 生成的 styles.xml 在部分 Flutter
+        # 版本里带 windowOptOutEdgeToEdgeEnforcement（Android 15 起强制
+        # edge-to-edge），这里去掉它并显式声明，让内容延伸到状态栏/手势条下方。
+        # 注意：用 sed/grep 而非 python heredoc——YAML 里 run 块整体缩进，
+        # heredoc 内容会带上前导空格，Python 会报 IndentationError。
+        run: |
+          set -e
+          STYLES=$(find android/app/src/main/res -name styles.xml | head -1)
+          echo "styles: $STYLES"
+          if [ -z "$STYLES" ]; then
+            echo "未找到 styles.xml，跳过（由 Flutter 默认值接管）"
+            exit 0
+          fi
+          echo "--- before ---"; cat "$STYLES"
+          # 移除 edge-to-edge 退出开关
+          sed -i '/windowOptOutEdgeToEdgeEnforcement/d' "$STYLES"
+          # 移除已有的 cutout 声明，随后统一补一条（保证幂等）
+          sed -i '/windowLayoutInDisplayCutoutMode/d' "$STYLES"
+          # 在 </style> 前插入两条；用 \( *\) 复用原有缩进，避免破坏 XML 排版
+          sed -i 's#^\( *\)</style>#\1    <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>\n\1    <item name="android:windowDrawsSystemBarBackgrounds">true</item>\n\1</style>#' "$STYLES"
+          echo "--- after ---"; cat "$STYLES"
+          grep -q "windowLayoutInDisplayCutoutMode" "$STYLES" \
+            || { echo "edge-to-edge 注入失败"; exit 1; }
+          if grep -q "windowOptOutEdgeToEdgeEnforcement" "$STYLES"; then
+            echo "windowOptOutEdgeToEdgeEnforcement 仍存在"; exit 1
+          fi
+          echo "edge-to-edge 配置完成"
 
       - name: Generate app icon from mascot
         run: |
@@ -99,10 +139,13 @@ jobs:
           chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
           ls -la android/app/src/main/jniLibs/arm64-v8a/
 
-      - name: Add INTERNET and microphone permissions
+      - name: Add permissions and notification receivers
         run: |
-          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <application|' android/app/src/main/AndroidManifest.xml
-          grep -n "INTERNET\|RECORD_AUDIO" android/app/src/main/AndroidManifest.xml
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.VIBRATE"/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>\n    <application|' "$MANIFEST"
+          # flutter_local_notifications：定时/已展示通知的回调接收器，缺失会在部分 ROM 上崩溃
+          sed -i 's|</application>|<receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n                <action android:name="android.intent.action.QUICKBOOT_POWERON" />\n                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>\n            </intent-filter>\n        </receiver>\n    </application>|' "$MANIFEST"
+          grep -n "INTERNET\|RECORD_AUDIO\|POST_NOTIFICATIONS\|ScheduledNotification" "$MANIFEST"
 
       - name: Build Debian rootfs and publish to release
         env:

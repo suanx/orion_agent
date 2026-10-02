@@ -3,11 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import 'appearance_screen.dart';
 import 'knowledge_screen.dart';
 import 'mcp_screen.dart';
 import 'memory_screen.dart';
+import 'notification_settings_screen.dart';
 import 'roles_screen.dart';
 import 'settings_screen.dart';
+import 'storage_settings_screen.dart';
 import 'terminal_screen.dart';
 
 /// 我的 Tab：Marvis 风格的分组白卡片列表。
@@ -17,126 +20,75 @@ class ProfileScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final memory = ref.watch(memoryServiceProvider);
-    final currentTheme = ref.watch(themeProvider);
-    final prefs = ref.watch(sharedPreferencesProvider);
-    final primary = Theme.of(context).colorScheme.primary;
-
-    void pickTheme(String id) {
-      prefs.setString('theme_id', id);
-      ref.read(themeProvider.notifier).state = id;
-    }
-
-    void pickMode(String mode) {
-      prefs.setString('theme_mode', mode);
-      ref.read(themeModeProvider.notifier).state =
-          mode == 'light' ? ThemeMode.light : (mode == 'dark' ? ThemeMode.dark : ThemeMode.system);
-    }
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
       children: [
-        // ------- 主题配色 -------
+        // ------- Agent 介绍卡 -------
         SafeArea(
           bottom: false,
           child: Container(
             margin: const EdgeInsets.fromLTRB(0, 16, 0, 12),
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
               color: surface(context),
               borderRadius: BorderRadius.circular(20),
             ),
-            child: Column(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Row(
-                  children: [
-                    const Text('主题配色',
-                        style: TextStyle(
-                            fontSize: 16, fontWeight: FontWeight.w500)),
-                    const Spacer(),
-                    for (final t in appThemes)
-                      GestureDetector(
-                        onTap: () => pickTheme(t.id),
-                        child: Container(
-                          margin: const EdgeInsets.only(left: 10),
-                          width: 28,
-                          height: 28,
-                          decoration: BoxDecoration(
-                              color: t.primary, shape: BoxShape.circle),
-                          child: currentTheme == t.id
-                              ? const Icon(Icons.check_rounded,
-                                  size: 16, color: Colors.white)
-                              : null,
-                        ),
+                MascotAvatar(size: 72, image: mascotAsset(context)),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Pocket Agent',
+                          style: TextStyle(
+                              fontSize: 20, fontWeight: FontWeight.w500)),
+                      const SizedBox(height: 6),
+                      Text('我 24 小时在线，能搜索、算数、读网页，还有记性。',
+                          style: TextStyle(
+                              fontSize: 13,
+                              height: 1.45,
+                              color: onSurface(context, 0.55))),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 6,
+                        runSpacing: 6,
+                        children: ['理智高效', '极简办公', '默默干活']
+                            .map((t) => Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 10, vertical: 5),
+                                  decoration: BoxDecoration(
+                                    color: onSurface(context, 0.05),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(t,
+                                      style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w400)),
+                                ))
+                            .toList(),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                SegmentedButton<String>(
-                  segments: const [
-                    ButtonSegment(value: 'system', label: Text('跟随系统')),
-                    ButtonSegment(value: 'light', label: Text('浅色')),
-                    ButtonSegment(value: 'dark', label: Text('深色')),
-                  ],
-                  selected: {ref.watch(themeModeProvider).name},
-                  onSelectionChanged: (s) => pickMode(s.first),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
         ),
-        // ------- Agent 介绍卡 -------
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: surface(context),
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(child: SizedBox(width: 84, height: 84, child: ClipOval(child: Transform.scale(scale: 1.6, alignment: Alignment.topCenter, child: Image.asset(mascotAsset(context), fit: BoxFit.cover, cacheWidth: 480))))),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Pocket Agent',
-                        style: TextStyle(
-                            fontSize: 22, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 6),
-                    Text('我 24 小时在线，能搜索、算数、读网页，还有记性。',
-                        style: TextStyle(
-                            fontSize: 13,
-                            height: 1.4,
-                            color: onSurface(context, 0.55))),
-                    const SizedBox(height: 10),
-                    Wrap(
-                      spacing: 6,
-                      children: ['理智高效', '极简办公', '默默干活']
-                          .map((t) => Container(
-                                padding: const EdgeInsets.symmetric(
-                                    horizontal: 10, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: onSurface(context, 0.05),
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                                child: Text(t,
-                                    style: const TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w500)),
-                              ))
-                          .toList(),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
         const SizedBox(height: 12),
         // ------- 功能分组 -------
         _CardGroup(items: [
+          _CardItem(
+            icon: Icons.palette_rounded,
+            title: '外观主题',
+            subtitle: '配色与明暗模式',
+            trailing: () => const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const AppearanceScreen())),
+          ),
           _CardItem(
             icon: Icons.build_rounded,
             title: '模型设置',
@@ -173,6 +125,22 @@ class ProfileScreen extends ConsumerWidget {
             trailing: () => const Icon(Icons.chevron_right_rounded),
             onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const McpScreen())),
+          ),
+          _CardItem(
+            icon: Icons.notifications_none_rounded,
+            title: '通知',
+            subtitle: '回答完成提醒与通知权限',
+            trailing: () => const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const NotificationSettingsScreen())),
+          ),
+          _CardItem(
+            icon: Icons.sd_storage_outlined,
+            title: '存储',
+            subtitle: '工作区、缓存与临时文件',
+            trailing: () => const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const StorageSettingsScreen())),
           ),
           _CardItem(
             icon: Icons.terminal_rounded,
