@@ -27,7 +27,7 @@ class _StorageSettingsScreenState
   }
 
   Future<void> _scan() async {
-    final list = await StorageService.scan();
+    final list = await FileStorageService.scan();
     if (mounted) setState(() => _entries = list);
   }
 
@@ -154,7 +154,7 @@ class _StorageSettingsScreenState
                               title: '清理缓存？',
                               message: '将删除 TTS 音频缓存与临时目录内容，'
                                   '不影响会话、记忆与知识库。',
-                              action: StorageService.clearCache,
+                              action: FileStorageService.clearCache,
                             ),
                   ),
                   Divider(height: 1, color: onSurface(context, 0.06)),
@@ -172,7 +172,7 @@ class _StorageSettingsScreenState
                               title: '清空工作区？',
                               message: '将删除 /workspace 下的所有文件，'
                                   '包括 Agent 生成和终端创建的产物。此操作不可恢复。',
-                              action: StorageService.clearWorkspace,
+                              action: FileStorageService.clearWorkspace,
                             ),
                   ),
                 ]),

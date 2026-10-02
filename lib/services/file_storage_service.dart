@@ -40,12 +40,15 @@ String formatBytes(int bytes) {
 
 /// 文件存储管理：统计各目录占用、清理缓存。
 ///
+/// 命名与 `services/storage_service.dart` 的 StorageService（会话库）区分，
+/// 避免同名类被同一文件导入时冲突。
+///
 /// 目录划分与 TerminalService 保持一致：
 /// - workspace：Agent 与终端共享的工作区（用户可见、不自动清理）
 /// - 终端 rootfs：Alpine / Debian 解压目录（体积大，仅展示）
 /// - 缓存：TTS 音频、临时解压文件等（可安全清理）
 /// - 数据库与偏好设置：会话/记忆/知识库（在「我的 → 清空会话」处理）
-class StorageService {
+class FileStorageService {
   /// 递归统计目录大小（软链接不计入，避免死循环）。
   static ({int bytes, int files}) _measure(Directory dir) {
     if (!dir.existsSync()) return (bytes: 0, files: 0);
