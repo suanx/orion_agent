@@ -77,10 +77,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 children: [
                   Row(
                     children: [
-                      ClipOval(
-                        child: Image.asset(mascotAsset(context),
-                            width: 56, height: 56, fit: BoxFit.cover),
-                      ),
+                      SizedBox(width: 56, height: 56, child: ClipOval(child: Image.asset(mascotAsset(context), fit: BoxFit.cover, cacheWidth: 168))),
                       const SizedBox(width: 12),
                       Text('欢迎使用 Pocket Agent',
                           style: const TextStyle(
@@ -174,7 +171,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                               fontWeight: FontWeight.w600,
                               color: installed
                                   ? const Color(0xFF137333)
-                                  : onSurface(context, 0.45)),
+                                  : onSurface(context, 0.45))),
                     ),
                   ],
                 ),

@@ -34,7 +34,7 @@ class SessionDrawer extends ConsumerWidget {
                 child: TextButton.icon(
                   style: TextButton.styleFrom(
                     backgroundColor: onSurface(context, 0.05),
-                    foregroundColor: onSurface(context),
+                    foregroundColor: onSurface(context, 1),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                     ),
@@ -51,7 +51,7 @@ class SessionDrawer extends ConsumerWidget {
               const SizedBox(height: 8),
               Expanded(
                 child: sessions.isEmpty
-                    ? const Center(
+                    ? Center(
                         child: Text('暂无历史会话',
                             style: TextStyle(color: onSurface(context, 0.38))))
                     : ListView.builder(

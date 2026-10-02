@@ -95,10 +95,7 @@ class ProfileScreen extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              ClipOval(
-                child: Image.asset(mascotAsset(context),
-                    width: 84, height: 84, fit: BoxFit.cover),
-              ),
+              SizedBox(width: 84, height: 84, child: ClipOval(child: Image.asset(mascotAsset(context), fit: BoxFit.cover, cacheWidth: 252))),
               const SizedBox(width: 16),
               Expanded(
                 child: Column(
@@ -316,7 +313,7 @@ class _CardGroup extends StatelessWidget {
                     ),
                     items[i].trailing(),
                     const SizedBox(width: 4),
-                    const Icon(Icons.chevron_right_rounded,
+                    Icon(Icons.chevron_right_rounded,
                         size: 22, color: onSurface(context, 0.26)),
                   ],
                 ),
