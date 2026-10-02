@@ -50,11 +50,9 @@ jobs:
                   abortOnError = false
               }
               // flutter_local_notifications 依赖 java.time，必须开启脱糖。
-              # 注意：Java 与 Kotlin 的 jvmTarget 必须一致 —— Kotlin 编译器默认
-              # 输出 17，这里若只把 Java 设成 11，assembleRelease 会报
-              # "Inconsistent JVM-target compatibility detected for tasks
-              #  compileReleaseJavaWithJavac (11) and compileReleaseKotlin (17)"。
-              # 所以两边统一为 17（AGP 8.x 原生支持）。
+              // Java 与 Kotlin 的 jvmTarget 必须一致：Kotlin 默认输出 17，
+              // 若只把 Java 设成 11，assembleRelease 会因 target 不一致直接失败。
+              // 因此两边统一为 17（AGP 8.x 原生支持）。
               compileOptions {
                   isCoreLibraryDesugaringEnabled = true
                   sourceCompatibility = JavaVersion.VERSION_17
@@ -67,6 +65,23 @@ jobs:
           }
           EOF
           tail -25 android/app/build.gradle.kts
+          # 自检：注入体若含 shell 注释（#）或结构不配平，Gradle 后面会报很难懂的
+          # "Expecting an element"。这里提前失败并给出可读信息。
+          if grep -nE '^[[:space:]]*#' android/app/build.gradle.kts; then
+            echo "::error ::build.gradle.kts 出现 shell 风格 # 注释，Gradle 无法解析"
+            exit 1
+          fi
+          python3 - <<'PYCHK'
+          import sys
+          src = open('android/app/build.gradle.kts', encoding='utf-8').read()
+          if src.count('{') != src.count('}'):
+              print('::error ::花括号不配平 { =%d } =%d' % (src.count('{'), src.count('}')))
+              sys.exit(1)
+          if src.count('"') % 2 != 0:
+              print('::error ::双引号不配对，heredoc 可能被提前截断')
+              sys.exit(1)
+          print('注入自检通过')
+          PYCHK
 
       - name: Align Kotlin jvmTarget with Java (17)
         # Gradle 会校验 Java 与 Kotlin 两侧的 jvmTarget 是否一致，
