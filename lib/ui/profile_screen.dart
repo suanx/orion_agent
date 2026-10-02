@@ -75,13 +75,9 @@ class ProfileScreen extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                width: 84,
-                height: 84,
-                decoration:
-                    BoxDecoration(color: primary, shape: BoxShape.circle),
-                child: const Icon(Icons.smart_toy_rounded,
-                    color: Colors.white, size: 44),
+              ClipOval(
+                child: Image.asset('assets/images/mascot.webp',
+                    width: 84, height: 84, fit: BoxFit.cover),
               ),
               const SizedBox(width: 16),
               Expanded(

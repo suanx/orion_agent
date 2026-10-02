@@ -74,9 +74,18 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('安装终端环境',
-                      style: const TextStyle(
-                          fontSize: 18, fontWeight: FontWeight.w800)),
+                  Row(
+                    children: [
+                      ClipOval(
+                        child: Image.asset('assets/images/mascot.webp',
+                            width: 56, height: 56, fit: BoxFit.cover),
+                      ),
+                      const SizedBox(width: 12),
+                      Text('欢迎使用 Pocket Agent',
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w800)),
+                    ],
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     '检测到本机还没有 Linux 终端环境。'

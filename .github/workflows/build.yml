@@ -43,12 +43,43 @@ jobs:
           cat >> android/app/build.gradle.kts <<'EOF'
 
           // targetSdk 28（终端环境 exec 需要）触发 Play 上架 lint，侧载分发故关闭
-          lint {
-              checkReleaseBuilds = false
-              abortOnError = false
+          android {
+              lint {
+                  checkReleaseBuilds = false
+                  abortOnError = false
+              }
           }
           EOF
-          tail -6 android/app/build.gradle.kts
+          tail -8 android/app/build.gradle.kts
+
+      - name: Generate app icon from mascot
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
+          SRC=assets/images/mascot.webp
+          RES=android/app/src/main/res
+          declare -A FG=( [mdpi]=108 [hdpi]=162 [xhdpi]=216 [xxhdpi]=324 [xxxhdpi]=432 )
+          for dir in "${!FG[@]}"; do
+            size=${FG[$dir]}
+            mkdir -p $RES/mipmap-$dir
+            convert "$SRC" -resize ${size}x${size} -background white -flatten $RES/mipmap-$dir/ic_launcher_foreground.png
+          done
+          declare -A LG=( [mdpi]=48 [hdpi]=72 [xhdpi]=96 [xxhdpi]=144 [xxxhdpi]=192 )
+          for dir in "${!LG[@]}"; do
+            size=${LG[$dir]}
+            convert "$SRC" -resize ${size}x${size} -background white -flatten $RES/mipmap-$dir/ic_launcher.png
+          done
+          mkdir -p $RES/mipmap-anydpi-v26 $RES/values
+          cat > $RES/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+              <background android:drawable="@color/ic_launcher_background"/>
+              <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+          </adaptive-icon>
+          EOF
+          cp $RES/mipmap-anydpi-v26/ic_launcher.xml $RES/mipmap-anydpi-v26/ic_launcher_round.xml
+          echo '<?xml version="1.0" encoding="utf-8"?>' > $RES/values/ic_launcher_background.xml
+          echo '<resources><color name="ic_launcher_background">#FFFFFF</color></resources>' >> $RES/values/ic_launcher_background.xml
+          ls $RES/mipmap-xxxhdpi/
 
       - name: Bundle proot into jniLibs
         # 终端环境：打包 Termux 构建的 proot（aarch64）及其依赖 libtalloc，
