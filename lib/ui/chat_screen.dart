@@ -634,7 +634,7 @@ class _InputBar extends StatelessWidget {
                   decoration: BoxDecoration(
                       color: Theme.of(context).colorScheme.primary,
                       shape: BoxShape.circle),
-                  child: const Icon(Icons.arrow_upward_rounded,
+                  child: Icon(Icons.arrow_upward_rounded,
                       size: 22, color: Theme.of(context).colorScheme.onPrimary),
                 ),
               )

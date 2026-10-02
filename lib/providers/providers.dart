@@ -89,7 +89,7 @@ final prefillProvider = StateProvider<String>((ref) => '');
 
 /// 当前主题配色 id（持久化在 shared_preferences，默认经典黑）。
 final themeProvider = StateProvider<String>((ref) {
-  return ref.watch(sharedPreferencesProvider).getString('theme_id') ?? 'classic';
+  return ref.watch(sharedPreferencesProvider).getString('theme_id') ?? 'blue';
 });
 
 /// 主题明暗模式：跟随系统 / 浅色 / 深色（持久化，默认跟随系统）。
