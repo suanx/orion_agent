@@ -214,8 +214,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           Container(
                             width: 6,
                             height: 6,
-                            decoration: const BoxDecoration(
-                                color: Color(0xFF3B82F6), shape: BoxShape.circle),
+                            decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.primary,
+                                shape: BoxShape.circle),
                           ),
                           const SizedBox(width: 5),
                           Text('本机 · ${session?.messages.length ?? 0} 条消息',
@@ -358,8 +359,9 @@ class _EmptyGreeting extends StatelessWidget {
         Container(
           width: 84,
           height: 84,
-          decoration: const BoxDecoration(
-              color: Colors.black, shape: BoxShape.circle),
+          decoration: BoxDecoration(
+              color: Theme.of(context).colorScheme.primary,
+              shape: BoxShape.circle),
           child: const Icon(Icons.smart_toy_rounded,
               color: Colors.white, size: 44),
         ),
@@ -419,7 +421,7 @@ class _MessageBubble extends StatelessWidget {
           constraints: BoxConstraints(
               maxWidth: MediaQuery.of(context).size.width * 0.78),
           decoration: BoxDecoration(
-            color: Colors.black,
+            color: Theme.of(context).colorScheme.primary,
             borderRadius: BorderRadius.circular(18)
                 .copyWith(bottomRight: const Radius.circular(6)),
           ),
@@ -625,8 +627,8 @@ class _InputBar extends StatelessWidget {
                 width: 40,
                 height: 40,
                 child: IconButton(
-                  icon: const Icon(Icons.stop_rounded,
-                      size: 24, color: Colors.black),
+                  icon: Icon(Icons.stop_rounded,
+                      size: 24, color: Theme.of(context).colorScheme.primary),
                   onPressed: onStop,
                 ),
               )
@@ -636,8 +638,9 @@ class _InputBar extends StatelessWidget {
                 child: Container(
                   width: 40,
                   height: 40,
-                  decoration: const BoxDecoration(
-                      color: Colors.black, shape: BoxShape.circle),
+                  decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primary,
+                      shape: BoxShape.circle),
                   child: const Icon(Icons.arrow_upward_rounded,
                       size: 22, color: Colors.white),
                 ),

@@ -84,6 +84,11 @@ final activeRoleIdProvider = StateProvider<String>((ref) {
 /// 技能页 → 聊天输入框的预填文本（用后即清）。
 final prefillProvider = StateProvider<String>((ref) => '');
 
+/// 当前主题配色 id（持久化在 shared_preferences，默认经典黑）。
+final themeProvider = StateProvider<String>((ref) {
+  return ref.watch(sharedPreferencesProvider).getString('theme_id') ?? 'classic';
+});
+
 final mcpServiceProvider = Provider<McpService>((ref) =>
     McpService(ref.watch(databaseProvider), ref.watch(toolRegistryProvider)));
 

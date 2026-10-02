@@ -10,6 +10,7 @@ import 'services/memory_service.dart';
 import 'services/role_service.dart';
 import 'services/skill_service.dart';
 import 'services/storage_service.dart';
+import 'theme.dart';
 import 'ui/home_shell.dart';
 
 Future<void> main() async {
@@ -43,41 +44,17 @@ Future<void> main() async {
   ));
 }
 
-class PocketAgentApp extends StatelessWidget {
+class PocketAgentApp extends ConsumerWidget {
   const PocketAgentApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = buildAppTheme(themeById(ref.watch(themeProvider)));
     return MaterialApp(
       title: 'Pocket Agent',
       debugShowCheckedModeBanner: false,
       themeMode: ThemeMode.light,
-      theme: ThemeData(
-        useMaterial3: true,
-        brightness: Brightness.light,
-        scaffoldBackgroundColor: const Color(0xFFF6F6F6),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.black,
-          brightness: Brightness.light,
-        ).copyWith(
-          primary: Colors.black,
-          onPrimary: Colors.white,
-          surface: Colors.white,
-        ),
-        appBarTheme: const AppBarTheme(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          scrolledUnderElevation: 0,
-          foregroundColor: Colors.black,
-          titleTextStyle: TextStyle(
-            color: Colors.black,
-            fontSize: 18,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        dividerColor: Colors.black.withOpacity(0.06),
-        splashFactory: InkSparkle.splashFactory,
-      ),
+      theme: theme,
       home: const HomeShell(),
     );
   }

@@ -68,7 +68,9 @@ class SessionDrawer extends ConsumerWidget {
                             leading: Icon(
                               Icons.chat_bubble_outline_rounded,
                               size: 20,
-                              color: active ? Colors.black : Colors.black38,
+                              color: active
+                                  ? Theme.of(context).colorScheme.primary
+                                  : Colors.black38,
                             ),
                             title: Text(
                               s.title,

@@ -29,7 +29,8 @@ class RolesScreen extends ConsumerWidget {
               activeId.isEmpty
                   ? Icons.radio_button_checked
                   : Icons.radio_button_off,
-              color: activeId.isEmpty ? Colors.black : null,
+              color:
+                  activeId.isEmpty ? Theme.of(context).colorScheme.primary : null,
             ),
             title: const Text('默认助手',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
@@ -44,7 +45,9 @@ class RolesScreen extends ConsumerWidget {
                   r.id == activeId
                       ? Icons.radio_button_checked
                       : Icons.radio_button_off,
-                  color: r.id == activeId ? Colors.black : null,
+                  color: r.id == activeId
+                      ? Theme.of(context).colorScheme.primary
+                      : null,
                 ),
                 title: Text(r.name,
                     style: const TextStyle(

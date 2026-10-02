@@ -82,6 +82,7 @@ class _FrostedNavBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
     return ClipRect(
       child: BackdropFilter(
         filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
@@ -109,7 +110,7 @@ class _FrostedNavBar extends StatelessWidget {
                               i == index ? _navItems[i].activeIcon : _navItems[i].icon,
                               size: 26,
                               color: i == index
-                                  ? Colors.black
+                                  ? primary
                                   : Colors.black.withOpacity(0.35),
                             ),
                             const SizedBox(height: 3),
@@ -120,7 +121,7 @@ class _FrostedNavBar extends StatelessWidget {
                                 fontWeight:
                                     i == index ? FontWeight.w700 : FontWeight.w500,
                                 color: i == index
-                                    ? Colors.black
+                                    ? primary
                                     : Colors.black.withOpacity(0.35),
                               ),
                             ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import '../theme.dart';
 import 'knowledge_screen.dart';
 import 'mcp_screen.dart';
 import 'memory_screen.dart';
@@ -15,28 +16,50 @@ class ProfileScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final memory = ref.watch(memoryServiceProvider);
+    final currentTheme = ref.watch(themeProvider);
+    final prefs = ref.watch(sharedPreferencesProvider);
+    final primary = Theme.of(context).colorScheme.primary;
+
+    void pickTheme(String id) {
+      prefs.setString('theme_id', id);
+      ref.read(themeProvider.notifier).state = id;
+    }
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
       children: [
+        // ------- 主题配色 -------
         SafeArea(
           bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(4, 16, 4, 20),
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(0, 16, 0, 12),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(20),
+            ),
             child: Row(
               children: [
-                Container(
-                  width: 52,
-                  height: 52,
-                  decoration: const BoxDecoration(
-                      color: Colors.black, shape: BoxShape.circle),
-                  child: const Icon(Icons.person_rounded,
-                      color: Colors.white, size: 28),
-                ),
-                const SizedBox(width: 12),
-                const Text('suanx',
-                    style:
-                        TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+                const Text('主题配色',
+                    style: TextStyle(
+                        fontSize: 16, fontWeight: FontWeight.w600)),
+                const Spacer(),
+                for (final t in appThemes)
+                  GestureDetector(
+                    onTap: () => pickTheme(t.id),
+                    child: Container(
+                      margin: const EdgeInsets.only(left: 10),
+                      width: 28,
+                      height: 28,
+                      decoration:
+                          BoxDecoration(color: t.primary, shape: BoxShape.circle),
+                      child: currentTheme == t.id
+                          ? const Icon(Icons.check_rounded,
+                              size: 16, color: Colors.white)
+                          : null,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -54,8 +77,8 @@ class ProfileScreen extends ConsumerWidget {
               Container(
                 width: 84,
                 height: 84,
-                decoration: const BoxDecoration(
-                    color: Colors.black, shape: BoxShape.circle),
+                decoration:
+                    BoxDecoration(color: primary, shape: BoxShape.circle),
                 child: const Icon(Icons.smart_toy_rounded,
                     color: Colors.white, size: 44),
               ),
@@ -245,7 +268,8 @@ class _CardGroup extends StatelessWidget {
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 child: Row(
                   children: [
-                    Icon(items[i].icon, size: 22, color: Colors.black),
+                    Icon(items[i].icon,
+                        size: 22, color: Theme.of(context).colorScheme.primary),
                     const SizedBox(width: 14),
                     Expanded(
                       child: Text(items[i].title,
