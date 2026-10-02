@@ -99,7 +99,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
 
   Future<void> _uninstallEnv() async {
     await _terminal.uninstall(_distro);
-    _appendLog('${TerminalService.specs[_distro]!.displayName} 环境已删除');
+    _appendLog('${TerminalService.specOf(_distro).displayName} 环境已删除');
     await _refreshInstalled();
   }
 
@@ -166,7 +166,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                     for (final d in TerminalDistro.values)
                       ButtonSegment(
                         value: d,
-                        label: Text(TerminalService.specs[d]!.displayName),
+                        label: Text(TerminalService.specOf(d).displayName),
                       ),
                   ],
                   selected: {_distro},
@@ -378,7 +378,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                 style: const TextStyle(
                     fontSize: 14, fontWeight: FontWeight.w500)),
             subtitle: Text(
-                '${t.command}\n${TerminalService.specs[t.distro]!.displayName}'
+                '${t.command}\n${TerminalService.specOf(t.distro).displayName}'
                 '${t.enabled ? ' · 开机自启' : ' · 手动'}',
                 style: TextStyle(
                     fontFamily: 'monospace',
@@ -462,7 +462,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                   for (final d in TerminalDistro.values)
                     ButtonSegment(
                         value: d,
-                        label: Text(TerminalService.specs[d]!.displayName)),
+                        label: Text(TerminalService.specOf(d).displayName)),
                 ],
                 selected: {distro},
                 onSelectionChanged: (s) => setDialog(() => distro = s.first),

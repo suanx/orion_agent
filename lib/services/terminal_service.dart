@@ -53,6 +53,17 @@ class TerminalService {
     ),
   };
 
+  /// 安全取发行版配置：漏配时回退为可读占位，避免 UI 侧 `specs[d]!` 直接崩。
+  static DistroSpec specOf(TerminalDistro d) =>
+      specs[d] ??
+      DistroSpec(
+        id: d,
+        displayName: d.name,
+        dirName: '${d.name}-rootfs',
+        downloadUrl: '',
+        isGzip: true,
+      );
+
   static const _tuna = 'https://mirrors.tuna.tsinghua.edu.cn';
 
   /// 组件全集（打叉的 agent CLI——codex/Claude Code/DeepSeek/Kimi——不装）。
@@ -156,8 +167,14 @@ class TerminalService {
   Future<String> rootfsDir(TerminalDistro d) async {
     final cached = _rootfsCache[d];
     if (cached != null) return cached;
+    // specs 目前覆盖全部枚举值，但新增发行版而漏改 specs 时 `!` 会直接崩；
+    // 这里显式校验并给出可读错误。
+    final spec = specs[d];
+    if (spec == null) {
+      throw Exception('终端环境未配置：${d.name}');
+    }
     final support = await getApplicationSupportDirectory();
-    return _rootfsCache[d] = '${support.path}/${specs[d]!.dirName}';
+    return _rootfsCache[d] = '${support.path}/${spec.dirName}';
   }
 
   /// 指定发行版是否已安装（busybox/dash 存在即视为完整）。
@@ -179,7 +196,10 @@ class TerminalService {
     TerminalDistro d, {
     void Function(String progress)? onProgress,
   }) async {
-    final spec = specs[d]!;
+    final spec = specOf(d);
+    if (spec.downloadUrl.isEmpty) {
+      throw Exception('终端环境未配置下载地址：${d.name}');
+    }
     final rootfs = await rootfsDir(d);
     final tmp = await getTemporaryDirectory();
     final archivePath = '${tmp.path}/${spec.dirName}.tar';

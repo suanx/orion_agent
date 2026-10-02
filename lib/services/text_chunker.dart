@@ -1,6 +1,9 @@
 /// 文本分块器：按空行分段，段内合并到不超过 maxLen，超长段落硬切。
 /// 纯函数，无副作用，便于单元测试。
 List<String> chunkText(String text, {int maxLen = 800}) {
+  // 防御 maxLen<=0：原实现里 while (p.length > maxLen) 会取 substring(0, 0)，
+  // p 不变而循环条件恒成立，直接死循环。
+  if (maxLen <= 0) maxLen = 800;
   final normalized = text.replaceAll('\r\n', '\n').trim();
   if (normalized.isEmpty) return [];
 

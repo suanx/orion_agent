@@ -368,7 +368,13 @@ class SearchKnowledgeTool extends Tool {
     if (query.trim().isEmpty) return '错误：检索词为空';
     final hits = await _rag.search(
       query: query,
-      embedOne: (q) async => (await _embed([q])).first,
+      // embedding 服务可能返回空数组，直接 .first 会抛 StateError；
+      // 这里给一个兜底，让检索空手而归而不是让整个 Agent 回合崩掉。
+      embedOne: (q) async {
+        final vecs = await _embed([q]);
+        if (vecs.isEmpty) return const <double>[];
+        return vecs.first;
+      },
     );
     if (hits.isEmpty) return '知识库中没有找到相关内容。';
     final buf = StringBuffer();

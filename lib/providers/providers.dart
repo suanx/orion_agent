@@ -452,8 +452,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
       try {
         knowledge = await _rag.search(
           query: content,
-          embedOne: (q) async =>
-              (await _llm.embedBatch(config: config, inputs: [q])).first,
+          // embedding 可能返回空数组，.first 会抛 StateError；这里兜底为空向量。
+          embedOne: (q) async {
+            final vecs = await _llm.embedBatch(config: config, inputs: [q]);
+            return vecs.isEmpty ? const <double>[] : vecs.first;
+          },
         );
       } catch (_) {}
     }

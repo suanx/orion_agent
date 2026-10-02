@@ -44,7 +44,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     try {
       await _terminal.install(d, onProgress: _appendLog);
       _installed[d] = await _terminal.isInstalled(d);
-      _appendLog('「${TerminalService.specs[d]!.displayName}」环境就绪 ✓');
+      _appendLog('「${TerminalService.specOf(d).displayName}」环境就绪 ✓');
     } catch (e) {
       _appendLog('安装失败：$e');
     } finally {
@@ -136,7 +136,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   }
 
   Widget _distroCard(TerminalDistro d) {
-    final spec = TerminalService.specs[d]!;
+    final spec = TerminalService.specOf(d);
     final installed = _installed[d] ?? false;
     return Container(
       padding: const EdgeInsets.all(16),

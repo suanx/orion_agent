@@ -70,7 +70,14 @@ class LlmClient {
     final contentBuf = StringBuffer();
     final toolAcc = <int, _ToolCallAcc>{};
 
-    final lines = resp.data!.stream.cast<List<int>>().transform(utf8.decoder).transform(
+    // 服务端返回空响应体（代理拦截、204、网关返回空）时 resp.data 为 null，
+    // 原来的 resp.data! 会直接抛空指针。这里改为给出明确错误。
+    final body0 = resp.data;
+    if (body0 == null) {
+      throw Exception('模型服务返回空响应体（HTTP ${resp.statusCode}）');
+    }
+
+    final lines = body0.stream.cast<List<int>>().transform(utf8.decoder).transform(
           const LineSplitter(),
         );
 
