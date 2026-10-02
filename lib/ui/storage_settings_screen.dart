@@ -40,12 +40,21 @@ class _StorageSettingsScreenState
     return sum;
   }
 
+  /// 可清理部分的大小。
+  ///
+  /// 「TTS 音频缓存」目录位于「临时文件」目录之内，两者都匹配时会重复计数，
+  /// 这里按路径前缀去重：被其他条目包含的目录不再单独累加。
   int get _cacheBytes {
     final list = _entries;
     if (list == null) return 0;
+    final cache = list
+        .where((e) => e.label.contains('缓存') || e.label == '临时文件')
+        .toList();
     var sum = 0;
-    for (final e in list) {
-      if (e.label.contains('缓存') || e.label == '临时文件') sum += e.bytes;
+    for (final e in cache) {
+      final nested =
+          cache.any((o) => o != e && o.path.isNotEmpty && e.path.startsWith(o.path));
+      if (!nested) sum += e.bytes;
     }
     return sum;
   }

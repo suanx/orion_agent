@@ -117,29 +117,27 @@ class FileStorageService {
   }
 
   /// 清理缓存类目录（TTS 音频 + 临时目录），返回释放的字节数。
+  ///
+  /// 注意：`temp/tts` 本身位于 `temp` 之内，遍历 `temp` 时就会把它一并删掉，
+  /// 因此这里只以 `temp` 为唯一遍历目标，避免同一文件被统计两次导致
+  /// 释放量虚高（原实现把两个目录都列进 targets 会重复计数）。
   static Future<int> clearCache() async {
     var freed = 0;
     final temp = await _temp();
-    final targets = [
-      Directory('${temp.path}/tts'),
-      temp,
-    ];
-    for (final dir in targets) {
-      if (!dir.existsSync()) continue;
-      for (final e in dir.listSync(followLinks: false)) {
-        try {
-          final entity = e;
-          var size = 0;
-          // 直接判断类型，让 Dart 做类型提升，避免多余的类型转换
-          if (entity is Directory) {
-            size = _measure(entity).bytes;
-          } else if (entity is File) {
-            size = entity.lengthSync();
-          }
-          entity.deleteSync(recursive: true);
-          freed += size;
-        } catch (_) {}
-      }
+    if (!temp.existsSync()) return 0;
+    for (final e in temp.listSync(followLinks: false)) {
+      try {
+        final entity = e;
+        var size = 0;
+        // 直接判断类型，让 Dart 做类型提升，避免多余的类型转换
+        if (entity is Directory) {
+          size = _measure(entity).bytes;
+        } else if (entity is File) {
+          size = entity.lengthSync();
+        }
+        entity.deleteSync(recursive: true);
+        freed += size;
+      } catch (_) {}
     }
     return freed;
   }

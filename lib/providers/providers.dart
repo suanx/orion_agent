@@ -420,16 +420,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
       content: content,
       images: images,
     );
-    final updated = session
-      ..messages.add(userMsg)
-      ..updatedAt = DateTime.now();
-    if (session.title == '新对话') {
-      updated.title = content.isEmpty
-          ? '[图片]'
-          : (content.length > 16 ? '${content.substring(0, 16)}…' : content);
-    }
+    // 同样避免就地修改：构造新的 ChatSession 再交给 _touch。
+    final title = session.title == '新对话'
+        ? (content.isEmpty
+            ? '[图片]'
+            : (content.length > 16 ? '${content.substring(0, 16)}…' : content))
+        : session.title;
+    final updated = ChatSession(
+      id: session.id,
+      title: title,
+      messages: [...session.messages, userMsg],
+      createdAt: session.createdAt,
+      updatedAt: DateTime.now(),
+    );
     _touch(updated);
-    _storage.insertMessage(session.id, userMsg);
+    _storage.insertMessage(updated.id, userMsg);
 
     state = state.copyWith(
       isStreaming: true,
@@ -488,10 +493,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // 最终回答写入会话历史（工具中间过程不入库，节省上下文长度）
     final s2 = state.activeSession;
     if (answer != null && s2 != null) {
-      s2.messages.add(answer);
-      s2.updatedAt = DateTime.now();
-      _touch(s2);
-      _storage.insertMessage(s2.id, answer);
+      // 原实现直接 s2.messages.add(...) 就地改列表，sessions 里存的是同一份
+      // 引用，copyWith 检测到引用未变就不会触发重建，界面可能不刷新。
+      // 这里改为复制列表后再更新，保证状态是不可变替换。
+      final withAnswer = ChatSession(
+        id: s2.id,
+        title: s2.title,
+        messages: [...s2.messages, answer],
+        createdAt: s2.createdAt,
+        updatedAt: DateTime.now(),
+      );
+      _touch(withAnswer);
+      _storage.insertMessage(withAnswer.id, answer);
 
       // 语音播报（引擎/音色/语速/音量都来自设置）
       if (_ttsEnabled()) {
@@ -511,7 +524,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
             ? (brief.length > 120 ? '${brief.substring(0, 120)}…' : brief)
             : '';
         unawaited(onAnswerNotification?.call(
-          s2.title,
+          withAnswer.title,
           body,
         ));
       }

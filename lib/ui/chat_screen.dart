@@ -11,19 +11,34 @@ import '../models/chat_message.dart';
 import '../providers/providers.dart';
 import '../services/skill_service.dart';
 
-Uint8List _decodeImage(String dataUrl) {
-  final b64 = dataUrl.contains(',') ? dataUrl.split(',')[1] : dataUrl;
-  return base64Decode(b64);
+/// 把 data URL 解成字节。
+///
+/// 历史数据里可能存在被截断或手工编辑过的 base64，直接 base64Decode 会抛
+/// FormatException 并让整棵消息树渲染失败，这里返回 null 由调用方降级展示占位图。
+Uint8List? _decodeImage(String dataUrl) {
+  try {
+    final b64 = dataUrl.contains(',') ? dataUrl.split(',').last : dataUrl;
+    final bytes = base64Decode(b64);
+    return bytes.isEmpty ? null : bytes;
+  } catch (_) {
+    return null;
+  }
 }
 
 void _showImageViewer(BuildContext context, String dataUrl) {
+  final bytes = _decodeImage(dataUrl);
+  if (bytes == null) {
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('图片数据已损坏，无法显示')));
+    return;
+  }
   showDialog(
     context: context,
     builder: (_) => Dialog.fullscreen(
       backgroundColor: Colors.black,
       child: InteractiveViewer(
         maxScale: 4,
-        child: Center(child: Image.memory(_decodeImage(dataUrl))),
+        child: Center(child: Image.memory(bytes)),
       ),
     ),
   );
@@ -50,6 +65,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _inputController.addListener(() {
       final has = _inputController.text.trim().isNotEmpty;
       if (has != _hasText) setState(() => _hasText = has);
+    });
+    // 技能页点按快捷指令 → 预填输入框。
+    // 必须放在 initState：ref.listen 若在 build 里调用，每次重建都会新增一个
+    // 监听，且回调里立刻 ref.read().state = '' 会在 build 期间修改状态，
+    // 触发 Riverpod 的「build 期间不可修改 provider」断言。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.listen(prefillProvider, (prev, next) {
+        if (next.isNotEmpty) {
+          _inputController.text = next;
+          _inputController.selection =
+              TextSelection.collapsed(offset: next.length);
+          ref.read(prefillProvider.notifier).state = '';
+        }
+      });
     });
   }
 
@@ -160,16 +190,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // 技能页点按快捷指令 → 预填输入框
-    ref.listen(prefillProvider, (prev, next) {
-      if (next.isNotEmpty) {
-        _inputController.text = next;
-        _inputController.selection =
-            TextSelection.collapsed(offset: next.length);
-        ref.read(prefillProvider.notifier).state = '';
-      }
-    });
-
     final chat = ref.watch(chatProvider);
     final session = chat.activeSession;
 
@@ -300,8 +320,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     margin: const EdgeInsets.only(right: 8),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(10),
-                      child: Image.memory(_decodeImage(_pendingImages[i]),
-                          width: 56, height: 56, fit: BoxFit.cover),
+                      child: _PendingThumb(dataUrl: _pendingImages[i]),
                     ),
                   ),
                   Positioned(
@@ -335,6 +354,60 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
         const SizedBox(height: 72), // 给磨砂底导航留出空间
       ],
+    );
+  }
+}
+
+/// 待发送图片的缩略图；数据损坏时显示占位块而不是让整页崩掉。
+class _PendingThumb extends StatelessWidget {
+  const _PendingThumb({required this.dataUrl});
+
+  final String dataUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _decodeImage(dataUrl);
+    if (bytes == null) {
+      return Container(
+        width: 56,
+        height: 56,
+        color: Colors.black12,
+        child: const Icon(Icons.broken_image_outlined,
+            size: 22, color: Colors.black38),
+      );
+    }
+    return Image.memory(bytes, width: 56, height: 56, fit: BoxFit.cover);
+  }
+}
+
+/// 消息里的图片；解码失败时降级为占位块。
+class _MessageImage extends StatelessWidget {
+  const _MessageImage({required this.dataUrl});
+
+  final String dataUrl;
+
+  @override
+  Widget build(BuildContext context) {
+    final bytes = _decodeImage(dataUrl);
+    if (bytes == null) {
+      return Container(
+        width: 180,
+        height: 100,
+        color: Colors.white24,
+        child: const Icon(Icons.broken_image_outlined, color: Colors.white54),
+      );
+    }
+    return Image.memory(
+      bytes,
+      width: 180,
+      height: 180,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => Container(
+        width: 180,
+        height: 100,
+        color: Colors.white24,
+        child: const Icon(Icons.broken_image_outlined, color: Colors.white54),
+      ),
     );
   }
 }
@@ -442,19 +515,7 @@ class _MessageBubble extends StatelessWidget {
                     onTap: () => _showImageViewer(context, url),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(12),
-                      child: Image.memory(
-                        _decodeImage(url),
-                        width: 180,
-                        height: 180,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
-                          width: 180,
-                          height: 100,
-                          color: Colors.white24,
-                          child: const Icon(Icons.broken_image_outlined,
-                              color: Colors.white54),
-                        ),
-                      ),
+                      child: _MessageImage(dataUrl: url),
                     ),
                   ),
                 ),
@@ -617,7 +678,11 @@ class _InputBar extends StatelessWidget {
                 minLines: 1,
                 maxLines: 4,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (_) => (hasText || hasImages) ? onSend() : null,
+                // onSubmitted 的签名是 void Function(String)，不能返回 null；
+                // 这里显式分支，未就绪时什么都不做。
+                onSubmitted: (_) {
+                  if (hasText || hasImages) onSend();
+                },
                 decoration: InputDecoration(
                   hintText: '请在此输入任务',
                   hintStyle: TextStyle(
