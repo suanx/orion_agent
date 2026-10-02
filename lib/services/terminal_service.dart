@@ -173,6 +173,8 @@ class TerminalService {
   }
 
   /// 下载并解压 rootfs，随后修正执行权限、DNS 与包管理镜像。
+  /// 下载全部走国内：Alpine 用清华镜像；Debian 依次尝试国内 Docker 镜像代理，
+  /// 全部失败时才回退到 GitHub 发布页。
   Future<void> install(
     TerminalDistro d, {
     void Function(String progress)? onProgress,
@@ -184,8 +186,24 @@ class TerminalService {
 
     void report(String msg) => onProgress?.call(msg);
 
+    var isGz = spec.isGzip;
     report('下载 ${spec.displayName} 基础系统…');
-    await _dio.download(spec.downloadUrl, archivePath);
+    if (d == TerminalDistro.debian) {
+      var mirrorOk = false;
+      try {
+        await _downloadDebianFromMirror(report, archivePath);
+        isGz = true;
+        mirrorOk = true;
+      } catch (e) {
+        report('国内镜像不可用，改用备用源下载…');
+      }
+      if (!mirrorOk) {
+        await _dio.download(spec.downloadUrl, archivePath);
+        isGz = false;
+      }
+    } else {
+      await _dio.download(spec.downloadUrl, archivePath);
+    }
 
     report('解压 rootfs…');
     final rootfsHandle = Directory(rootfs);
@@ -194,7 +212,7 @@ class TerminalService {
 
     final compressed = File(archivePath).readAsBytesSync();
     List<int> tarBytes;
-    if (spec.isGzip) {
+    if (isGz) {
       tarBytes = GZipDecoder().decodeBytes(compressed);
     } else {
       tarBytes = XZDecoder().decodeBytes(compressed);
@@ -231,8 +249,75 @@ class TerminalService {
     report('完成');
   }
 
-  Future<void> _postConfigure(TerminalDistro d, String rootfs) async {
-    if (d == TerminalDistro.alpine) {
+  // ---------------- 国内镜像拉取（Debian） ----------------
+
+  /// 国内可匿名拉取的 Docker Registry 代理（依次尝试）。
+  static const dockerMirrors = <String>[
+    'https://docker.m.daocloud.io',
+    'https://docker.1ms.run',
+    'https://dockerproxy.net',
+  ];
+
+  Future<void> _downloadDebianFromMirror(
+      void Function(String) report, String savePath) async {
+    Object? lastError;
+    for (final base in dockerMirrors) {
+      try {
+        report('尝试镜像 $base …');
+        await _pullDockerLayer(base, savePath);
+        report('镜像下载完成');
+        return;
+      } catch (e) {
+        lastError = e;
+        report('镜像不可用（${e.toString().replaceFirst('Exception: ', '')}）');
+      }
+    }
+    throw Exception('全部国内镜像拉取失败：$lastError');
+  }
+
+  /// Docker Registry v2 匿名拉取 library/debian:bookworm-slim 的根层。
+  Future<void> _pullDockerLayer(String base, String savePath) async {
+    const manifestAccept = 'application/vnd.docker.distribution.manifest.v2+json,'
+        'application/vnd.oci.image.manifest.v1+json';
+
+    // ping，取认证方式（有则匿名换 token）
+    final ping = await _dio.get<dynamic>('$base/v2/',
+        options: Options(
+            validateStatus: (s) => s != null && s < 500,
+            responseType: ResponseType.plain));
+    String? token;
+    final www = ping.headers.value('www-authenticate') ?? '';
+    final realm = RegExp('realm="([^"]+)"').firstMatch(www)?.group(1);
+    if (realm != null) {
+      final service = RegExp('service="([^"]+)"').firstMatch(www)?.group(1) ??
+          'registry.docker.io';
+      final tr = await _dio.get<Map<String, dynamic>>(realm, queryParameters: {
+        'service': service,
+        'scope': 'repository:library/debian:pull',
+      });
+      token = (tr.data?['token'] ?? tr.data?['access_token']) as String?;
+    }
+
+    // manifest → 根层 digest
+    final manifest = await _dio.get<Map<String, dynamic>>(
+      '$base/v2/library/debian/manifests/bookworm-slim',
+      options: Options(headers: {
+        if (token != null) 'Authorization': 'Bearer $token',
+        'Accept': manifestAccept,
+      }),
+    );
+    final layers = manifest.data?['layers'] as List? ?? const [];
+    final digest =
+        layers.isEmpty ? null : (layers.first as Map)['digest'] as String?;
+    if (digest == null) throw Exception('manifest 中无层信息');
+
+    await _dio.download('$base/v2/library/debian/blobs/$digest', savePath,
+        options: Options(headers: {
+          if (token != null) 'Authorization': 'Bearer $token',
+        }));
+  }
+
+  Future<void> _postConfigure(TerminalDistro d, String rootfs) async {    if (d == TerminalDistro.alpine) {
       File('$rootfs/etc/resolv.conf')
           .writeAsStringSync('nameserver 223.5.5.5\nnameserver 119.29.29.29\n');
       File('$rootfs/etc/apk/repositories').writeAsStringSync(

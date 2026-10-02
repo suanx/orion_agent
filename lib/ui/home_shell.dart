@@ -4,8 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import '../services/terminal_service.dart';
 import 'chat_screen.dart';
 import 'sessions_drawer.dart';
+import 'setup_screen.dart';
 import 'skills_screen.dart';
 import 'profile_screen.dart';
 import 'tasks_screen.dart';
@@ -24,6 +26,33 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   static const _navHeight = 64.0;
 
   void _goChat() => setState(() => _tab = 0);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeShowSetup());
+  }
+
+  /// 首次运行：检测终端环境，全部缺失时引导到下载向导页。
+  Future<void> _maybeShowSetup() async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    if (prefs.getBool('terminal_setup_done') ?? false) return;
+    try {
+      final term = ref.read(terminalServiceProvider);
+      var anyInstalled = false;
+      for (final d in TerminalDistro.values) {
+        if (await term.isInstalled(d)) anyInstalled = true;
+      }
+      if (!anyInstalled && mounted) {
+        await Navigator.of(context).push(
+            MaterialPageRoute(builder: (_) => const SetupScreen()));
+      }
+    } catch (_) {
+      // 检测异常不阻塞应用使用
+    } finally {
+      await prefs.setBool('terminal_setup_done', true);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

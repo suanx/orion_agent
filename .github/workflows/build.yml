@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+# 发布 terminal-env Release（Debian rootfs）需要写权限
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
