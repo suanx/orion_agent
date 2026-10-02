@@ -216,11 +216,13 @@ jobs:
           RC=${PIPESTATUS[0]}
           if [ "$RC" -ne 0 ]; then
             echo "::error ::flutter build apk 退出码 $RC"
-            # Gradle 失败时关键行通常含这些关键字
-            grep -nE 'FAILURE:|What went wrong:|error:|Error:|Caused by:|Could not|Exception|^\* Try|Execution failed' /tmp/build.txt \
-              | head -40 | awk '{printf "::error ::%s\n", $0}'
-            echo "::error ::--- 末尾 40 行 ---"
-            tail -40 /tmp/build.txt | awk '{printf "::error ::%s\n", $0}'
+            # Kotlin/Gradle 编译错误的关键行：e:/w: 前缀、What went wrong、
+            // Execution failed、Caused by 等
+            grep -nE '^(e|w): |error:|^e: |What went wrong|Execution failed|Caused by|FAILURE:|\* Try|Compilation error' /tmp/build.txt \
+              | head -50 | awk '{printf "::error ::%s\n", $0}'
+            echo "::error ::--- What went wrong 段落 ---"
+            awk '/What went wrong/{f=1} f{print; n++} n>25{exit}' /tmp/build.txt \
+              | awk '{printf "::error ::%s\n", $0}'
           fi
           exit "$RC"
 
