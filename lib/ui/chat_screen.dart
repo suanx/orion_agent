@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../models/chat_message.dart';
 import '../providers/providers.dart';
+import '../services/skill_service.dart';
 
 Uint8List _decodeImage(String dataUrl) {
   final b64 = dataUrl.contains(',') ? dataUrl.split(',')[1] : dataUrl;
@@ -61,7 +62,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _send() {
-    final text = _inputController.text.trim();
+    var text = _inputController.text.trim();
+    if (text.isEmpty && _pendingImages.isEmpty) return;
+
+    // 「/技能名 参数」展开为技能提示词模板
+    if (text.startsWith('/')) {
+      final body = text.substring(1);
+      final spaceIdx = body.indexOf(' ');
+      final name = spaceIdx == -1 ? body : body.substring(0, spaceIdx);
+      final args = spaceIdx == -1 ? '' : body.substring(spaceIdx + 1);
+      final skill = ref.read(skillServiceProvider).findByName(name);
+      if (skill == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('未找到技能「$name」，可在技能页创建')));
+        return;
+      }
+      text = SkillService.expand(skill, args);
+    }
+
     if (text.isEmpty && _pendingImages.isEmpty) return;
     final images = List<String>.of(_pendingImages);
     _inputController.clear();
@@ -143,6 +161,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 技能页点按快捷指令 → 预填输入框
+    ref.listen(prefillProvider, (prev, next) {
+      if (next.isNotEmpty) {
+        _inputController.text = next;
+        _inputController.selection =
+            TextSelection.collapsed(offset: next.length);
+        ref.read(prefillProvider.notifier).state = '';
+      }
+    });
+
     final chat = ref.watch(chatProvider);
     final session = chat.activeSession;
 

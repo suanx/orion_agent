@@ -66,9 +66,10 @@ class AgentOrchestrator {
     required List<ChatMessage> history,
     CancelToken? cancelToken,
     List<RagHit> knowledge = const [],
+    String persona = '',
   }) async* {
     final messages = <Map<String, dynamic>>[
-      {'role': 'system', 'content': _systemPrompt(knowledge)},
+      {'role': 'system', 'content': _systemPrompt(knowledge, persona)},
       ...history.map((m) => m.toApiJson()),
     ];
 
@@ -123,8 +124,12 @@ class AgentOrchestrator {
     yield const AgentFailure('已达最大工具调用轮数（$_maxSteps），任务中止。');
   }
 
-  String _systemPrompt(List<RagHit> knowledge) {
+  String _systemPrompt(List<RagHit> knowledge, String persona) {
     final mem = _memory.memoryPrompt();
+    var p = '';
+    if (persona.trim().isNotEmpty) {
+      p = '\n你当前的角色设定：${persona.trim()}';
+    }
     var kb = '';
     if (knowledge.isNotEmpty) {
       final buf = StringBuffer();
@@ -143,7 +148,7 @@ class AgentOrchestrator {
         '2. 得到工具结果后，用自然语言总结回答，不要原样粘贴原始数据。\n'
         '3. 使用与用户相同的语言回答（默认中文）。\n'
         '4. 回答力求准确、简洁。\n'
-        '当前日期：${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日。$mem$kb';
+        '当前日期：${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日。$p$mem$kb';
   }
 
   String _dioError(DioException e) {

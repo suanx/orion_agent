@@ -35,7 +35,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         children: [
           ChatScreen(onJumpToTab: _goChat),
           const TasksScreen(),
-          SkillsScreen(onUseSkill: _goChat),
+          SkillsScreen(onUseSkill: (text) {
+            if (text.isNotEmpty) {
+              ref.read(prefillProvider.notifier).state = text;
+            }
+            _goChat();
+          }),
           const ProfileScreen(),
         ],
       ),

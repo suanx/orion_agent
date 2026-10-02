@@ -68,7 +68,7 @@ class RagService {
       throw Exception('Embedding 返回数量（${embeddings.length}）与分块数量（${parts.length}）不一致');
     }
 
-    final id = 'doc_${DateTime.now().millisecondsSinceEpoch}';
+    final id = uniqueId('doc');
     final now = DateTime.now().millisecondsSinceEpoch;
     await _db.transaction(() async {
       await _db.into(_db.knowledgeDocs).insert(KnowledgeDocsCompanion(

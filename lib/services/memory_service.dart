@@ -34,7 +34,7 @@ class MemoryService {
   Future<void> addNote(String text) async {
     await load();
     final note = MemoryNote(
-      id: 'mem_${DateTime.now().millisecondsSinceEpoch}',
+      id: uniqueId('mem'),
       text: text,
       createdAt: DateTime.now(),
     );

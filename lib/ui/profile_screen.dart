@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/providers.dart';
 import 'knowledge_screen.dart';
 import 'memory_screen.dart';
+import 'roles_screen.dart';
 import 'settings_screen.dart';
 
 /// 我的 Tab：Marvis 风格的分组白卡片列表。
@@ -120,6 +121,13 @@ class ProfileScreen extends ConsumerWidget {
             trailing: () => const Icon(Icons.chevron_right_rounded),
             onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const KnowledgeScreen())),
+          ),
+          _CardItem(
+            icon: Icons.face_retouching_natural_rounded,
+            title: 'Agent 角色',
+            trailing: () => const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const RolesScreen())),
           ),
         ]),
         const SizedBox(height: 12),

@@ -13,6 +13,8 @@ import '../services/database.dart';
 import '../services/llm_client.dart';
 import '../services/memory_service.dart';
 import '../services/rag_service.dart';
+import '../services/role_service.dart';
+import '../services/skill_service.dart';
 import '../services/storage_service.dart';
 import '../services/tools.dart';
 import '../services/voice_service.dart';
@@ -66,6 +68,20 @@ final orchestratorProvider = Provider<AgentOrchestrator>((ref) => AgentOrchestra
     ));
 
 final voiceProvider = Provider<VoiceService>((ref) => VoiceService());
+
+final skillServiceProvider =
+    Provider<SkillService>((ref) => SkillService(ref.watch(databaseProvider)));
+
+final roleServiceProvider =
+    Provider<RoleService>((ref) => RoleService(ref.watch(databaseProvider)));
+
+/// 当前激活的 Agent 角色 id（'' = 默认助手）。
+final activeRoleIdProvider = StateProvider<String>((ref) {
+  return ref.watch(sharedPreferencesProvider).getString('active_role_id') ?? '';
+});
+
+/// 技能页 → 聊天输入框的预填文本（用后即清）。
+final prefillProvider = StateProvider<String>((ref) => '');
 
 // ---------------- 模型配置 ----------------
 
@@ -221,6 +237,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     required LlmClient llm,
     required VoiceService voice,
     required bool Function() ttsEnabled,
+    required String Function() getPersona,
     required LlmConfig? Function() getConfig,
   })  : _storage = storage,
         _orchestrator = orchestrator,
@@ -228,6 +245,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _llm = llm,
         _voice = voice,
         _ttsEnabled = ttsEnabled,
+        _getPersona = getPersona,
         _getConfig = getConfig,
         super(ChatState(
           sessions: initialSessions,
@@ -240,6 +258,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final LlmClient _llm;
   final VoiceService _voice;
   final bool Function() _ttsEnabled;
+  final String Function() _getPersona;
   final LlmConfig? Function() _getConfig;
 
   CancelToken? _cancelToken;
@@ -347,6 +366,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         history: history,
         cancelToken: _cancelToken,
         knowledge: knowledge,
+        persona: _getPersona(),
       )) {
         if (ev is AgentDelta) {
           buf.write(ev.delta);
@@ -403,6 +423,10 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     voice: ref.watch(voiceProvider),
     ttsEnabled: () =>
         ref.read(sharedPreferencesProvider).getBool('tts_enabled') ?? false,
+    getPersona: () {
+      final id = ref.read(activeRoleIdProvider);
+      return ref.read(roleServiceProvider).promptOf(id) ?? '';
+    },
     getConfig: () => ref.read(configProvider).activeConfig,
   );
 });

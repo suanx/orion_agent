@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'providers/providers.dart';
 import 'services/database.dart';
 import 'services/memory_service.dart';
+import 'services/role_service.dart';
+import 'services/skill_service.dart';
 import 'services/storage_service.dart';
 import 'ui/home_shell.dart';
 
@@ -16,6 +18,10 @@ Future<void> main() async {
   final sessions = await StorageService(db).loadSessions();
   final memory = MemoryService(db);
   await memory.load();
+  final skills = SkillService(db);
+  await skills.load();
+  final roles = RoleService(db);
+  await roles.load();
 
   runApp(ProviderScope(
     overrides: [
@@ -23,6 +29,8 @@ Future<void> main() async {
       initialSessionsProvider.overrideWithValue(sessions),
       databaseProvider.overrideWithValue(db),
       memoryServiceProvider.overrideWithValue(memory),
+      skillServiceProvider.overrideWithValue(skills),
+      roleServiceProvider.overrideWithValue(roles),
     ],
     child: const PocketAgentApp(),
   ));

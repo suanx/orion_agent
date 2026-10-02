@@ -64,15 +64,44 @@ class KnowledgeChunks extends Table {
   TextColumn get embeddingJson => text()();
 }
 
-@DriftDatabase(
-    tables: [SessionRows, MessageRows, MemoryNoteRows, KnowledgeDocs, KnowledgeChunks])
+/// 快捷指令（技能）：提示词模板，聊天输入 /名称 触发。
+class SkillItems extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get template => text()();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Agent 角色（人设）：可切换的 system prompt 附加设定。
+class AgentRoles extends Table {
+  TextColumn get id => text()();
+  TextColumn get name => text()();
+  TextColumn get prompt => text()();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+@DriftDatabase(tables: [
+  SessionRows,
+  MessageRows,
+  MemoryNoteRows,
+  KnowledgeDocs,
+  KnowledgeChunks,
+  SkillItems,
+  AgentRoles,
+])
 class AppDatabase extends _$AppDatabase {
   /// 生产环境不传 executor；测试注入 NativeDatabase.memory()。
   AppDatabase([QueryExecutor? executor])
       : super(executor ?? driftDatabase(name: 'pocket_agent'));
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -84,11 +113,21 @@ class AppDatabase extends _$AppDatabase {
           if (from < 3) {
             await m.addColumn(messageRows, messageRows.imagesJson);
           }
+          if (from < 4) {
+            await m.createTable(skillItems);
+            await m.createTable(agentRoles);
+          }
         },
       );
 }
 
 // ---------------- 行 ↔ 领域模型映射 ----------------
+
+int _idSeq = 0;
+
+/// 生成唯一 id：时间戳 + 进程内自增序号，避免同毫秒内主键冲突。
+String uniqueId(String prefix) =>
+    '${prefix}_${DateTime.now().millisecondsSinceEpoch}_${++_idSeq}';
 
 String encodeToolCalls(List<ToolCall> calls) =>
     jsonEncode(calls.map((t) => t.toJson()).toList());
