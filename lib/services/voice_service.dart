@@ -313,9 +313,10 @@ class VoiceService {
   Future<void> _speakSystem(String plain, double rate, double volume) async {
     try {
       await _tts.setLanguage('zh-CN');
-      // flutter_tts 的 rate 是 0.0~1.0 平台相关量，0.5 约等于正常语速
-      await _tts.setSpeechRate((0.5 * rate).clamp(0.05, 1.0));
-      await _tts.setVolume(volume.clamp(0.0, 1.0));
+      // flutter_tts 的 rate 是 0.0~1.0 平台相关量，0.5 约等于正常语速。
+      // clamp 在 double 上返回 num，需 toDouble() 才能匹配 setSpeechRate(double)。
+      await _tts.setSpeechRate((0.5 * rate).clamp(0.05, 1.0).toDouble());
+      await _tts.setVolume(volume.clamp(0.0, 1.0).toDouble());
       await _tts.stop();
       await _tts.speak(plain);
     } catch (_) {}

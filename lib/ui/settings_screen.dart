@@ -206,7 +206,8 @@ class _TtsSettingsCardState extends ConsumerState<_TtsSettingsCard> {
           ],
         ),
         Slider(
-          value: value.clamp(min, max),
+          // clamp 在 double 上返回 num，需显式转回 double（Slider.value 要求 double）
+          value: value.clamp(min, max).toDouble(),
           min: min,
           max: max,
           divisions: divisions,

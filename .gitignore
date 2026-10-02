@@ -5,6 +5,9 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 
+# 依赖在 CI 中统一 pub get 解析；不跟踪 lock，避免本地/CI 版本不一致导致求解冲突
+pubspec.lock
+
 # IDE
 .idea/
 .vscode/
