@@ -208,7 +208,21 @@ jobs:
           exit "$RC"
 
       - name: Build APK
-        run: flutter build apk --release --target-platform android-arm64
+        # 同样把失败明细以 annotation 暴露（job log 无权限查看）
+        run: |
+          set +e
+          flutter build apk --release --target-platform android-arm64 2>&1 \
+            | tee /tmp/build.txt
+          RC=${PIPESTATUS[0]}
+          if [ "$RC" -ne 0 ]; then
+            echo "::error ::flutter build apk 退出码 $RC"
+            # Gradle 失败时关键行通常含这些关键字
+            grep -nE 'FAILURE:|What went wrong:|error:|Error:|Caused by:|Could not|Exception|^\* Try|Execution failed' /tmp/build.txt \
+              | head -40 | awk '{printf "::error ::%s\n", $0}'
+            echo "::error ::--- 末尾 40 行 ---"
+            tail -40 /tmp/build.txt | awk '{printf "::error ::%s\n", $0}'
+          fi
+          exit "$RC"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
