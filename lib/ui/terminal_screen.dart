@@ -17,13 +17,11 @@ const _toolChecks = <_ToolCheck>[
   _ToolCheck('npm', 'Node.js 包管理器', 'npm --version'),
   _ToolCheck('git', 'Git 版本控制', 'git --version'),
   _ToolCheck('python', 'Python 解释器', 'python3 --version'),
+  _ToolCheck('uv', 'Python 项目与包工具', 'uv --version'),
   _ToolCheck('pip', 'Python 包安装器', 'pip3 --version'),
+  _ToolCheck('opencode', 'OpenCode CLI（内置 ACP 支持）', 'opencode --version'),
   _ToolCheck('ssh', 'SSH 客户端', 'ssh -V'),
-];
-
-const _alpinePackages = ['nodejs', 'npm', 'git', 'python3', 'py3-pip', 'openssh', 'sshpass'];
-const _debianPackages = [
-  'nodejs', 'npm', 'git', 'python3', 'python3-pip', 'openssh-client', 'sshpass',
+  _ToolCheck('sshd', 'OpenSSH 服务器', 'test -x /usr/sbin/sshd && echo ready'),
 ];
 
 /// 终端环境页：Alpine/Debian 双发行版，安装、组件检测、命令控制台。
@@ -122,13 +120,11 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
 
   Future<void> _installMissing() async {
     setState(() => _busy = true);
-    final cmd = _distro == TerminalDistro.alpine
-        ? TerminalService.alpineInstallCommand(_alpinePackages)
-        : TerminalService.debianInstallCommand(_debianPackages);
+    final cmd = TerminalService.installScriptFor(_distro);
     _appendLog(cmd);
     try {
-      final r = await _terminal.runOn(_distro, '$cmd 2>&1 | tail -5',
-          timeout: const Duration(minutes: 15));
+      final r = await _terminal.runOn(_distro, '$cmd 2>&1 | tail -8',
+          timeout: const Duration(minutes: 20));
       _appendLog(r.output.trim().isEmpty ? '完成' : r.output.trim());
       _appendLog('安装结束，重新检测…');
       await _checkTools();

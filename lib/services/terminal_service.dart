@@ -55,17 +55,34 @@ class TerminalService {
 
   static const _tuna = 'https://mirrors.tuna.tsinghua.edu.cn';
 
-  /// 各发行版一键安装组件的包管理命令（纯函数，便于测试）。
-  static String alpineInstallCommand(List<String> pkgs) =>
-      'apk add --no-cache ${pkgs.join(' ')}';
+  /// 组件全集（打叉的 agent CLI——codex/Claude Code/DeepSeek/Kimi——不装）。
+  static const alpinePackages = [
+    'nodejs', 'npm', 'git', 'python3', 'py3-pip', 'uv', 'openssh', 'sshpass',
+  ];
+  static const debianPackages = [
+    'nodejs', 'npm', 'git', 'python3', 'python3-pip',
+    'openssh-client', 'openssh-server', 'sshpass', 'ca-certificates', 'curl',
+  ];
 
-  static String debianInstallCommand(List<String> pkgs) =>
-      'apt-get update -qq && apt-get install -y --no-install-recommends ${pkgs.join(' ')}';
+  static const npmMirror = 'https://registry.npmmirror.com';
 
-  static String installCommandFor(TerminalDistro d, List<String> pkgs) =>
+  /// 一键安装脚本：系统包 + uv(Debian 走 pip) + OpenCode(npm，走国内镜像)。
+  static String alpineInstallScript() =>
+      'apk add --no-cache ${alpinePackages.join(' ')} && '
+      'npm config set -g registry $npmMirror && '
+      'npm install -g opencode-ai';
+
+  static String debianInstallScript() =>
+      'apt-get update -qq && '
+      'apt-get install -y --no-install-recommends ${debianPackages.join(' ')} && '
+      'pip3 install --break-system-packages uv && '
+      'npm config set -g registry $npmMirror && '
+      'npm install -g opencode-ai';
+
+  static String installScriptFor(TerminalDistro d) =>
       d == TerminalDistro.alpine
-          ? alpineInstallCommand(pkgs)
-          : debianInstallCommand(pkgs);
+          ? alpineInstallScript()
+          : debianInstallScript();
 
   final Dio _dio;
   String? _nativeLibDir;

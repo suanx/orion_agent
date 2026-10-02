@@ -15,17 +15,22 @@ void main() {
     expect(empty.versionLine, isNull);
   });
 
-  test('双发行版的一键安装命令', () {
-    expect(TerminalService.alpineInstallCommand(['nodejs', 'git']),
-        'apk add --no-cache nodejs git');
-    expect(
-        TerminalService.debianInstallCommand(['nodejs', 'git']),
-        'apt-get update -qq && '
-        'apt-get install -y --no-install-recommends nodejs git');
-    expect(TerminalService.installCommandFor(TerminalDistro.alpine, ['vim']),
-        'apk add --no-cache vim');
-    expect(TerminalService.installCommandFor(TerminalDistro.debian, ['vim']),
-        contains('apt-get install'));
+  test('一键安装脚本包含全部需要的组件', () {
+    final alpine = TerminalService.installScriptFor(TerminalDistro.alpine);
+    expect(alpine, startsWith('apk add --no-cache'));
+    for (final pkg in ['nodejs', 'npm', 'git', 'python3', 'uv', 'openssh', 'sshpass']) {
+      expect(alpine, contains(pkg), reason: 'Alpine 缺少 $pkg');
+    }
+    expect(alpine, contains('opencode-ai'));
+    expect(alpine, contains('npmmirror')); // npm 走国内镜像
+
+    final debian = TerminalService.installScriptFor(TerminalDistro.debian);
+    expect(debian, startsWith('apt-get update'));
+    for (final pkg in ['nodejs', 'git', 'python3-pip', 'openssh-server', 'sshpass']) {
+      expect(debian, contains(pkg), reason: 'Debian 缺少 $pkg');
+    }
+    expect(debian, contains('pip3 install --break-system-packages uv'));
+    expect(debian, contains('opencode-ai'));
   });
 
   test('发行版定义完整', () {
