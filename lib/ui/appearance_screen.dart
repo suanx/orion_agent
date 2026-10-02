@@ -80,7 +80,11 @@ class AppearanceScreen extends ConsumerWidget {
                 ],
                 selected: {ref.watch(themeModeProvider).name},
                 showSelectedIcon: false,
-                onSelectionChanged: (s) => pickMode(s.first),
+                // 空集合时忽略，避免 s.first 抛 StateError
+                onSelectionChanged: (s) {
+                  if (s.isEmpty) return;
+                  pickMode(s.first);
+                },
               ),
             ),
           ),

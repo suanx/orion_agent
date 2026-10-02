@@ -46,7 +46,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   @override
   void initState() {
     super.initState();
-    _distro = TerminalService.specs.keys.first;
+    // specs 理论上非空，但 keys.first 在空 map 上会抛 StateError，这里兜底
+    final keys = TerminalService.specs.keys;
+    _distro = keys.isEmpty ? TerminalDistro.alpine : keys.first;
     _restoreDistroAndRefresh();
   }
 
@@ -170,7 +172,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                       ),
                   ],
                   selected: {_distro},
-                  onSelectionChanged: (s) => _switchDistro(s.first),
+                  onSelectionChanged: (s) {
+                    if (s.isEmpty) return;
+                    _switchDistro(s.first);
+                  },
                 ),
                 const SizedBox(height: 10),
                 Text(
@@ -465,7 +470,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                         label: Text(TerminalService.specOf(d).displayName)),
                 ],
                 selected: {distro},
-                onSelectionChanged: (s) => setDialog(() => distro = s.first),
+                onSelectionChanged: (s) {
+                  if (s.isEmpty) return;
+                  setDialog(() => distro = s.first);
+                },
               ),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,

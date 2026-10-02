@@ -98,7 +98,10 @@ class _TtsSettingsCardState extends ConsumerState<_TtsSettingsCard> {
                   ],
                   selected: {engine},
                   showSelectedIcon: false,
+                  // SegmentedButton 在某些交互下会给出空集合，直接 s.first 会抛
+                  // StateError；空集合时忽略本次变更，保留原选择。
                   onSelectionChanged: (s) {
+                    if (s.isEmpty) return;
                     prefs.setString('tts_engine', s.first.name);
                     ref.read(ttsEngineProvider.notifier).state = s.first;
                   },
