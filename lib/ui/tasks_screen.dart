@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 
 /// 任务 Tab（M3 功能的占位页，风格与设计稿一致）。
@@ -38,9 +39,9 @@ class TasksScreen extends StatelessWidget {
                     Text('我的手机',
                         style: TextStyle(
                             fontSize: 13,
-                            color: Colors.black.withOpacity(0.4))),
+                            color: onSurface(context, 0.4))),
                     Icon(Icons.keyboard_arrow_down_rounded,
-                        size: 16, color: Colors.black.withOpacity(0.4)),
+                        size: 16, color: onSurface(context, 0.4)),
                   ],
                 ),
               ],
@@ -63,17 +64,17 @@ class TasksScreen extends StatelessWidget {
                   padding:
                       const EdgeInsets.symmetric(horizontal: 28, vertical: 15),
                   decoration: BoxDecoration(
-                    color: Colors.black,
+                    color: Theme.of(context).colorScheme.primary,
                     borderRadius: BorderRadius.circular(28),
                   ),
-                  child: const Row(
+                  child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.add_rounded, color: Colors.white, size: 20),
+                      Icon(Icons.add_rounded, color: Theme.of(context).colorScheme.onPrimary, size: 20),
                       SizedBox(width: 6),
                       Text('新建自动任务',
                           style: TextStyle(
-                              color: Colors.white,
+                              color: Theme.of(context).colorScheme.onPrimary,
                               fontSize: 16,
                               fontWeight: FontWeight.w700)),
                     ],
@@ -93,7 +94,7 @@ class TasksScreen extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 16, vertical: 16),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: surface(context),
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: Row(
@@ -109,7 +110,7 @@ class TasksScreen extends StatelessWidget {
                               Text('非定时',
                                   style: TextStyle(
                                       fontSize: 13,
-                                      color: Colors.black.withOpacity(0.35))),
+                                      color: onSurface(context, 0.35))),
                             ],
                           ),
                         ),

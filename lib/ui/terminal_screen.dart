@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -180,7 +181,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                   style: TextStyle(
                       fontSize: 12,
                       height: 1.4,
-                      color: Colors.black.withOpacity(0.45)),
+                      color: onSurface(context, 0.45)),
                 ),
                 const SizedBox(height: 12),
                 Wrap(
@@ -230,7 +231,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                                 Text(t.description,
                                     style: TextStyle(
                                         fontSize: 11,
-                                        color: Colors.black.withOpacity(0.4))),
+                                        color: onSurface(context, 0.4))),
                               ],
                             ),
                           ),
@@ -292,7 +293,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                           style: TextStyle(
                               fontFamily: 'monospace',
                               fontSize: 11,
-                              color: Colors.black.withOpacity(0.55))),
+                              color: onSurface(context, 0.55))),
                       const SizedBox(height: 4),
                       Text('已挂载到环境内的 /workspace，与命令控制台、'
                           'Agent 的 run_command 看到同一份文件。'
@@ -300,7 +301,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                           style: TextStyle(
                               fontSize: 12,
                               height: 1.4,
-                              color: Colors.black.withOpacity(0.45))),
+                              color: onSurface(context, 0.45))),
                     ],
                   );
                 },
@@ -317,7 +318,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                       fontFamily: 'monospace',
                       fontSize: 11,
                       height: 1.4,
-                      color: Colors.black.withOpacity(0.65)),
+                      color: onSurface(context, 0.65)),
                 ),
               ),
             ),
@@ -349,7 +350,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
               style: TextStyle(
                   fontSize: 12,
                   height: 1.4,
-                  color: Colors.black.withOpacity(0.45))),
+                  color: onSurface(context, 0.45))),
           const SizedBox(height: 10),
           FilledButton.tonalIcon(
             onPressed: _busy ? null : () => _editTask(null),
@@ -372,7 +373,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
               size: 14,
               color: _terminal.isTaskRunning(t.name)
                   ? const Color(0xFF137333)
-                  : Colors.black26,
+                  : onSurface(context, 0.26),
             ),
             title: Text(t.name,
                 style: const TextStyle(
@@ -384,7 +385,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                     fontFamily: 'monospace',
                     fontSize: 11,
                     height: 1.3,
-                    color: Colors.black.withOpacity(0.4))),
+                    color: onSurface(context, 0.4))),
             isThreeLine: true,
             onTap: () => _editTask(t),
             trailing: Row(
@@ -508,14 +509,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             style: TextStyle(
                 fontSize: 13,
                 fontWeight: FontWeight.w600,
-                color: Colors.black.withOpacity(0.4))),
+                color: onSurface(context, 0.4))),
       );
 
   Widget _card(Widget child) => Container(
         width: double.infinity,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: surface(context),
           borderRadius: BorderRadius.circular(20),
         ),
         child: child,
@@ -527,7 +528,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: !checked
-            ? Colors.black.withOpacity(0.05)
+            ? onSurface(context, 0.05)
             : (ready ? const Color(0xFFE6F4EA) : const Color(0xFFFCE8E6)),
         borderRadius: BorderRadius.circular(8),
       ),
@@ -537,7 +538,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
           fontSize: 12,
           fontWeight: FontWeight.w600,
           color: !checked
-              ? Colors.black45
+              ? onSurface(context, 0.45)
               : (ready ? const Color(0xFF137333) : const Color(0xFFC5221F)),
         ),
       ),

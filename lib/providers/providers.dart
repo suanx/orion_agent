@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -89,6 +90,18 @@ final prefillProvider = StateProvider<String>((ref) => '');
 /// 当前主题配色 id（持久化在 shared_preferences，默认经典黑）。
 final themeProvider = StateProvider<String>((ref) {
   return ref.watch(sharedPreferencesProvider).getString('theme_id') ?? 'classic';
+});
+
+/// 主题明暗模式：跟随系统 / 浅色 / 深色（持久化，默认跟随系统）。
+final themeModeProvider = StateProvider<ThemeMode>((ref) {
+  switch (ref.watch(sharedPreferencesProvider).getString('theme_mode')) {
+    case 'light':
+      return ThemeMode.light;
+    case 'dark':
+      return ThemeMode.dark;
+    default:
+      return ThemeMode.system;
+  }
 });
 
 final mcpServiceProvider = Provider<McpService>((ref) =>

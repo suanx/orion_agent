@@ -1,8 +1,8 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
-import '../theme.dart';
 import 'knowledge_screen.dart';
 import 'mcp_screen.dart';
 import 'memory_screen.dart';
@@ -26,6 +26,12 @@ class ProfileScreen extends ConsumerWidget {
       ref.read(themeProvider.notifier).state = id;
     }
 
+    void pickMode(String mode) {
+      prefs.setString('theme_mode', mode);
+      ref.read(themeModeProvider.notifier).state =
+          mode == 'light' ? ThemeMode.light : (mode == 'dark' ? ThemeMode.dark : ThemeMode.system);
+    }
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
       children: [
@@ -37,30 +43,44 @@ class ProfileScreen extends ConsumerWidget {
             padding:
                 const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: surface(context),
               borderRadius: BorderRadius.circular(20),
             ),
-            child: Row(
+            child: Column(
               children: [
-                const Text('主题配色',
-                    style: TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w600)),
-                const Spacer(),
-                for (final t in appThemes)
-                  GestureDetector(
-                    onTap: () => pickTheme(t.id),
-                    child: Container(
-                      margin: const EdgeInsets.only(left: 10),
-                      width: 28,
-                      height: 28,
-                      decoration:
-                          BoxDecoration(color: t.primary, shape: BoxShape.circle),
-                      child: currentTheme == t.id
-                          ? const Icon(Icons.check_rounded,
-                              size: 16, color: Colors.white)
-                          : null,
-                    ),
-                  ),
+                Row(
+                  children: [
+                    const Text('主题配色',
+                        style: TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600)),
+                    const Spacer(),
+                    for (final t in appThemes)
+                      GestureDetector(
+                        onTap: () => pickTheme(t.id),
+                        child: Container(
+                          margin: const EdgeInsets.only(left: 10),
+                          width: 28,
+                          height: 28,
+                          decoration: BoxDecoration(
+                              color: t.primary, shape: BoxShape.circle),
+                          child: currentTheme == t.id
+                              ? const Icon(Icons.check_rounded,
+                                  size: 16, color: Colors.white)
+                              : null,
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SegmentedButton<String>(
+                  segments: const [
+                    ButtonSegment(value: 'system', label: Text('跟随系统')),
+                    ButtonSegment(value: 'light', label: Text('浅色')),
+                    ButtonSegment(value: 'dark', label: Text('深色')),
+                  ],
+                  selected: {ref.watch(themeModeProvider).name},
+                  onSelectionChanged: (s) => pickMode(s.first),
+                ),
               ],
             ),
           ),
@@ -69,7 +89,7 @@ class ProfileScreen extends ConsumerWidget {
         Container(
           padding: const EdgeInsets.all(18),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: surface(context),
             borderRadius: BorderRadius.circular(20),
           ),
           child: Row(
@@ -92,7 +112,7 @@ class ProfileScreen extends ConsumerWidget {
                         style: TextStyle(
                             fontSize: 13,
                             height: 1.4,
-                            color: Colors.black.withOpacity(0.55))),
+                            color: onSurface(context, 0.55))),
                     const SizedBox(height: 10),
                     Wrap(
                       spacing: 6,
@@ -101,7 +121,7 @@ class ProfileScreen extends ConsumerWidget {
                                 padding: const EdgeInsets.symmetric(
                                     horizontal: 10, vertical: 4),
                                 decoration: BoxDecoration(
-                                  color: Colors.black.withOpacity(0.05),
+                                  color: onSurface(context, 0.05),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Text(t,
@@ -132,7 +152,7 @@ class ProfileScreen extends ConsumerWidget {
             title: '长期记忆',
             trailing: () => Text('${memory.notes.length} 条',
                 style: TextStyle(
-                    fontSize: 13, color: Colors.black.withOpacity(0.4))),
+                    fontSize: 13, color: onSurface(context, 0.4))),
             onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const MemoryScreen())),
           ),
@@ -173,7 +193,7 @@ class ProfileScreen extends ConsumerWidget {
             title: '关于',
             trailing: () => Text('V0.1.0',
                 style: TextStyle(
-                    fontSize: 13, color: Colors.black.withOpacity(0.4))),
+                    fontSize: 13, color: onSurface(context, 0.4))),
             onTap: () => ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                     content: Text('Pocket Agent V0.1.0 · Flutter 构建'))),
@@ -208,7 +228,7 @@ class ProfileScreen extends ConsumerWidget {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: surface(context),
               borderRadius: BorderRadius.circular(20),
             ),
             child: const Text(
@@ -251,7 +271,7 @@ class _CardGroup extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: surface(context),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Column(
@@ -261,7 +281,7 @@ class _CardGroup extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 56),
                 child: Divider(
-                    height: 1, color: Colors.black.withOpacity(0.06)),
+                    height: 1, color: onSurface(context, 0.06)),
               ),
             InkWell(
               borderRadius: i == 0
@@ -290,14 +310,14 @@ class _CardGroup extends StatelessWidget {
                                 style: TextStyle(
                                     fontSize: 12,
                                     height: 1.3,
-                                    color: Colors.black.withOpacity(0.4))),
+                                    color: onSurface(context, 0.4))),
                         ],
                       ),
                     ),
                     items[i].trailing(),
                     const SizedBox(width: 4),
                     const Icon(Icons.chevron_right_rounded,
-                        size: 22, color: Colors.black26),
+                        size: 22, color: onSurface(context, 0.26)),
                   ],
                 ),
               ),

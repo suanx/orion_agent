@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -68,7 +69,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
             Container(
               padding: const EdgeInsets.all(18),
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: surface(context),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Column(
@@ -95,7 +96,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                     style: TextStyle(
                         fontSize: 13,
                         height: 1.5,
-                        color: Colors.black.withOpacity(0.55)),
+                        color: onSurface(context, 0.55)),
                   ),
                 ],
               ),
@@ -111,7 +112,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: surface(context),
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: SelectableText(
@@ -120,7 +121,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                       fontFamily: 'monospace',
                       fontSize: 11,
                       height: 1.4,
-                      color: Colors.black.withOpacity(0.65)),
+                      color: onSurface(context, 0.65)),
                 ),
               ),
             const SizedBox(height: 16),
@@ -143,7 +144,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: surface(context),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
@@ -164,7 +165,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                       decoration: BoxDecoration(
                         color: installed
                             ? const Color(0xFFE6F4EA)
-                            : Colors.black.withOpacity(0.05),
+                            : onSurface(context, 0.05),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(installed ? '已就绪' : '未安装',
@@ -173,7 +174,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                               fontWeight: FontWeight.w600,
                               color: installed
                                   ? const Color(0xFF137333)
-                                  : Colors.black45)),
+                                  : onSurface(context, 0.45)),
                     ),
                   ],
                 ),
@@ -185,7 +186,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                   style: TextStyle(
                       fontSize: 12,
                       height: 1.3,
-                      color: Colors.black.withOpacity(0.45)),
+                      color: onSurface(context, 0.45)),
                 ),
               ],
             ),

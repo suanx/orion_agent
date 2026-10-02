@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -36,7 +37,7 @@ class RolesScreen extends ConsumerWidget {
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
             subtitle: Text('通用智能助手，无人设限定',
                 style: TextStyle(
-                    fontSize: 12, color: Colors.black.withOpacity(0.4))),
+                    fontSize: 12, color: onSurface(context, 0.4))),
             onTap: () => ref.read(activeRoleIdProvider.notifier).state = '',
           ),
           const Divider(height: 1),
@@ -56,7 +57,7 @@ class RolesScreen extends ConsumerWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: TextStyle(
-                        fontSize: 12, color: Colors.black.withOpacity(0.4))),
+                        fontSize: 12, color: onSurface(context, 0.4))),
                 onTap: () =>
                     ref.read(activeRoleIdProvider.notifier).state = r.id,
                 trailing: Row(
@@ -86,7 +87,7 @@ class RolesScreen extends ConsumerWidget {
                   '只输出译文，不解释」。切换后对所有对话生效。',
                   textAlign: TextAlign.center,
                   style: TextStyle(
-                      height: 1.5, color: Colors.black.withOpacity(0.45))),
+                      height: 1.5, color: onSurface(context, 0.45))),
             ),
         ],
       ),

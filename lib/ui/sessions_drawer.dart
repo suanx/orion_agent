@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -13,7 +14,7 @@ class SessionDrawer extends ConsumerWidget {
     final sessions = chat.sessions;
 
     return Drawer(
-      backgroundColor: const Color(0xFFF6F6F6),
+      backgroundColor: surface(context),
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -32,8 +33,8 @@ class SessionDrawer extends ConsumerWidget {
                 height: 52,
                 child: TextButton.icon(
                   style: TextButton.styleFrom(
-                    backgroundColor: Colors.black.withOpacity(0.05),
-                    foregroundColor: Colors.black,
+                    backgroundColor: onSurface(context, 0.05),
+                    foregroundColor: onSurface(context),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(14),
                     ),
@@ -52,7 +53,7 @@ class SessionDrawer extends ConsumerWidget {
                 child: sessions.isEmpty
                     ? const Center(
                         child: Text('暂无历史会话',
-                            style: TextStyle(color: Colors.black38)))
+                            style: TextStyle(color: onSurface(context, 0.38))))
                     : ListView.builder(
                         itemCount: sessions.length,
                         itemBuilder: (_, i) {
@@ -64,13 +65,13 @@ class SessionDrawer extends ConsumerWidget {
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(12)),
                             selected: active,
-                            selectedTileColor: Colors.black.withOpacity(0.04),
+                            selectedTileColor: onSurface(context, 0.04),
                             leading: Icon(
                               Icons.chat_bubble_outline_rounded,
                               size: 20,
                               color: active
                                   ? Theme.of(context).colorScheme.primary
-                                  : Colors.black38,
+                                  : onSurface(context, 0.38),
                             ),
                             title: Text(
                               s.title,

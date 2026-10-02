@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -50,7 +51,7 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
             const SizedBox(height: 4),
             Text('粘贴文档或笔记文本，导入后会自动分块并向量化。',
                 style: TextStyle(
-                    fontSize: 13, color: Colors.black.withOpacity(0.45))),
+                    fontSize: 13, color: onSurface(context, 0.45))),
             const SizedBox(height: 12),
             TextField(
               controller: titleCtrl,

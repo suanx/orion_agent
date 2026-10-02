@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -41,7 +42,7 @@ class SkillsScreen extends ConsumerWidget {
                     style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w600,
-                        color: Colors.black.withOpacity(0.3))),
+                        color: onSurface(context, 0.3))),
               ],
             ),
           ),
@@ -68,14 +69,14 @@ class SkillsScreen extends ConsumerWidget {
               ),
               Text('聊天输入「/名称 参数」即可触发，模板中的 {input} 会被参数替换。',
                   style: TextStyle(
-                      fontSize: 12, color: Colors.black.withOpacity(0.4))),
+                      fontSize: 12, color: onSurface(context, 0.4))),
               const SizedBox(height: 8),
               if (skills.isEmpty)
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.white,
+                    color: surface(context),
                     borderRadius: BorderRadius.circular(16),
                   ),
                   child: Text('还没有快捷指令，点「新建」创建一个，如：\n'
@@ -83,13 +84,13 @@ class SkillsScreen extends ConsumerWidget {
                       style: TextStyle(
                           fontSize: 13,
                           height: 1.5,
-                          color: Colors.black.withOpacity(0.45))),
+                          color: onSurface(context, 0.45))),
                 )
               else
                 ...skills.map((s) => Container(
                       margin: const EdgeInsets.only(bottom: 8),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: surface(context),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: ListTile(
@@ -131,7 +132,7 @@ class SkillsScreen extends ConsumerWidget {
                     child: Container(
                       padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
-                        color: Colors.white,
+                        color: surface(context),
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Column(
@@ -141,7 +142,7 @@ class SkillsScreen extends ConsumerWidget {
                             width: 40,
                             height: 40,
                             decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.05),
+                              color: onSurface(context, 0.05),
                               borderRadius: BorderRadius.circular(12),
                             ),
                             alignment: Alignment.center,
@@ -159,7 +160,7 @@ class SkillsScreen extends ConsumerWidget {
                               style: TextStyle(
                                   fontSize: 11,
                                   height: 1.3,
-                                  color: Colors.black.withOpacity(0.4))),
+                                  color: onSurface(context, 0.4))),
                         ],
                       ),
                     ),

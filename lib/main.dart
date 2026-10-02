@@ -56,12 +56,13 @@ class PocketAgentApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final theme = buildAppTheme(themeById(ref.watch(themeProvider)));
+    final accent = themeById(ref.watch(themeProvider));
     return MaterialApp(
       title: 'Pocket Agent',
       debugShowCheckedModeBanner: false,
-      themeMode: ThemeMode.light,
-      theme: theme,
+      theme: buildAppTheme(accent),
+      darkTheme: buildAppTheme(accent, dark: true),
+      themeMode: ref.watch(themeModeProvider),
       home: const HomeShell(),
     );
   }

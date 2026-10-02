@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -20,7 +21,7 @@ class _TtsToggleState extends ConsumerState<_TtsToggle> {
     return Container(
       margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: surface(context),
         borderRadius: BorderRadius.circular(16),
       ),
       child: SwitchListTile(
@@ -28,7 +29,7 @@ class _TtsToggleState extends ConsumerState<_TtsToggle> {
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
         subtitle: Text('回答完成后用系统语音朗读',
             style: TextStyle(
-                fontSize: 12, color: Colors.black.withOpacity(0.4))),
+                fontSize: 12, color: onSurface(context, 0.4))),
         value: on,
         onChanged: (v) {
           prefs.setBool('tts_enabled', v);

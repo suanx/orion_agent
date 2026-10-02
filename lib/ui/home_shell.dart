@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -57,7 +58,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF6F6F6),
+      backgroundColor: surface(context),
       drawer: const SessionDrawer(),
       extendBody: true,
       body: IndexedStack(
@@ -117,9 +118,9 @@ class _FrostedNavBar extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
           decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.72),
+            color: surface(context).withOpacity(0.72),
             border: Border(
-              top: BorderSide(color: Colors.black.withOpacity(0.06)),
+              top: BorderSide(color: onSurface(context, 0.06)),
             ),
           ),
           child: SafeArea(
@@ -140,7 +141,7 @@ class _FrostedNavBar extends StatelessWidget {
                               size: 26,
                               color: i == index
                                   ? primary
-                                  : Colors.black.withOpacity(0.35),
+                                  : onSurface(context, 0.35),
                             ),
                             const SizedBox(height: 3),
                             Text(
@@ -151,7 +152,7 @@ class _FrostedNavBar extends StatelessWidget {
                                     i == index ? FontWeight.w700 : FontWeight.w500,
                                 color: i == index
                                     ? primary
-                                    : Colors.black.withOpacity(0.35),
+                                    : onSurface(context, 0.35),
                               ),
                             ),
                           ],

@@ -1,3 +1,4 @@
+import '../theme.dart';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -222,7 +223,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           Text('本机 · ${session?.messages.length ?? 0} 条消息',
                               style: TextStyle(
                                   fontSize: 12,
-                                  color: Colors.black.withOpacity(0.4))),
+                                  color: onSurface(context, 0.4))),
                         ],
                       ),
                     ],
@@ -374,7 +375,7 @@ class _EmptyGreeting extends StatelessWidget {
                 padding:
                     const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                 decoration: BoxDecoration(
-                  color: Colors.white,
+                  color: surface(context),
                   borderRadius: BorderRadius.circular(18),
                 ),
                 child: Row(
@@ -449,7 +450,7 @@ class _MessageBubble extends StatelessWidget {
                 ),
               if (message.content.isNotEmpty)
                 SelectableText(message.content,
-                    style: const TextStyle(color: Colors.white, fontSize: 15)),
+                    style: TextStyle(color: Theme.of(context).colorScheme.onPrimary, fontSize: 15)),
             ],
           ),
         ),
@@ -463,12 +464,12 @@ class _MessageBubble extends StatelessWidget {
           margin: const EdgeInsets.symmetric(vertical: 2),
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
           decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.05),
+            color: onSurface(context, 0.05),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Text('🔧 ${message.toolName ?? "tool"} 结果已返回',
               style: TextStyle(
-                  fontSize: 12, color: Colors.black.withOpacity(0.45))),
+                  fontSize: 12, color: onSurface(context, 0.45))),
         ),
       );
     }
@@ -481,7 +482,7 @@ class _MessageBubble extends StatelessWidget {
         constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * 0.86),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: surface(context),
           borderRadius: BorderRadius.circular(18)
               .copyWith(bottomLeft: const Radius.circular(6)),
         ),
@@ -493,7 +494,7 @@ class _MessageBubble extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text('🔧 已调用 ${tc.name}',
                     style: TextStyle(
-                        fontSize: 12, color: Colors.black.withOpacity(0.45))),
+                        fontSize: 12, color: onSurface(context, 0.45))),
               ),
             if (message.content.isNotEmpty)
               MarkdownBody(data: message.content),
@@ -520,7 +521,7 @@ class _StreamingBubble extends StatelessWidget {
         constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * 0.86),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: surface(context),
           borderRadius: BorderRadius.circular(18)
               .copyWith(bottomLeft: const Radius.circular(6)),
         ),
@@ -532,7 +533,7 @@ class _StreamingBubble extends StatelessWidget {
                 padding: const EdgeInsets.only(bottom: 2),
                 child: Text(s,
                     style: TextStyle(
-                        fontSize: 12, color: Colors.black.withOpacity(0.45))),
+                        fontSize: 12, color: onSurface(context, 0.45))),
               ),
             if (content.isEmpty)
               const SizedBox(
@@ -579,11 +580,11 @@ class _InputBar extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: surface(context),
           borderRadius: BorderRadius.circular(28),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.04),
+              color: onSurface(context, 0.04),
               blurRadius: 12,
               offset: const Offset(0, 2),
             ),
@@ -610,7 +611,7 @@ class _InputBar extends StatelessWidget {
                 decoration: InputDecoration(
                   hintText: '请在此输入任务',
                   hintStyle: TextStyle(
-                      color: Colors.black.withOpacity(0.28), fontSize: 15),
+                      color: onSurface(context, 0.28), fontSize: 15),
                   border: InputBorder.none,
                   isDense: true,
                   contentPadding: const EdgeInsets.symmetric(vertical: 10),
@@ -637,7 +638,7 @@ class _InputBar extends StatelessWidget {
                       color: Theme.of(context).colorScheme.primary,
                       shape: BoxShape.circle),
                   child: const Icon(Icons.arrow_upward_rounded,
-                      size: 22, color: Colors.white),
+                      size: 22, color: Theme.of(context).colorScheme.onPrimary),
                 ),
               )
             else
@@ -651,7 +652,7 @@ class _InputBar extends StatelessWidget {
                     size: 24,
                     color: isListening
                         ? const Color(0xFFD93025)
-                        : Colors.black.withOpacity(0.35),
+                        : onSurface(context, 0.35),
                   ),
                   onPressed: onMic,
                 ),
