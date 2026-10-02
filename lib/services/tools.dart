@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 
 import 'memory_service.dart';
 import 'rag_service.dart';
+import 'terminal_service.dart';
 import 'package:flutter/foundation.dart';
 
 /// 工具基类：所有内置工具与 MCP 工具都实现此接口。
@@ -380,12 +381,54 @@ class SearchKnowledgeTool extends Tool {
   }
 }
 
+/// 终端环境命令执行工具（Alpine + proot 沙箱）。
+class RunCommandTool extends Tool {
+  RunCommandTool(this._terminal);
+
+  final TerminalService _terminal;
+
+  @override
+  String get name => 'run_command';
+
+  @override
+  String get description =>
+      '在应用内置的 Alpine Linux 环境中执行 shell 命令并返回输出。可用于文件处理、'
+      '运行脚本、安装软件包（apk add，已配置国内镜像）等。环境未安装时会提示先安装。'
+      '注意：命令在沙箱内运行，仅能访问应用目录与系统基础挂载。';
+
+  @override
+  Map<String, dynamic> get parameters => {
+        'type': 'object',
+        'properties': {
+          'command': {'type': 'string', 'description': '要执行的 shell 命令'},
+        },
+        'required': ['command'],
+      };
+
+  @override
+  Future<String> execute(Map<String, dynamic> args) async {
+    final command = args['command']?.toString() ?? '';
+    if (command.trim().isEmpty) return '错误：命令为空';
+    if (!await _terminal.isInstalled()) {
+      return '错误：终端环境尚未安装。请提示用户到「我的 → 终端环境」中一键安装 Alpine 环境。';
+    }
+    try {
+      final r = await _terminal.run(command);
+      final output = r.output.trim().isEmpty ? '（无输出）' : _truncate(r.output.trim(), 4000);
+      return '退出码 ${r.exitCode}\n$output';
+    } catch (e) {
+      return '错误：命令执行失败（$e）';
+    }
+  }
+}
+
 /// 工具注册表：统一管理内置工具与（未来的）MCP 工具。
 class ToolRegistry {
   ToolRegistry({
     required MemoryService memoryService,
     RagService? ragService,
     BatchEmbed? batchEmbed,
+    TerminalService? terminalService,
   }) {
     final dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 20),
@@ -399,6 +442,7 @@ class ToolRegistry {
       SaveMemoryTool(memoryService),
       if (ragService != null && batchEmbed != null)
         SearchKnowledgeTool(ragService, batchEmbed),
+      if (terminalService != null) RunCommandTool(terminalService),
     ];
   }
 

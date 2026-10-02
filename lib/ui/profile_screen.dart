@@ -8,6 +8,7 @@ import 'mcp_screen.dart';
 import 'memory_screen.dart';
 import 'roles_screen.dart';
 import 'settings_screen.dart';
+import 'terminal_screen.dart';
 
 /// 我的 Tab：Marvis 风格的分组白卡片列表。
 class ProfileScreen extends ConsumerWidget {
@@ -160,6 +161,14 @@ class ProfileScreen extends ConsumerWidget {
             onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const McpScreen())),
           ),
+          _CardItem(
+            icon: Icons.terminal_rounded,
+            title: '终端环境',
+            subtitle: 'Alpine Linux 沙箱，Agent 可执行命令',
+            trailing: () => const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const TerminalScreen())),
+          ),
         ]),
         const SizedBox(height: 12),
         _CardGroup(items: [
@@ -227,10 +236,12 @@ class _CardItem {
     required this.title,
     required this.trailing,
     required this.onTap,
+    this.subtitle,
   });
 
   final IconData icon;
   final String title;
+  final String? subtitle;
   final Widget Function() trailing;
   final VoidCallback onTap;
 }
@@ -272,9 +283,20 @@ class _CardGroup extends StatelessWidget {
                         size: 22, color: Theme.of(context).colorScheme.primary),
                     const SizedBox(width: 14),
                     Expanded(
-                      child: Text(items[i].title,
-                          style: const TextStyle(
-                              fontSize: 16, fontWeight: FontWeight.w600)),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(items[i].title,
+                              style: const TextStyle(
+                                  fontSize: 16, fontWeight: FontWeight.w600)),
+                          if (items[i].subtitle != null)
+                            Text(items[i].subtitle!,
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    height: 1.3,
+                                    color: Colors.black.withOpacity(0.4))),
+                        ],
+                      ),
                     ),
                     items[i].trailing(),
                     const SizedBox(width: 4),

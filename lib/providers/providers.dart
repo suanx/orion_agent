@@ -17,6 +17,7 @@ import '../services/rag_service.dart';
 import '../services/role_service.dart';
 import '../services/skill_service.dart';
 import '../services/storage_service.dart';
+import '../services/terminal_service.dart';
 import '../services/tools.dart';
 import '../services/voice_service.dart';
 
@@ -57,6 +58,7 @@ final toolRegistryProvider = Provider<ToolRegistry>((ref) => ToolRegistry(
       memoryService: ref.watch(memoryServiceProvider),
       ragService: ref.watch(ragServiceProvider),
       batchEmbed: ref.watch(batchEmbedProvider),
+      terminalService: ref.watch(terminalServiceProvider),
     ));
 
 final llmClientProvider = Provider<LlmClient>(
@@ -91,6 +93,9 @@ final themeProvider = StateProvider<String>((ref) {
 
 final mcpServiceProvider = Provider<McpService>((ref) =>
     McpService(ref.watch(databaseProvider), ref.watch(toolRegistryProvider)));
+
+final terminalServiceProvider =
+    Provider<TerminalService>((ref) => TerminalService());
 
 // ---------------- 模型配置 ----------------
 

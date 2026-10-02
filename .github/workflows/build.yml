@@ -21,6 +21,32 @@ jobs:
         # 本地不提交平台目录，在 CI 中按当前 Flutter stable 生成，保证版本一致
         run: flutter create --platforms android --project-name pocket_agent .
 
+      - name: Inject MainActivity with system MethodChannel
+        run: cp ci/MainActivity.kt android/app/src/main/kotlin/com/example/pocket_agent/MainActivity.kt
+
+      - name: Lower targetSdk to 28
+        # Android 10+ 禁止 app 自带目录内 exec()；终端环境(proot) 需要
+        # 在数据目录执行 guest 二进制，Termux 系方案均以 targetSdk 28 规避
+        run: |
+          sed -i 's/flutter\.targetSdkVersion/28/g' android/app/build.gradle.kts || true
+          sed -i 's/flutter\.targetSdkVersion/28/g' android/app/build.gradle || true
+          grep -rn "targetSdk" android/app/build.gradle* || true
+
+      - name: Bundle proot into jniLibs
+        # 终端环境：打包 Termux 构建的 proot（aarch64）及其依赖 libtalloc，
+        # 命名为 lib*.so 以便放入 nativeLibraryDir 并获得 exec 权限
+        run: |
+          set -e
+          mkdir -p /tmp/proot-pkg android/app/src/main/jniLibs/arm64-v8a
+          curl -fsSL -o /tmp/proot-pkg/proot.deb https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.96_aarch64.deb
+          curl -fsSL -o /tmp/proot-pkg/talloc.deb https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb
+          dpkg-deb -x /tmp/proot-pkg/proot.deb /tmp/proot-pkg/x1
+          dpkg-deb -x /tmp/proot-pkg/talloc.deb /tmp/proot-pkg/x2
+          find /tmp/proot-pkg/x1 -type f -name proot -exec cp {} android/app/src/main/jniLibs/arm64-v8a/libproot.so \;
+          find /tmp/proot-pkg/x2 -type f -name 'libtalloc.so*' -exec cp {} android/app/src/main/jniLibs/arm64-v8a/libtalloc.so \;
+          chmod +x android/app/src/main/jniLibs/arm64-v8a/libproot.so
+          ls -la android/app/src/main/jniLibs/arm64-v8a/
+
       - name: Add INTERNET and microphone permissions
         run: |
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <application|' android/app/src/main/AndroidManifest.xml
@@ -39,7 +65,7 @@ jobs:
         run: flutter test
 
       - name: Build APK
-        run: flutter build apk --release
+        run: flutter build apk --release --target-platform android-arm64
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
