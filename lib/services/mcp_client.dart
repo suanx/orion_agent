@@ -105,6 +105,15 @@ class McpClient {
     }
     if (body is List) return null;
     if (body is String) {
+      // 先尝试整体是 JSON
+      try {
+        final d = jsonDecode(body);
+        if (d is Map) {
+          final m = Map<String, dynamic>.from(d);
+          return m['id'] != null ? m : null;
+        }
+      } catch (_) {}
+      // 否则按 SSE 解析 data: 行
       for (final line in body.split('\n')) {
         final l = line.trim();
         if (!l.startsWith('data:')) continue;

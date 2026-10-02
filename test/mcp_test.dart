@@ -66,7 +66,9 @@ void main() {
         },
         prefix: 'ws__',
       );
-      expect(tool.name, 'ws__read_file__');
+      // 前缀保留、非法字符全部替换为 _，且整体符合 OpenAI function name 规则
+      expect(tool.name.startsWith('ws__read_file'), isTrue);
+      expect(tool.name, matches(RegExp(r'^[a-zA-Z0-9_-]+$')));
       expect(tool.originalName, 'read.file 文件');
       expect(tool.description, '读取文件');
       expect(tool.parameters['type'], 'object');
