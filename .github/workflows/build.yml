@@ -198,11 +198,21 @@ jobs:
           RC=${PIPESTATUS[0]}
           if [ "$RC" -ne 0 ]; then
             echo "::error ::flutter test 退出码 $RC"
-            # 输出失败用例名与其下方的期望/实际差异
-            grep -nE '\[E\]|Expected:|Actual:|Which:|^[0-9:]+ \+[0-9]+ -[0-9]+' /tmp/test.txt \
-              | head -80 | awk '{printf "::error ::%s\n", $0}'
-            echo "--- 末尾 60 行 ---"
-            tail -60 /tmp/test.txt | awk '{printf "::error ::%s\n", $0}'
+            # 以每个 [E] 失败标记为锚点，输出其前后各 20 行，
+            # 这样 print 调试输出、Expected/Actual、用例名都能一并拿到。
+            awk '
+              /\[E\]/ { hit[NR]=1 }
+              { lines[NR]=$0 }
+              END {
+                for (n in hit) {
+                  lo = n-20; if (lo<1) lo=1
+                  hi = n+20
+                  printf "::error ::===== 失败用例附近 (行 %d) =====\n", n
+                  for (i=lo; i<=hi; i++) if (i in lines) printf "::error ::%s\n", lines[i]
+                }
+              }' /tmp/test.txt
+            echo "--- 末尾 40 行 ---"
+            tail -40 /tmp/test.txt | awk '{printf "::error ::%s\n", $0}'
           fi
           exit "$RC"
 

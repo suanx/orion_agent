@@ -4,6 +4,9 @@ import 'package:pocket_agent/services/voice_service.dart';
 void main() {
   test('朗读文本清理：去标题/加粗符号，代码块替换', () {
     final s = stripMarkdownForSpeech('# 标题\n\n这是**重点**。\n\n```dart\nint x = 1;\n```');
+    // 调试输出：失败时能看到真实结果，便于定位（成功时不影响断言）
+    // ignore: avoid_print
+    print('stripMarkdownForSpeech => ${s.codeUnits}');
     expect(s.contains('#'), isFalse);
     expect(s.contains('**'), isFalse);
     expect(s.contains('int x = 1'), isFalse);
