@@ -49,11 +49,16 @@ jobs:
                   checkReleaseBuilds = false
                   abortOnError = false
               }
-              // flutter_local_notifications 依赖 java.time，必须开启脱糖
+              // flutter_local_notifications 依赖 java.time，必须开启脱糖。
+              # 注意：Java 与 Kotlin 的 jvmTarget 必须一致 —— Kotlin 编译器默认
+              # 输出 17，这里若只把 Java 设成 11，assembleRelease 会报
+              # "Inconsistent JVM-target compatibility detected for tasks
+              #  compileReleaseJavaWithJavac (11) and compileReleaseKotlin (17)"。
+              # 所以两边统一为 17（AGP 8.x 原生支持）。
               compileOptions {
                   isCoreLibraryDesugaringEnabled = true
-                  sourceCompatibility = JavaVersion.VERSION_11
-                  targetCompatibility = JavaVersion.VERSION_11
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
               }
           }
 
@@ -61,7 +66,42 @@ jobs:
               coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
           }
           EOF
-          tail -20 android/app/build.gradle.kts
+          tail -25 android/app/build.gradle.kts
+
+      - name: Align Kotlin jvmTarget with Java (17)
+        # Gradle 会校验 Java 与 Kotlin 两侧的 jvmTarget 是否一致，
+        # 不一致直接拒绝构建。这里显式把 Kotlin 侧也钉到 17。
+        run: |
+          set -e
+          for f in android/app/build.gradle.kts android/app/build.gradle; do
+            [ -f "$f" ] || continue
+            # 已有 kotlinOptions 就不重复注入，保持幂等
+            if grep -q "kotlinOptions" "$f"; then
+              echo "$f 已有 kotlinOptions，跳过"
+              continue
+            fi
+            # 用 python 而非 sed：KTS 里有大量特殊字符，sed 转义容易出错
+            python3 - "$f" <<'PY'
+          import sys, re
+          path = sys.argv[1]
+          src = open(path, encoding='utf-8').read()
+          block = (
+              "    kotlinOptions {\n"
+              "        jvmTarget = JavaVersion.VERSION_17.toString()\n"
+              "    }\n"
+          )
+          # 插到第一个 compileOptions 之前；若没有则追加到 android {} 之后
+          m = re.search(r'^(\s*)compileOptions\s*\{', src, re.M)
+          if m:
+              src = src[:m.start()] + block + src[m.start():]
+              open(path, 'w', encoding='utf-8').write(src)
+              print(f'{path}: 已在 compileOptions 前插入 kotlinOptions')
+          else:
+              open(path, 'a', encoding='utf-8').write('\n' + block)
+              print(f'{path}: 未找到 compileOptions，已追加 kotlinOptions')
+          PY
+          done
+          grep -n "kotlinOptions" -A 2 android/app/build.gradle* || true
 
       - name: Enable edge-to-edge window layout
         # 沉浸式状态栏：CI 用 flutter create 生成的 styles.xml 在部分 Flutter
