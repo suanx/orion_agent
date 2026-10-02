@@ -69,7 +69,7 @@ class VoiceService {
 /// 为朗读做最小化 markdown 清理：代码块不读，去掉常见标记符号。
 String stripMarkdownForSpeech(String s) {
   var t = s.replaceAll(RegExp(r'```[\s\S]*?```'), '（代码略）');
-  t = t.replaceAll(RegExp(r'`([^`]*)`'), r'$1');
+  t = t.replaceAllMapped(RegExp(r'`([^`]*)`'), (m) => m.group(1) ?? '');
   t = t.replaceAll(RegExp(r'^#{1,6}\s*', multiLine: true), '');
   t = t.replaceAll(RegExp(r'^\s*[-*+]\s+', multiLine: true), '');
   t = t.replaceAll(RegExp(r'[*_>~\[\]]'), '');
