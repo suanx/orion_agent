@@ -399,7 +399,11 @@ String stripMarkdownForSpeech(String s) {
   t = t.replaceAllMapped(RegExp(r'`([^`]*)`'), (m) => m.group(1) ?? '');
   t = t.replaceAll(RegExp(r'^#{1,6}\s*', multiLine: true), '');
   t = t.replaceAll(RegExp(r'^\s*[-*+]\s+', multiLine: true), '');
-  t = t.replaceAll(RegExp(r'\*\*(.+?)\*\*'), r'$1');
+  // 注意：Dart 的 replaceAll 的替换串**不支持** $1 这类分组引用，
+  // `r'$1'` 会被当成字面量写进结果（实测产出「标题。这是$1。。」）。
+  // 要替换为捕获组必须用 replaceAllMapped。
+  t = t.replaceAllMapped(
+      RegExp(r'\*\*(.+?)\*\*'), (m) => m.group(1) ?? '');
   t = t.replaceAll(RegExp(r'[*_>~\[\]]'), '');
   t = t.replaceAll(RegExp(r'\n{2,}'), '。');
   t = t.trim();
