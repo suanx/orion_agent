@@ -247,10 +247,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                 child: FilledButton.icon(
                   onPressed: _busy ? null : _installMissing,
                   icon: const Icon(Icons.build_circle_outlined, size: 18),
-                  label: const Text(
-                      _distro == TerminalDistro.alpine
-                          ? '安装全部组件（apk add）'
-                          : '安装全部组件（apt install）'),
+                  label: Text(_distro == TerminalDistro.alpine
+                      ? '安装全部组件（apk add）'
+                      : '安装全部组件（apt install）'),
                 ),
               ),
             _sectionTitle('命令控制台'),
