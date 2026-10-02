@@ -52,6 +52,26 @@ jobs:
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <application|' android/app/src/main/AndroidManifest.xml
           grep -n "INTERNET\|RECORD_AUDIO" android/app/src/main/AndroidManifest.xml
 
+      - name: Build Debian rootfs and publish to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if gh release view terminal-env >/dev/null 2>&1; then
+            echo "terminal-env release 已存在，跳过构建"
+            exit 0
+          fi
+          sudo apt-get update -qq && sudo apt-get install -y -qq skopeo xz-utils
+          skopeo copy --override-os linux --override-arch arm64 docker://debian:bookworm-slim dir:/tmp/debimg
+          LAYER=$(grep -o '"digest":"sha256:[a-f0-9]*"' /tmp/debimg/manifest.json | head -1 | grep -o 'sha256:[a-f0-9]*' | cut -d: -f2)
+          mkdir -p /tmp/droot
+          sudo tar -xzf "/tmp/debimg/$LAYER" -C /tmp/droot
+          sudo tar -C /tmp/droot --numeric-owner -cJf /tmp/debian-bookworm-arm64-rootfs.tar.xz .
+          ls -la /tmp/debian-bookworm-arm64-rootfs.tar.xz
+          gh release create terminal-env /tmp/debian-bookworm-arm64-rootfs.tar.xz \
+            --title "Terminal environment bootstrap" \
+            --notes "Debian bookworm arm64 rootfs for the in-app terminal environment"
+
       - name: Pub get
         run: flutter pub get
 

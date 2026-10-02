@@ -392,9 +392,9 @@ class RunCommandTool extends Tool {
 
   @override
   String get description =>
-      '在应用内置的 Alpine Linux 环境中执行 shell 命令并返回输出。可用于文件处理、'
-      '运行脚本、安装软件包（apk add，已配置国内镜像）等。环境未安装时会提示先安装。'
-      '注意：命令在沙箱内运行，仅能访问应用目录与系统基础挂载。';
+      '在应用内置的 Linux 环境（Alpine/Debian，proot 沙箱）中执行 shell 命令并返回输出。'
+      '可用于文件处理、运行脚本、安装软件包（apk/apt，已配置国内镜像）等。'
+      '环境未安装时会提示先安装。注意：命令在沙箱内运行，仅能访问应用目录与系统基础挂载。';
 
   @override
   Map<String, dynamic> get parameters => {
@@ -409,12 +409,15 @@ class RunCommandTool extends Tool {
   Future<String> execute(Map<String, dynamic> args) async {
     final command = args['command']?.toString() ?? '';
     if (command.trim().isEmpty) return '错误：命令为空';
-    if (!await _terminal.isInstalled()) {
-      return '错误：终端环境尚未安装。请提示用户到「我的 → 终端环境」中一键安装 Alpine 环境。';
+    final distro = _terminal.activeDistro;
+    if (!await _terminal.isInstalled(distro)) {
+      return '错误：当前终端环境（${distro.name}）尚未安装。'
+          '请提示用户到「我的 → 终端环境」中选择发行版并一键安装。';
     }
     try {
       final r = await _terminal.run(command);
-      final output = r.output.trim().isEmpty ? '（无输出）' : _truncate(r.output.trim(), 4000);
+      final output =
+          r.output.trim().isEmpty ? '（无输出）' : _truncate(r.output.trim(), 4000);
       return '退出码 ${r.exitCode}\n$output';
     } catch (e) {
       return '错误：命令执行失败（$e）';
