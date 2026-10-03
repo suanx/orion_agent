@@ -35,7 +35,7 @@
 - [8. 构建与 CI](#8-构建与-ci)
 - [9. 配置项全集](#9-配置项全集)
 - [10. 数据模型](#10-数据模型)
-- [11. 已修复的缺陷档案](#11-已修复的缺陷档案)
+- [11. 已修复的缺陷档案](#11-已修复的缺陷档案)（含 §11.8 CI 调试实录）
 - [12. 待修复的问题](#12-待修复的问题)
 - [13. 后续可增加的功能](#13-后续可增加的功能)
 - [14. 测试](#14-测试)
@@ -271,9 +271,13 @@ String uniqueId(String prefix) =>
 > 不硬编码仓库名）。
 >
 > **迁移状态**：旧仓库 `suanx/pocket-agent` 已删除，代码与 git remote 均已
-> 指向 `suanx/orion_agent` 并推送完成（60 个提交历史完整保留）。
+> 指向 `suanx/orion_agent` 并推送完成（提交历史完整保留）。
 > 新仓库首次 CI 已成功运行并自动重建 `terminal-env` release
 > （`debian-bookworm-arm64-rootfs.tar.xz`，14.7 MB）。
+>
+> **CI 已全绿**（run #9，`a1ac991`）：`flutter analyze` 0 error、
+> 全部测试通过、产出 `orion-agent-apk`（12.2 MB）。
+> 从旧仓库迁移后共迭代 9 轮才全绿，详见 §11.8。
 >
 > 好在它只是**备用源**：`install()` 里国内 Docker 镜像
 > （daocloud / 1ms / dockerproxy）**优先**尝试，三个全失败才走 GitHub
@@ -1010,6 +1014,49 @@ class ToolCall {
 | 45 | 知识库为何失效完全无迹可循 | `providers.dart:461-465` 空 catch → `debugPrint` |
 | 46 | MCP 连接失败与"没有可用服务器"无法区分 | `mcp_service.dart:91` 打日志含URL 与原因 |
 | 47 | 配置解析失败静默 | `providers.dart:234-236` 打日志 |
+
+### 11.8 CI 调试实录（迁移到orion_agent 后）
+
+仓库迁移后CI 迭代 9 轮才全绿。**这一节记录的是方法论，不是代码**——
+本地无法运行 `flutter test`（Flutter SDK 不可达），所有问题都由 CI 暴露。
+
+| run | 报错数 | 根因 |
+|---|---|---|
+| #1–2 | 10 errors | `material.dart' show ThemeMode` 连带挡掉 `debugPrint`；`ordered` 类型写错 |
+| #3 | 5 errors | `speech_to_text.listen()` 没有 onError/onDone；`isAuthorized` 应为 `isEnabled`；final 重复赋值 |
+| #4 | 1 error | 修final 时忘了删旧声明，产生 duplicate_definition |
+| #5 | analyze 通过，**9 tests failed** | 索引写进 `customConstraints` → 建表 SQL 非法 |
+| #6 | **3 tests failed** | 测试断言假设错误（`ToolRegistry` 非空、关闭 db 不抛异常） |
+| #7 | **1 test failed** | 同上，测试假设不成立 |
+| #8 | 4 errors | **我的操作失误**：按行号切片替换时误删了相邻`test()` 声明行 |
+| #9 | ✅ **Success** | analyze 0 error、全测试通过、APK 12.2 MB |
+
+**四条方法论**：
+
+1. **本地 `dart analyze` 在缺 Flutter 依赖时会大量漏报** —— 包括语法错误。
+   验证语法要把文件复制到独立目录单独 analyze，或用大括号配平检查兜底。
+
+2. **CI 的报错可能指向错误的方向**。9 个测试失败看起来像"数据库逻辑坏了"，
+   实际是建表 SQL 语法错误（索引放错位置）。逐个读测试代码、验证数据、
+   审查自己的 diff，最后靠**读 drift 源码**才找到真因。
+
+3. **查证 API 必须读官方文档/源码**，不能凭印象：
+   - `speech_to_text.listen()` 没有 onError/onDone，它们是 `initialize()` 的参数
+   - `NotificationsEnabledOptions` 字段是 `isEnabled`
+   - `ResponseBody.close()` 在 dio 里被标`@internal`
+   - drift 的 `customConstraints` 只能放列约束，不能放 CREATE INDEX
+
+   PubCache 里的插件源码是权威依据：
+   `C:\Users\<user>\AppData\Local\Pub\Cache\hosted\pub.dev\<pkg>-<ver>\`
+
+4. **写测试前先确认被测对象的真实状态**。我假设 `ToolRegistry` 是空的、
+   假设关闭 db 后查询一定抛异常 —— 两次都错。而且我曾写了一个
+   "验证 `_loaded` 语义"的测试，用真实 Dart 一跑就发现
+   **它对正确实现和错误实现的行为完全一致**，根本测不出回归。
+   写完测试要用真实数据跑一遍，确认它真的能失败。
+
+> ⚠️ 结构性改动用「按内容匹配」，不要用「按行号切片」——
+> run #8 的 4 个 error 就是这么来的。
 
 ---
 

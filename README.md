@@ -143,11 +143,17 @@ Agent 会自动调用工具。
 
 本地**无需安装 Flutter**，推送后由 GitHub Actions 自动构建。
 
-- 工作流：`.github/workflows/build.yml`
-- 产物：Actions → 最新 run → Artifacts → `orion-agent-apk`
+- 工作流：`.github/workflows/build.yml`（push to main 时自动触发）
+- 产物：Actions → 最新 run → Artifacts → `orion-agent-apk`（约 12 MB）
+- 当前状态：✅ analyze 0 error、全部测试通过
 
 平台目录（`android/`）不提交，由 CI 在构建时按当前 Flutter stable 生成，
 保证平台配置与 Flutter 版本一致。
+
+> ⚠️ **不要在 CI 里注入 Gradle 代码**。历史上曾因此连续 5 次构建失败
+> （每次修复都引入新问题）。`flutter create` 模板已自带
+> `kotlin { compilerOptions { jvmTarget = JVM_17 } }`，CI 只做**校验**不做注入。
+> 详见 [docs/PROJECT.md §8](docs/PROJECT.md#8-构建与-ci)。
 
 ---
 
