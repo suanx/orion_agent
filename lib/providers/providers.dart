@@ -22,6 +22,7 @@ import '../services/llm_client.dart';
 import '../services/mcp_service.dart';
 import '../services/memory_service.dart';
 import '../services/notification_service.dart';
+import '../services/permission_service.dart';
 import '../services/rag_service.dart';
 import '../services/role_service.dart';
 import '../services/token_stats_service.dart';
@@ -89,6 +90,11 @@ final voiceProvider = Provider<VoiceService>((ref) => VoiceService());
 
 final notificationServiceProvider =
     Provider<NotificationService>((ref) => NotificationService());
+
+/// 应用权限服务（授权页专用）。状态实时查询不缓存——
+/// 用户从系统设置返回后要立刻看到最新状态。
+final permissionServiceProvider =
+    Provider<PermissionService>((ref) => PermissionService());
 
 /// 当前语音合成引擎（edge = 免 Key 在线合成，system = 系统 TTS）。
 ///

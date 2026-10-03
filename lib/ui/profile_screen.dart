@@ -11,6 +11,7 @@ import 'knowledge_screen.dart';
 import 'mcp_screen.dart';
 import 'memory_screen.dart';
 import 'notification_settings_screen.dart';
+import 'permission_screen.dart';
 import 'roles_screen.dart';
 import 'settings_screen.dart';
 import 'tts_settings_screen.dart';
@@ -127,6 +128,14 @@ class ProfileScreen extends ConsumerWidget {
               icon: Icons.terminal_rounded,
               label: '终端环境',
               onTap: () => _push(context, const TerminalScreen()),
+            ),
+            _Row(
+              icon: Icons.verified_user_outlined,
+              label: '应用授权',
+              // 不显示动态缺口数：权限在系统设置里改、无回调通知，
+              // 静态值不会骗人（动态数会显示过期状态）。
+              value: '前往检查',
+              onTap: () => _push(context, const PermissionScreen()),
             ),
             _Row(
               icon: Icons.sd_storage_outlined,
