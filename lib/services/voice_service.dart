@@ -386,11 +386,7 @@ class VoiceService {
     // Edge 的语速/音量用百分比增量表达
     final ratePct = ((rate - 1.0) * 100).round();
     final volPct = ((volume - 1.0) * 100).round();
-    //音色名必须是完整形式，短名（zh-CN-XiaoxiaoNeural）服务端不认。
-    final fullVoice = voice.startsWith('Microsoft Server Speech')
-        ? voice
-        : 'Microsoft Server Speech Text to Speech Voice '
-            '($voice)';
+    final fullVoice = edgeVoiceName(voice);
     final ssml = "<speak version='1.0' "
         "xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>"
         "<voice name='$fullVoice'>"
@@ -647,6 +643,21 @@ void _onFrames(
   Completer<void> done,
 ) {
   for (final frame in decoder.add(bytes)) {
+    // 关闭帧（opcode 0x8）必须单独处理，**不能**丢给 parseEdgeFrame：
+    // 它的负载是「2 字节状态码 + UTF-8 原因」，没有 `\r\n\r\n` 头，
+    // 解析会返回 null 而被静默忽略 —— 然后调用方只能干等超时。
+    //
+    // 服务端拒绝请求时正是这么做的：先回 Path:turn.start，
+    // 紧接着发关闭帧 `code=1007 reason="Unsupported voice ..."` 并断开。
+    // 不解析它就只能看到「30 秒后没拿到音频」，完全无从下手排查
+    // （本次「Edge 语音没声音」就是栽在这里）。
+    if (frame.opcode == 0x8) {
+      if (!done.isCompleted) {
+        done.completeError(EdgeClosedException(edgeCloseReason(frame.payload)));
+      }
+      continue;
+    }
+
     final parsed = parseEdgeFrame(frame.payload, isText: frame.opcode == 0x1);
     if (parsed == null) continue;
     if (parsed.isAudio) {
@@ -655,6 +666,32 @@ void _onFrames(
       if (!done.isCompleted) done.complete();
     }
   }
+}
+
+/// 从关闭帧负载里取原因：前 2 字节是大端状态码，其余是 UTF-8 文本。
+///
+/// 公开出来便于单元测试（）—— 这条诊断信息
+/// 是定位「音色名被拒」的关键，值得锁住其格式。
+String edgeCloseReason(Uint8List payload) {
+  if (payload.length < 2) return '服务端关闭连接（无原因）';
+  final code = (payload[0] << 8) | payload[1];
+  final why =
+      utf8.decode(payload.sublist(2), allowMalformed: true).trim();
+  return why.isEmpty
+      ? '服务端关闭连接（code=$code）'
+      : '服务端关闭连接（code=$code）：$why';
+}
+
+/// Edge 服务端主动关闭连接。携带它给出的原因，便于定位。
+///
+/// 最常见的原因就是音色名不被接受（code=1007 Unsupported voice）——
+/// 见 [edgeVoiceName]。
+class EdgeClosedException implements Exception {
+  const EdgeClosedException(this.message);
+  final String message;
+
+  @override
+  String toString() => 'Edge TTS $message';
 }
 
 /// 手工完成 Edge 的 WebSocket 握手，返回**已连接但未订阅**的 socket。
@@ -757,6 +794,49 @@ String escapeXml(String s) => s
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;');
+
+/// 把音色短名转成 Edge 协议要求的完整音色名。
+///
+/// ⚠️ 这是「Edge 语音没声音」的真根因，踩过：
+///
+/// 服务端实际接受两种写法：
+///   1. 短名            `zh-CN-XiaoxiaoNeural`
+///   2. 完整名          `Microsoft Server Speech Text to Speech Voice (zh-CN, XiaoxiaoNeural)`
+///
+/// 而**不接受**「短名直接塞进括号」的混血形式：
+///   `Microsoft Server Speech Text to Speech Voice (zh-CN-XiaoxiaoNeural)`
+///   → 服务端先回 `Path:turn.start`，紧接着发**关闭帧**
+///     `code=1007, reason="Unsupported voice ..."`
+///     （实测拿到原始报文才看到，从 UI 上只表现为「播放中…」不动）
+///
+/// 之前就是这么拼的（locale 与音色名之间用了横线），导致 Edge 语音
+/// 完全无输出，但因握手是 101、日志无异常，排查时长期误判成网络或
+/// 签名问题。
+///
+/// 转换规则与官方 edge-tts 的 `TTSConfig.__post_init__` 一致：
+///   `zh-CN-XiaoxiaoNeural`         → `(zh-CN, XiaoxiaoNeural)`
+///   `zh-CN-liaoning-XiaobeiNeural` → `(zh-CN-liaoning, XiaobeiNeural)`
+/// 即分隔符是「逗号 + 空格」而非横线；三级地区（如 liaoning）并入 locale 段。
+String edgeVoiceName(String voice) {
+  const prefix = 'Microsoft Server Speech Text to Speech Voice';
+  // 已经是完整名，原样返回
+  if (voice.startsWith(prefix)) return voice;
+
+  final m = RegExp(r'^([a-z]{2,})-([A-Z]{2,})-(.+Neural)$').firstMatch(voice);
+  // 不符合规范就把原值送出去，让服务端给出明确错误，而不是我们瞎猜
+  if (m == null) return voice;
+
+  var region = m.group(2)!;
+  var name = m.group(3)!;
+  // 三级地区：`liaoning-XiaobeiNeural` 里的 liaoning 归到 locale 段，
+  // 音色名只留 `XiaobeiNeural`。
+  final dash = name.indexOf('-');
+  if (dash != -1) {
+    region = '$region-${name.substring(0, dash)}';
+    name = name.substring(dash + 1);
+  }
+  return '$prefix (${m.group(1)}-$region, $name)';
+}
 
 /// 为朗读做最小化 markdown 清理：代码块不读，去掉常见标记符号。
 String stripMarkdownForSpeech(String s) {

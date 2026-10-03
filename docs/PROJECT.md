@@ -513,8 +513,14 @@ $nativeLibraryDir/libproot.so \
 > 3. **SSML 的 `X-Timestamp` 必须是 JavaScript 风格且以大写 `Z` 结尾**：
 >    `Sat Oct 03 2026 05:00:10 GMT+0000 (Coordinated Universal Time)Z`
 >    （官方 edge-tts 源码标注 "This is not a mistake, Microsoft Edge bug"）。
->    用 ISO 格式服务端不产音频。另需 32 位十六进制 `X-RequestId`
->    与完整音色名 `Microsoft Server Speech Text to Speech Voice (zh-CN, XiaoxiaoNeural)`。
+>    另需 32 位十六进制 `X-RequestId`。
+>
+> 4. **音色名必须用正确的完整形式**（真根因，详见 §11.13）：
+>    `Microsoft Server Speech Text to Speech Voice (zh-CN, XiaoxiaoNeural)`
+>    —— locale 与音色名之间是**「逗号 + 空格」**。
+>    服务端接受短名 `zh-CN-XiaoxiaoNeural`，但**不接受**「短名直接塞进括号」
+>    的混血形式，会回关闭帧 `code=1007 Unsupported voice`。
+>    统一由 `edgeVoiceName()` 转换。
 
 **播放**：依次尝试 `/system/bin/stagefright` → `/system/bin/toybox play` → `ffplay`，
 120 秒超时。
@@ -1057,8 +1063,10 @@ class ToolCall {
    打印实际发出的字节 → 发现 `user-agent: Dart/3.13 (dart:io), Mozilla/5.0 …`
 4. **裸 socket 对照**：同一份签名，干净 UA → 101；带 Dart 前缀 → 403。因果链闭合
 5. 剩下两个原因靠**读官方源码**（`edge_tts/communicate.py`）确认：
-   `ssml_headers_plus_data` 的注释直接写明 X-Timestamp 必须补 `Z`，
-   且 SSML 用的是完整音色名而非短名
+   `ssml_headers_plus_data` 的注释直接写明 X-Timestamp 必须补 `Z`；
+   音色名的转换规则在 `TTSConfig.__post_init__` 里
+   （当时误读成「短名不被接受」，实际是「拼错的完整名不被接受」，
+   见 §11.13）
 
 > 💡 **关键教训**：Dart 的 `WebSocket` 会在 UA 前拼 `Dart/x.y (dart:io), `。
 > 任何需要"伪装成浏览器"的服务（不只是 Edge TTS）都不能用
@@ -1206,6 +1214,93 @@ close 行为即可复现。测试里还踩了两个坑（都靠跑真实 Dart �
 2. `StreamSubscription` **没有 `isClosed` 属性**；且不能用 `asFuture()`
    判断「是否已关闭」—— 流没关闭时它不会完成。正确做法是用
    `StreamController(onCancel: ...)` 判定。
+
+### 11.13 Edge 语音完全没声音（音色名拼错，真根因）
+
+**症状**：设置页点试听，按钮永久停在「播放中…」；实际对话里朗读也没有声音。
+**我此前修了三轮都没修对**——前几轮改的 UA、帧类型、时间戳格式都是**真问题**
+但不是**这一个**问题。
+
+**真根因**：音色名拼成了「短名直接塞进括号」的混血形式。
+
+```dart
+// 错误（原实现）
+'Microsoft Server Speech Text to Speech Voice ($voice)'
+// → Microsoft Server Speech Text to Speech Voice (zh-CN-XiaoxiaoNeural)
+//                                      横线 ↖          （应为逗号+空格）
+```
+
+服务端收到后先回 `Path:turn.start`，紧接着发**关闭帧**并断开：
+
+```
+code=1007  reason="Unsupported voice
+  Microsoft Server Speech Text to Speech Voice (zh-CN-XiaoxiaoNeural)."
+```
+
+服务端实际接受两种写法：
+1. 短名 `zh-CN-XiaoxiaoNeural`（服务端自行解析）
+2. 完整名 `Microsoft Server Speech Text to Speech Voice (zh-CN, XiaoxiaoNeural)`
+
+**唯独不接受混血形式**。而我们恰好拼成了第三种。
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 69 | **Edge 语音无声音** | 音色名拼成混血形式，服务端 1007 拒绝并断开 | 新增 `edgeVoiceName()`，按官方规则转换 |
+| 70 | 关闭帧被静默丢弃 | 关闭帧负载没有 `\r\n\r\n` 头，`parseEdgeFrame` 返回 null 后被忽略；调用方只能干等 30s 超时，拿到「未返回音频」这种无线索的错误 | `_onFrames` 单独处理 opcode 0x8，用 `edgeCloseReason()` 解析出状态码与原因并抛出 `EdgeClosedException` |
+
+**转换规则**（与官方 `edge_tts` 的 `TTSConfig.__post_init__` 完全一致）：
+
+```
+zh-CN-XiaoxiaoNeural          → (zh-CN, XiaoxiaoNeural)
+zh-CN-liaoning-XiaobeiNeural  → (zh-CN-liaoning, XiaobeiNeural)
+```
+
+即分隔符是「逗号 + 空格」；三段式 locale（如 `liaoning`、`shaanxi`）
+把第三段并入 locale 段，音色名只留末段。
+
+**定位方法（本轮最有价值的部分）**：
+
+1. **先做交叉验证排除环境**：同机装官方 `edge-tts 7.2.8` → 合成成功
+   （11 KB）。排除网络、服务端、签名算法。
+2. **把官方源码里消息的构造函数全部打印出来**（`mkssml`、
+   `ssml_headers_plus_data`、`date_to_string`、`TTSConfig.__post_init__`），
+   逐条与自己的实现比对——**转换规则就在这里，一次就能看到**。
+3. **写一个能跑真实实现的端到端脚本**：`voice_service.dart` 依赖 Flutter
+   无法 `dart run`，所以程序化抽出相关函数（连同文档注释）拼成独立脚本，
+   跑真实网络、打印每一帧。
+4. **必须解码关闭帧**。第一轮跑完只看到「turn.start 之后超时」，
+   毫无线索；把 opcode 0x8 的负载按「2 字节状态码 + UTF-8 原因」解出来，
+   服务端才把真正的错因写在脸上。
+
+**诊断脚本的输出（修复前后对比）**：
+
+```
+修复前：
+  帧 op=0x1 ... Path:turn.start
+  帧 op=0x8 len=88        ← 被忽略
+  超时 30s：未收到 turn.end      音频字节=0
+
+修复后：
+  帧 op=0x1 ... Path:turn.start
+  帧 op=0x1 ... Path:response
+  帧 op=0x2 ... Path:audio   ×N
+  帧 op=0x1 ... Path:turn.end
+  音频字节=26352（MP3 合法：头 fff3）
+```
+
+**四个音色实测**（含两个三段式 locale）：
+
+| 音色 | 音频字节 |
+|---|---|
+| `zh-CN-XiaoxiaoNeural` | 26352 |
+| `zh-CN-liaoning-XiaobeiNeural` | 33408 |
+| `zh-CN-shaanxi-XiaoniNeural` | 28512 |
+| `zh-CN-YunxiNeural` | 26352 |
+
+**教训**：这是同一个功能上**第四次**「以为修好了」。前三次每次都能自圆其说
+（UA 污染、帧类型、时间戳格式），但都没有真正打通端到端。
+真正的突破口不是继续读代码，而是**拿官方实现做对照实验**并在失败时
+**把服务端的错误原样解出来**——而不是只看自己的代码哪里可能有问题。
 
 ---
 

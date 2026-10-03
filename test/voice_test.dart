@@ -77,4 +77,121 @@ void main() {
       expect(parseEdgeFrame(Uint8List.fromList([0x00, 0x64, 0x41])), isNull);
     });
   });
+
+  // ---- 音色名转换（详见 docs/PROJECT.md §11.13）----
+  //
+  // 这是一次「Edge 语音完全没声音」的真根因：音色名拼错，
+  // 服务端回 1007 Unsupported voice 并立即关闭连接。
+
+  group('edgeVoiceName', () {
+    test('locale 与音色名之间是「逗号+空格」，不是横线', () {
+      final n = edgeVoiceName('zh-CN-XiaoxiaoNeural');
+      expect(n, 'Microsoft Server Speech Text to Speech Voice '
+          '(zh-CN, XiaoxiaoNeural)');
+
+      // 回归断言：绝不能拼成下面这种混血形式。
+      // 服务端对它的响应是 1007 Unsupported voice + 立即关闭连接，
+      // 表现为握手 101、日志无异常，只是永远拿不到音频。
+      expect(n, isNot(contains('(zh-CN-XiaoxiaoNeural)')),
+          reason: '错误形式会让服务端拒绝该音色');
+      expect(n, contains(', '), reason: '分隔符必须是逗号+空格');
+    });
+
+    test('三段式 locale：把第三段地区并进 locale', () {
+      // 晓北（东北）：zh-CN-liaoning-XiaobeiNeural
+      expect(edgeVoiceName('zh-CN-liaoning-XiaobeiNeural'),
+          'Microsoft Server Speech Text to Speech Voice '
+          '(zh-CN-liaoning, XiaobeiNeural)');
+      // 晓妮（陕西）
+      expect(edgeVoiceName('zh-CN-shaanxi-XiaoniNeural'),
+          'Microsoft Server Speech Text to Speech Voice '
+          '(zh-CN-shaanxi, XiaoniNeural)');
+    });
+
+    test('已是完整音色名时原样返回（幂等）', () {
+      const full = 'Microsoft Server Speech Text to Speech Voice '
+          '(zh-CN, XiaoxiaoNeural)';
+      expect(edgeVoiceName(full), full);
+      // 连续调用两次结果相同
+      expect(edgeVoiceName(edgeVoiceName('zh-CN-XiaoxiaoNeural')), full);
+    });
+
+    test('不符合规范的音色名原样送出，交给服务端报错', () {
+      // 我们不做猜测性改写：送原值，让服务端回明确错误，
+      // 好过拼出一个服务端看不懂的名字而没有线索。
+      expect(edgeVoiceName('NotAVoice'), 'NotAVoice');
+      expect(edgeVoiceName(''), '');
+    });
+
+    test('项目内置的 7 个音色全部可正确转换', () {
+      // 与 voice_service.dart 里的 kEdgeVoices 保持一致
+      const ids = [
+        'zh-CN-XiaoxiaoNeural',
+        'zh-CN-XiaoyiNeural',
+        'zh-CN-YunxiNeural',
+        'zh-CN-YunyangNeural',
+        'zh-CN-YunjianNeural',
+        'zh-CN-liaoning-XiaobeiNeural',
+        'zh-CN-shaanxi-XiaoniNeural',
+      ];
+      for (final id in ids) {
+        final n = edgeVoiceName(id);
+        expect(n, startsWith('Microsoft Server Speech Text to Speech Voice ('),
+            reason: '$id 转换结果=$n');
+        expect(n, endsWith(')'), reason: '$id 转换结果=$n');
+        // 完整名的格式约束（与服务端校验正则一致）
+        expect(RegExp(r'^\(.+,.+\)$').hasMatch(n.substring(n.indexOf('('))),
+            isTrue,
+            reason: '$id 转换结果=$n 不满足服务端要求的 (locale, name) 形式');
+        // 关键：locale 段不能含音色名的横线残留
+        expect(n, isNot(contains('Neural,')),
+            reason: '$id 转换结果=$n 把音色名留在了 locale 段');
+      }
+    });
+  });
+
+  // ---- 关闭帧原因解析（详见 docs/PROJECT.md §11.13）----
+  //
+  // 服务端拒绝请求时会先回 Path:turn.start，再发关闭帧
+  // `code=1007 reason="Unsupported voice ..."` 并断开。
+  // 关闭帧负载**没有** `\r\n\r\n` 头，parseEdgeFrame 会返回 null，
+  // 旧实现直接忽略它 —— 于是调用方只能干等 30 秒超时，
+  // 拿到「未返回音频」这种毫无线索的信息。
+
+  group('edgeCloseReason', () {
+    /// 构造关闭帧负载：2 字节大端状态码 + UTF-8 原因
+    Uint8List closePayload(int code, String reason) {
+      final r = utf8.encode(reason);
+      return Uint8List.fromList(
+          [(code >> 8) & 0xFF, code & 0xFF, ...r]);
+    }
+
+    test('解析出状态码与原因（音色被拒的真实报文）', () {
+      // 实测服务端返回的原文
+      final payload = closePayload(
+          1007, 'Unsupported voice Microsoft Server Speech Text to '
+          'Speech Voice (zh-CN-XiaoxiaoNeural).');
+      final msg = edgeCloseReason(payload);
+      expect(msg, contains('1007'), reason: '实际=$msg');
+      expect(msg, contains('Unsupported voice'), reason: '实际=$msg');
+      // 原因文本必须原样透出，这是排查的唯一线索
+      expect(msg, contains('zh-CN-XiaoxiaoNeural'), reason: '实际=$msg');
+    });
+
+    test('只有状态码、没有原因', () {
+      final msg = edgeCloseReason(Uint8List.fromList([0x03, 0xE8]));
+      expect(msg, contains('1000'), reason: '实际=$msg');
+    });
+
+    test('负载过短时给出兜底文案而不是崩溃', () {
+      expect(edgeCloseReason(Uint8List(0)), contains('无原因'));
+      expect(edgeCloseReason(Uint8List.fromList([0x03])), contains('无原因'));
+    });
+
+    test('状态码按大端解析', () {
+      // 0x03EF = 1007
+      final msg = edgeCloseReason(Uint8List.fromList([0x03, 0xEF]));
+      expect(msg, contains('1007'), reason: '实际=$msg');
+    });
+  });
 }
