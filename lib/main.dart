@@ -110,6 +110,11 @@ Future<void> main() async {
       .autostartTasks(TerminalTask.decodeList(prefs.getString(
           TerminalService.tasksPrefsKey))));
 
+  // 自动任务调度：补跑错过的每天任务 + 存活期每分钟 tick（不阻塞启动）。
+  // 注意：无系统级后台能力，App 进程被杀则调度停止，
+  // 错过的任务在下次启动时补跑（见 TasksNotifier._catchUpMissed）。
+  unawaited(container.read(tasksProvider.notifier).start());
+
   runApp(UncontrolledProviderScope(
     container: container,
     child: const OrionAgentApp(),

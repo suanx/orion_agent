@@ -62,4 +62,33 @@ class StorageService {
         await _db.delete(_db.messageRows).go();
         await _db.delete(_db.sessionRows).go();
       });
+
+  // ---------------- 自动任务 ----------------
+
+  /// 全部任务（按创建时间倒序）。
+  Future<List<TaskRow>> loadTasks() => (_db.select(_db.taskRows)
+        ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+      .get();
+
+  Future<void> insertTask(TaskRow row) =>
+      _db.into(_db.taskRows).insert(row, mode: InsertMode.replace);
+
+  /// 用整行对象更新（UI 编辑后直接回写，字段少不值得做 Companion 映射）。
+  Future<void> updateTask(TaskRow row) =>
+      _db.update(_db.taskRows).replace(row);
+
+  Future<void> deleteTask(String id) =>
+      (_db.delete(_db.taskRows)..where((t) => t.id.equals(id))).go();
+
+  /// 记录一次任务运行结果。
+  Future<void> recordTaskRun(String id,
+      {required int lastRunAt, required String status, String? result}) async {
+    await (_db.update(_db.taskRows)..where((t) => t.id.equals(id))).write(
+      TaskRowsCompanion(
+        lastRunAt: Value(lastRunAt),
+        lastStatus: Value(status),
+        lastResult: Value(result),
+      ),
+    );
+  }
 }

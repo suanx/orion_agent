@@ -141,6 +141,37 @@ class TokenUsageRows extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// 自动任务：定时或手动触发的 Agent 提示词。
+///
+/// 任务运行结果直接存在行内（lastResult），不进消息表——
+/// 任务运行不属于任何会话，单独成表避免把会话列表撑乱。
+class TaskRows extends Table {
+  TextColumn get id => text()();
+  TextColumn get emoji => text().withDefault(const Constant('⏰'))();
+  TextColumn get name => text()();
+  TextColumn get prompt => text()();
+
+  /// 'manual' = 仅手动运行；'daily' = 每天定时（hour/minute）。
+  TextColumn get scheduleType => text().withDefault(const Constant('manual'))();
+  IntColumn get scheduleHour => integer().nullable()();
+  IntColumn get scheduleMinute => integer().nullable()();
+
+  BoolColumn get enabled => boolean().withDefault(const Constant(true))();
+
+  /// 最近一次运行的时间戳（毫秒）与状态（ok / fail）。
+  IntColumn get lastRunAt => integer().nullable()();
+  TextColumn get lastStatus => text().nullable()();
+
+  /// 最近一次运行的 Agent 输出。任务只保留最近一次结果，
+  /// 历史结果如需留存以后再单开结果表。
+  TextColumn get lastResult => text().nullable()();
+
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DriftDatabase(tables: [
   SessionRows,
   MessageRows,
@@ -151,6 +182,7 @@ class TokenUsageRows extends Table {
   AgentRoles,
   McpServers,
   TokenUsageRows,
+  TaskRows,
 ])
 class AppDatabase extends _$AppDatabase {
   /// 生产环境不传 executor；测试注入 NativeDatabase.memory()。
@@ -158,7 +190,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'orion_agent'));
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   /// 全部索引。单独抽出以便 onCreate 与 onUpgrade 共用，避免漏建。
   ///
@@ -208,6 +240,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 8) {
             // 思考过程列：历史消息没有思考内容，加可空列即可。
             await m.addColumn(messageRows, messageRows.reasoning);
+          }
+          if (from < 9) {
+            await m.createTable(taskRows);
           }
           // 索引对所有旧版本都要补建（不只是 from < 6）：
           // 之前把它错放在 customConstraints 里，等于从未真正建过索引。

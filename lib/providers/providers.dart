@@ -943,3 +943,238 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
 
   return notifier;
 });
+
+// ---------------- 自动任务 ----------------
+
+/// 任务页状态：任务列表 + 正在运行的任务 id 集合。
+class TasksState {
+  final List<TaskRow> tasks;
+  final Set<String> runningIds;
+
+  const TasksState({this.tasks = const [], this.runningIds = const {}});
+
+  TasksState copyWith({List<TaskRow>? tasks, Set<String>? runningIds}) =>
+      TasksState(
+        tasks: tasks ?? this.tasks,
+        runningIds: runningIds ?? this.runningIds,
+      );
+
+  TaskRow? byId(String id) {
+    for (final t in tasks) {
+      if (t.id == id) return t;
+    }
+    return null;
+  }
+}
+
+/// 自动任务：定时 / 手动触发的 Agent 提示词。
+///
+/// - 运行 = 用当前聊天模型跑一遍 [TaskRow.prompt]，结果写回任务行
+///   （lastResult），并发系统通知。结果不进消息表——任务运行
+///   不属于任何会话。
+/// - 调度器：App 存活期间每分钟 tick 一次检查每天任务；
+///   错过的（App 关着）在 start() 时补跑当天已到期的。
+class TasksNotifier extends StateNotifier<TasksState> {
+  TasksNotifier({
+    required StorageService storage,
+    required AgentOrchestrator orchestrator,
+    required NotificationService notifications,
+    required LlmConfig? Function() getConfig,
+    required bool Function() getThinking,
+    required String Function() getReasoningEffort,
+  })  : _storage = storage,
+        _orchestrator = orchestrator,
+        _notifications = notifications,
+        _getConfig = getConfig,
+        _getThinking = getThinking,
+        _getReasoningEffort = getReasoningEffort,
+        super(const TasksState());
+
+  final StorageService _storage;
+  final AgentOrchestrator _orchestrator;
+  final NotificationService _notifications;
+  final LlmConfig? Function() _getConfig;
+  final bool Function() _getThinking;
+  final String Function() _getReasoningEffort;
+
+  /// 调度 tick 定时器。App 存活期间每分钟检查一次到期任务。
+  Timer? _timer;
+
+  /// 串行化任务运行：定时触发与手动触发可能撞车，LLM 调用
+  /// 排队执行（同一时间只跑一个任务），避免 token 火并。
+  Future<void> _queue = Future.value();
+
+  Future<void> load() async {
+    final tasks = await _storage.loadTasks();
+    if (mounted) state = state.copyWith(tasks: tasks);
+  }
+
+  Future<void> upsert(TaskRow row) async {
+    await _storage.insertTask(row);
+    await load();
+  }
+
+  Future<void> remove(String id) async {
+    await _storage.deleteTask(id);
+    await load();
+  }
+
+  // ---------------- 调度 ----------------
+
+  /// 启动调度：启动补跑 + 每分钟 tick。main.dart 调用（不 await）。
+  Future<void> start() async {
+    await load();
+    await _catchUpMissed();
+    _timer?.cancel();
+    _timer = Timer.periodic(const Duration(minutes: 1), (_) => _tick());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  /// 每分钟 tick：命中「每天 HH:mm」且今天还没跑的启用任务。
+  void _tick() {
+    final now = DateTime.now();
+    for (final t in state.tasks) {
+      if (!_isDueToday(t, now)) continue;
+      _enqueue(t.id);
+    }
+  }
+
+  /// 启动补跑：App 关着错过了当天的定时任务，打开 App 后补跑一次。
+  Future<void> _catchUpMissed() async {
+    final now = DateTime.now();
+    for (final t in state.tasks) {
+      if (!_isDailyEnabled(t)) continue;
+      final last = t.lastRunAt == null
+          ? null
+          : DateTime.fromMillisecondsSinceEpoch(t.lastRunAt!);
+      final ranToday = last != null &&
+          last.year == now.year &&
+          last.month == now.month &&
+          last.day == now.day;
+      if (ranToday) continue;
+      // 只补跑「计划时间已过」的；计划时间还没到交给 tick。
+      final due = DateTime(now.year, now.month, now.day,
+          t.scheduleHour ?? 0, t.scheduleMinute ?? 0);
+      if (now.isBefore(due)) continue;
+      _enqueue(t.id);
+    }
+  }
+
+  bool _isDailyEnabled(TaskRow t) =>
+      t.enabled && t.scheduleType == 'daily' && t.scheduleHour != null;
+
+  bool _isDueToday(TaskRow t, DateTime now) {
+    if (!_isDailyEnabled(t)) return false;
+    if (t.scheduleHour != now.hour || t.scheduleMinute != now.minute) {
+      return false;
+    }
+    final last = t.lastRunAt == null
+        ? null
+        : DateTime.fromMillisecondsSinceEpoch(t.lastRunAt!);
+    final ranToday = last != null &&
+        last.year == now.year &&
+        last.month == now.month &&
+        last.day == now.day;
+    return !ranToday;
+  }
+
+  /// 入队运行（串行执行，立即返回）。
+  void _enqueue(String id) {
+    _queue = _queue.then((_) => run(id)).catchError((_) {});
+  }
+
+  // ---------------- 运行 ----------------
+
+  /// 运行一个任务（手动或调度触发）。返回是否成功。
+  ///
+  /// 期间任务卡片显示转圈（runningIds）；结束后写回结果并发通知。
+  Future<bool> run(String id) async {
+    final task = state.byId(id);
+    if (task == null) return false;
+    if (state.runningIds.contains(id)) return false;
+
+    final config = _getConfig();
+    if (config == null || config.chatModel == null) {
+      await _record(task, 'fail', '未配置模型服务：请先到「我的 → AI 提供商」配置并选择模型。');
+      return false;
+    }
+
+    state = state.copyWith(
+        runningIds: {...state.runningIds, id});
+
+    final buf = StringBuffer();
+    var failed = false;
+    try {
+      await for (final ev in _orchestrator.run(
+        config: config,
+        history: [
+          ChatMessage(
+            id: uniqueId('task'),
+            role: 'user',
+            content: task.prompt,
+          ),
+        ],
+        thinking: _getThinking(),
+        reasoningEffort: _getReasoningEffort(),
+      )) {
+        if (ev is AgentAnswer) {
+          buf.clear();
+          buf.write(ev.message.content);
+        } else if (ev is AgentFailure) {
+          buf.clear();
+          buf.write(ev.message);
+          failed = true;
+        }
+      }
+    } catch (e) {
+      buf.clear();
+      buf.write('任务执行异常：$e');
+      failed = true;
+    } finally {
+      final ids = {...state.runningIds}..remove(id);
+      if (mounted) state = state.copyWith(runningIds: ids);
+    }
+
+    final ok = !failed && buf.toString().trim().isNotEmpty;
+    await _record(task, ok ? 'ok' : 'fail', buf.toString());
+    return ok;
+  }
+
+  /// 写回运行结果 + 发系统通知。
+  Future<void> _record(TaskRow task, String status, String result) async {
+    await _storage.recordTaskRun(
+      task.id,
+      lastRunAt: DateTime.now().millisecondsSinceEpoch,
+      status: status,
+      result: result.trim().isEmpty ? '（无输出）' : result,
+    );
+    await load();
+    final summary = result.trim().isEmpty
+        ? '（无输出）'
+        : (result.length > 80 ? '${result.substring(0, 80)}…' : result);
+    unawaited(_notifications.notifyTaskDone(
+      title:
+          '${status == 'ok' ? '✅' : '⚠️'} ${task.emoji} ${task.name} ${status == 'ok' ? '已完成' : '运行失败'}',
+      detail: summary,
+    ));
+  }
+}
+
+/// 自动任务状态（任务页 + 调度器共用）。
+final tasksProvider =
+    StateNotifierProvider<TasksNotifier, TasksState>((ref) {
+  final notifier = TasksNotifier(
+    storage: ref.watch(storageServiceProvider),
+    orchestrator: ref.watch(orchestratorProvider),
+    notifications: ref.watch(notificationServiceProvider),
+    getConfig: () => ref.read(configProvider).activeConfig,
+    getThinking: () => ref.read(thinkingProvider),
+    getReasoningEffort: () => ref.read(reasoningEffortProvider),
+  );
+  return notifier;
+});

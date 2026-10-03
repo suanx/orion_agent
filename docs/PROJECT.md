@@ -200,7 +200,7 @@ orion_agent/
 
 ### 4.1 Drift 表定义（`lib/services/database.dart`）
 
-`schemaVersion = 8`
+`schemaVersion = 9`
 
 | 表 | 字段 | 用途 |
 |---|---|---|
@@ -213,6 +213,7 @@ orion_agent/
 | `agent_roles` | id(PK), name, prompt, createdAt | 角色 |
 | `mcp_servers` | id(PK), name, url, enabled, createdAt | MCP 服务器 |
 | `token_usage_rows` | id(PK), createdAt, provider, model, inputTokens, outputTokens, cachedTokens, requests, costCents | Token 用量 |
+| `task_rows` | id(PK), emoji, name, prompt, scheduleType(manual/daily), scheduleHour, scheduleMinute, enabled, lastRunAt, lastStatus, lastResult, createdAt | 自动任务 |
 
 **索引**：`message_rows(session_id, id)` 复合索引（`database.dart:40`）
 —— 按会话取消息是高频操作，无索引会全表扫描。
@@ -228,6 +229,7 @@ orion_agent/
 | 6 | 新增 `idx_message_rows_session` 索引 |
 | 7 | 新增 `token_usage_rows`（Token 统计） |
 | 8 | `message_rows` 新增 `reasoning`（思考过程） |
+| 9 | 新增 `task_rows`（自动任务：定时/手动触发的 Agent 提示词） |
 
 > ⚠️ **索引绝对不能写在 `Table.customConstraints` 里**。
 > drift 会把customConstraints 的内容拼进 `CREATE TABLE` 的括号内（当作列约束，
