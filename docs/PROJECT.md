@@ -492,7 +492,29 @@ $nativeLibraryDir/libproot.so \
 | 语速音量 | SSML 百分比增量（`+N%`） |
 
 握手分两次文本帧：`Path:speech.config` → `Path:ssml`。
-二进制帧：前 2 字节大端 = 头长度，头文本里判`Path:audio` / `Path:turn.end`。
+
+> ⚠️ **三个必须遵守的协议约束**（任一不满足都合成不出声音）：
+>
+> 1. **不能用 `WebSocket.connect`**。Dart 会在 User-Agent 前面拼上
+>    `Dart/<版本> (dart:io), `，变成
+>    `user-agent: Dart/3.13 (dart:io), Mozilla/5.0 ... Edg/143.0.0.0`，
+>    微软按 UA 判定客户端，非浏览器 UA **直接 403**。
+>    实测（同一台机器、同一网络、同一份签名）：
+>    - 裸 socket + 纯浏览器 UA → `101 Switching Protocols`
+>    - `WebSocket.connect`（UA 被污染）→ `403 Forbidden`
+>
+>    因此改为手工实现握手（`_edgeHandshake`）：`SecureSocket` + 手写
+>    HTTP Upgrade + 自己的帧编解码（`_WsFrameDecoder` / `_wsEncodeText`）。
+>
+> 2. **音频在文本帧（opcode 0x1）里，不在二进制帧**。格式是
+>    `X-RequestId:…\r\nContent-Type:audio/mpeg\r\nX-StreamId:…\r\nPath:audio\r\n\r\n<MP3>`。
+>    原实现只解析二进制帧（opcode 0x2），握手成功后**一字节音频都拿不到**。
+>
+> 3. **SSML 的 `X-Timestamp` 必须是 JavaScript 风格且以大写 `Z` 结尾**：
+>    `Sat Oct 03 2026 05:00:10 GMT+0000 (Coordinated Universal Time)Z`
+>    （官方 edge-tts 源码标注 "This is not a mistake, Microsoft Edge bug"）。
+>    用 ISO 格式服务端不产音频。另需 32 位十六进制 `X-RequestId`
+>    与完整音色名 `Microsoft Server Speech Text to Speech Voice (zh-CN, XiaoxiaoNeural)`。
 
 **播放**：依次尝试 `/system/bin/stagefright` → `/system/bin/toybox play` → `ffplay`，
 120 秒超时。
@@ -1014,6 +1036,36 @@ class ToolCall {
 | 45 | 知识库为何失效完全无迹可循 | `providers.dart:461-465` 空 catch → `debugPrint` |
 | 46 | MCP 连接失败与"没有可用服务器"无法区分 | `mcp_service.dart:91` 打日志含URL 与原因 |
 | 47 | 配置解析失败静默 | `providers.dart:234-236` 打日志 |
+
+### 11.9 Edge TTS 完全失效（403 / 无音频）
+
+用户反馈"edge 语言失败"。实测定位到**三个叠加的独立原因**，
+任一都会导致合成失败，必须全部满足：
+
+| # | 根因 | 症状 | 修复 |
+|---|---|---|---|
+| 48 | `WebSocket.connect` 污染 User-Agent（Dart 前缀） | 握手直接 **403** | 改手工握手 `_edgeHandshake`（`SecureSocket` + 手写 Upgrade） |
+| 49 | 只解析二进制帧（opcode 0x2） | 握手成功但**一字节音频都没有** | `parseEdgeFrame(bytes, isText:)` 双格式；音频在文本帧里 |
+| 50 | SSML 用 ISO 时间戳 | 服务端只回 `turn.start`，不产音频 | 新增 `edgeJsTimestamp()`，JS 风格 + 末尾大写 `Z` |
+
+**定位过程（可复用的方法）**：
+
+1. 写探测脚本连真实端点，确认能复现 403
+2. **交叉验证**：同机器装官方 `edge-tts 7.2.8` → **成功**。
+   由此排除"网络/服务端/签名算法"三种可能，把范围缩到"客户端实现"
+3. **抓握手报文**：把 `WebSocket.connect` 指向本地 ServerSocket，
+   打印实际发出的字节 → 发现 `user-agent: Dart/3.13 (dart:io), Mozilla/5.0 …`
+4. **裸 socket 对照**：同一份签名，干净 UA → 101；带 Dart 前缀 → 403。因果链闭合
+5. 剩下两个原因靠**读官方源码**（`edge_tts/communicate.py`）确认：
+   `ssml_headers_plus_data` 的注释直接写明 X-Timestamp 必须补 `Z`，
+   且 SSML 用的是完整音色名而非短名
+
+> 💡 **关键教训**：Dart 的 `WebSocket` 会在 UA 前拼 `Dart/x.y (dart:io), `。
+> 任何需要"伪装成浏览器"的服务（不只是 Edge TTS）都不能用
+> `WebSocket.connect`，必须手工握手并完全控制请求头。
+>
+> 同时，"连接成功"不等于"工作正常"——本次握手返回 101，
+> 但因为解析的是错误的帧类型，表现依然是"没有声音"。
 
 ### 11.8 CI 调试实录（迁移到orion_agent 后）
 

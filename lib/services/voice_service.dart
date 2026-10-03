@@ -266,17 +266,18 @@ class VoiceService {
     double volume = 1.0,
     Duration timeout = const Duration(seconds: 30),
   }) async {
-    // 同一次请求必须复用同一个 ConnectionId 与 X-Timestamp。
-    // 原实现分别调用了两次 edgeConnectionId()，产生两个不同的随机 ID，
-    // 服务端无法把两条日志关联到同一请求；两个 X-Timestamp 也跨越了
-    // 潜在的手势握手，一致性校验可能失败。
+    // 同一次请求必须复用同一个 ConnectionId：URL 与 SSML 里的
+    // X-RequestId 都用它，服务端才能把两条日志关联到同一次合成。
+    //
+    // ⚠️ 必须是 32 位十六进制（16 字节）——用短 id 时服务端不产音频，
+    // 只回turn.end，表现为「连接成功但没有声音」。
     final connectionId = edgeConnectionId();
     final timestamp = edgeTimestamp();
     final url = Uri.parse('$_wsBase'
         '?TrustedClientToken=$trustedClientToken'
+        '&ConnectionId=$connectionId'
         '&Sec-MS-GEC=${edgeSecMsGec()}'
-        '&Sec-MS-GEC-Version=1-$_chromiumFull'
-        '&ConnectionId=$connectionId');
+        '&Sec-MS-GEC-Version=1-$_chromiumFull');
 
     final headers = {
       'Origin': _origin,
@@ -285,68 +286,124 @@ class VoiceService {
       'Cache-Control': 'no-cache',
     };
 
-    // timeout 只中断「等待的 Future」，不会关闭正在进行的握手：
-    // 握手超时后连接仍会建立完成且无人持有引用，反复超时累积 socket 直到
-    // 达到 fd 上限。所以这里保留原始 Future，超时时补一次关闭。
-    final connect = WebSocket.connect(url.toString(), headers: headers);
-    final WebSocket ws;
-    try {
-      ws = await connect.timeout(const Duration(seconds: 15));
-    } on TimeoutException {
-      // 连上了就立刻关掉；连不上则忽略（原始 Future 已完成并带错误）。
-      unawaited(connect
-          .then<void>((s) => s.close())
-          .catchError((Object _) {}));
-      rethrow;
-    }
+    // ⚠️ 不能用 `WebSocket.connect`：它会在 User-Agent 前面拼上
+    // `Dart/<版本> (dart:io), `，变成
+    //   user-agent: Dart/3.13 (dart:io), Mozilla/5.0 ... Edg/143.0.0.0
+    // 微软按 UA 判定客户端，非浏览器 UA 直接返回 403 Forbidden。
+    // 实测（同一台机器、同一网络）：
+    //   -裸 socket + 纯浏览器 UA        → 101 Switching Protocols
+    //   - WebSocket.connect（UA 被污染） → 403
+    // 参见 docs/PROJECT.md §5.7。
+    //
+    // 所以这里自己实现 WebSocket 握手：SecureSocket + 手写 HTTP Upgrade，
+    // 从而完全控制请求头。代价是要自己实现帧编解码（见下方 _wsEncodeText）。
+    final ws = await _edgeHandshake(url, headers,
+        timeout: const Duration(seconds: 15));
 
     final audio = BytesBuilder(copy: false);
     final done = Completer<void>();
+    final handshake = Completer<void>();
 
+    // 音频在【文本帧】里（opcode 0x1），不在二进制帧。
+    // 实测服务端格式：
+    //   X-RequestId:...\r\nContent-Type:audio/mpeg\r\nX-StreamId:...\r\n
+    //   Path:audio\r\n\r\n<MP3 数据>
+    // 原实现只解析二进制帧（opcode 0x2），因此即使握手成功也一字节音频都拿不到，
+    // 表现为「连接正常但没有声音」。
+    //
+    // ws 是裸 Socket（自己做的握手），所以要先做 WebSocket 帧解码才知道
+    // 每块是文本帧还是二进制帧；握手响应本身也要在这里面消费掉。
+    final decoder = _WsFrameDecoder();
+    final hsBuf = BytesBuilder(copy: true);
+    var upgraded = false;
     final sub = ws.listen(
       (dynamic raw) {
         if (raw is! List<int>) return;
         final bytes = Uint8List.fromList(raw);
-        // 音频与结束标记都在**二进制帧**里：
-        // 前 2 字节 = 头长度（大端），随后是头文本，剩余部分才是负载。
-        final parsed = parseEdgeFrame(bytes);
-        if (parsed == null) return;
-        if (parsed.isAudio) {
-          audio.add(parsed.payload);
-        } else if (parsed.isTurnEnd) {
-          if (!done.isCompleted) done.complete();
+
+        // 第一步：吃掉 HTTP Upgrade 响应
+        if (!upgraded) {
+          hsBuf.add(bytes);
+          final h = Uint8List.fromList(hsBuf.toBytes());
+          final end = _indexOfHeaderEnd(h, 0);
+          if (end < 0) return;
+          final head = latin1.decode(h, allowInvalid: true);
+          final statusLine = head.split('\r\n').first;
+          if (!statusLine.contains(' 101')) {
+            ws.destroy();
+            if (!handshake.isCompleted) {
+              handshake.completeError(
+                  Exception('Edge TTS 握手失败：$statusLine'));
+            }
+            return;
+          }
+          upgraded = true;
+          if (!handshake.isCompleted) handshake.complete();
+          // 响应之后可能紧跟 WebSocket 帧
+          final rest = Uint8List.sublistView(h, end);
+          if (rest.isEmpty) return;
+          _onFrames(decoder, rest, audio, done);
+          return;
         }
+
+        _onFrames(decoder, bytes, audio, done);
       },
       onError: (Object e) {
-        if (!done.isCompleted) done.completeError(e);
+        if (!handshake.isCompleted) {
+          handshake.completeError(e);
+        } else if (!done.isCompleted) {
+          done.completeError(e);
+        }
       },
       onDone: () {
-        if (!done.isCompleted) done.complete();
+        if (!handshake.isCompleted) {
+          handshake.completeError(
+              Exception('Edge TTS 连接在握手完成前关闭'));
+        } else if (!done.isCompleted) {
+          done.complete();
+        }
       },
       cancelOnError: true,
     );
 
-    ws.add(utf8.encode('X-Timestamp:$timestamp\r\n'
+    // 等握手完成再发业务消息（服务端未Upgrade 前发帧会被忽略）
+    try {
+      await handshake.future.timeout(const Duration(seconds: 15));
+    } catch (_) {
+      await sub.cancel();
+      ws.destroy();
+      rethrow;
+    }
+
+    // 握手已升级为裸 socket，所有写入都要自己包成 WebSocket 帧。
+    _wsSendText(ws, 'X-Timestamp:$timestamp\r\n'
         'Content-Type:application/json; charset=utf-8\r\n'
         'Path:speech.config\r\n\r\n'
         '{"context":{"synthesis":{"audio":{"metadataoptions":'
         '{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},'
-        '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}'));
+        '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}');
 
     // Edge 的语速/音量用百分比增量表达
     final ratePct = ((rate - 1.0) * 100).round();
     final volPct = ((volume - 1.0) * 100).round();
-    final ssml = '<speak version="1.0" '
-        'xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN">'
-        '<voice name="$voice">'
-        '<prosody rate="${ratePct >= 0 ? '+' : ''}$ratePct%" '
-        'volume="${volPct >= 0 ? '+' : ''}$volPct%" pitch="+0Hz">'
+    //音色名必须是完整形式，短名（zh-CN-XiaoxiaoNeural）服务端不认。
+    final fullVoice = voice.startsWith('Microsoft Server Speech')
+        ? voice
+        : 'Microsoft Server Speech Text to Speech Voice '
+            '($voice)';
+    final ssml = "<speak version='1.0' "
+        "xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>"
+        "<voice name='$fullVoice'>"
+        "<prosody pitch='+0Hz' rate='${ratePct >= 0 ? '+' : ''}$ratePct%' "
+        "volume='${volPct >= 0 ? '+' : ''}$volPct%'>"
         '${escapeXml(text)}</prosody></voice></speak>';
 
-    ws.add(utf8.encode('X-RequestId:$connectionId\r\n'
+    // X-Timestamp 必须是 JavaScript 风格且以大写 Z 结尾（微软的 bug 要求，
+    // 官方 edge-tts 源码里明确注释了"This is not a mistake"）。
+    _wsSendText(ws, 'X-RequestId:$connectionId\r\n'
         'Content-Type:application/ssml+xml\r\n'
-        'X-Timestamp:$timestamp\r\n'
-        'Path:ssml\r\n\r\n$ssml'));
+        'X-Timestamp:${edgeJsTimestamp()}Z\r\n'
+        'Path:ssml\r\n\r\n$ssml');
 
     try {
       await done.future.timeout(timeout);
@@ -356,7 +413,11 @@ class VoiceService {
         await ws.close();
       } catch (_) {}
     }
-    return audio.takeBytes();
+    final out = audio.takeBytes();
+    if (out.isEmpty) {
+      throw Exception('Edge TTS 未返回音频（握手成功但无 Path:audio 帧）');
+    }
+    return out;
   }
 
   /// 播放 MP3。Android 侧优先用系统 stagefright 播放器，
@@ -426,22 +487,214 @@ class EdgeFrame {
   bool get isTurnEnd => header.contains('Path:turn.end');
 }
 
-/// 解析 Edge 的二进制帧：前 2 字节为头长度（大端），随后是头文本，
-/// 剩余部分为负载（音频帧的负载即 MP3 数据）。
+/// 一帧 WebSocket 数据（含 opcode）。
+class _WsFrame {
+  const _WsFrame(this.opcode, this.payload);
+  final int opcode;
+  final Uint8List payload;
+}
+
+/// 增量式 WebSocket 帧解码器（RFC 6455 服务端侧，无掩码）。
 ///
-/// 头长度非法或超出帧长时返回 null（丢弃该帧而不是抛异常）。
-EdgeFrame? parseEdgeFrame(Uint8List bytes) {
-  if (bytes.length < 2) return null;
-  final headerLen = (bytes[0] << 8) | bytes[1];
-  if (headerLen <= 0 || 2 + headerLen > bytes.length) return null;
+/// TCP 是字节流，一次 socket 回调可能包含半帧、多帧或跨帧边界，
+/// 所以必须自己缓冲拼帧——`WebSocket` 类帮了这个忙，
+/// 但我们为了控制 User-Agent 自己做握手，只能自己实现。
+class _WsFrameDecoder {
+  final _buf = BytesBuilder(copy: true);
+
+  /// 喂入原始字节，返回本次可完整解析出的帧。
+  List<_WsFrame> add(Uint8List chunk) {
+    _buf.add(chunk);
+    final frames = <_WsFrame>[];
+    final data = _buf.toBytes();
+
+    var pos = 0;
+    while (true) {
+      if (data.length - pos < 2) break;
+      final b0 = data[pos];
+      final b1 = data[pos + 1];
+      final opcode = b0 & 0x0F;
+      final masked = (b1 & 0x80) != 0;
+      var len = b1 & 0x7F;
+      var p = pos + 2;
+
+      if (len == 126) {
+        if (data.length < p + 2) break;
+        len = (data[p] << 8) | data[p + 1];
+        p += 2;
+      } else if (len == 127) {
+        if (data.length < p + 8) break;
+        len = 0;
+        for (var i = 0; i < 8; i++) {
+          len = (len << 8) | data[p + i];
+        }
+        p += 8;
+      }
+
+      var maskKey = <int>[];
+      if (masked) {
+        if (data.length < p + 4) break;
+        maskKey = data.sublist(p, p + 4);
+        p += 4;
+      }
+      if (data.length < p + len) break;
+
+      var payload = Uint8List.fromList(data.sublist(p, p + len));
+      if (masked) {
+        for (var i = 0; i < payload.length; i++) {
+          payload[i] ^= maskKey[i % 4];
+        }
+      }
+      frames.add(_WsFrame(opcode, payload));
+      pos = p + len;
+    }
+
+    // 保留未消费的尾巴
+    _buf.clear();
+    if (pos < data.length) {
+      _buf.add(Uint8List.sublistView(data, pos));
+    }
+    return frames;
+  }
+}
+
+/// 解析 Edge 的一帧。
+///
+/// ⚠️ 音频帧是**文本帧**（opcode 0x1），不是二进制帧：
+///   X-RequestId:...\r\nContent-Type:audio/mpeg\r\nX-StreamId:...\r\n
+///   Path:audio\r\n\r\n<MP3 数据>
+/// 服务端偶尔也会发二进制帧（0x8E0=2288 字节的头部长度格式）。
+/// 原实现只处理二进制帧，导致握手成功后一字节音频都拿不到。
+///
+/// 两种格式统一按「头部文本 + \r\n\r\n + 负载」切分：
+/// - 文本帧：直接是 ASCII 头
+/// - 二进制帧：前 2 字节大端 = 头部长度
+EdgeFrame? parseEdgeFrame(Uint8List bytes, {bool isText = false}) {
+  var headerStart = 0;
+  var payloadStart = -1;
+
+  if (isText) {
+    payloadStart = _indexOfHeaderEnd(bytes, 0);
+    if (payloadStart < 0) return null;
+  } else {
+    if (bytes.length < 2) return null;
+    final headerLen = (bytes[0] << 8) | bytes[1];
+    if (headerLen <= 0 || 2 + headerLen > bytes.length) return null;
+    headerStart = 2;
+    payloadStart = 2 + headerLen;
+  }
+
   final header = latin1.decode(
-    bytes.sublist(2, 2 + headerLen),
+    bytes.sublist(headerStart, payloadStart),
     allowInvalid: true,
   );
   return EdgeFrame(
     header: header,
-    payload: Uint8List.sublistView(bytes, 2 + headerLen),
+    payload: Uint8List.sublistView(bytes, payloadStart),
   );
+}
+
+/// 找到\r\n\r\n 的位置（即头部结束处），返回负载起始下标；找不到返回 -1。
+int _indexOfHeaderEnd(Uint8List b, int from) {
+  for (var i = from; i + 3 < b.length; i++) {
+    if (b[i] == 0x0D &&
+        b[i + 1] == 0x0A &&
+        b[i + 2] == 0x0D &&
+        b[i + 3] == 0x0A) {
+      return i + 4;
+    }
+  }
+  return -1;
+}
+
+/// 编码一个客户端掩码文本帧（RFC 6455 opcode 0x1）。
+Uint8List _wsEncodeText(String text, {int maskKey = 0x2A3B4C5D}) {
+  final payload = utf8.encode(text);
+  final out = BytesBuilder(copy: false);
+  out.addByte(0x81); // FIN=1, opcode=text
+  final n = payload.length;
+  if (n < 126) {
+    out.addByte(0x80 | n);
+  } else if (n < 65536) {
+    out.addByte(0x80 | 126);
+    out.addByte((n >> 8) & 0xFF);
+    out.addByte(n & 0xFF);
+  } else {
+    out.addByte(0x80 | 127);
+    for (var i = 7; i >= 0; i--) {
+      out.addByte((n >> (i * 8)) & 0xFF);
+    }
+  }
+  out.addByte((maskKey >> 24) & 0xFF);
+  out.addByte((maskKey >> 16) & 0xFF);
+  out.addByte((maskKey >> 8) & 0xFF);
+  out.addByte(maskKey & 0xFF);
+  for (var i = 0; i < n; i++) {
+    out.addByte(payload[i] ^ ((maskKey >> (24 - (i % 4) * 8)) & 0xFF));
+  }
+  return out.toBytes();
+}
+
+void _wsSendText(Socket sock, String text) {
+  sock.add(_wsEncodeText(text));
+}
+
+/// 处理一批已解码的 WebSocket 帧：累加音频、检测结束标记。
+void _onFrames(
+  _WsFrameDecoder decoder,
+  Uint8List bytes,
+  BytesBuilder audio,
+  Completer<void> done,
+) {
+  for (final frame in decoder.add(bytes)) {
+    final parsed = parseEdgeFrame(frame.payload, isText: frame.opcode == 0x1);
+    if (parsed == null) continue;
+    if (parsed.isAudio) {
+      audio.add(parsed.payload);
+    } else if (parsed.isTurnEnd) {
+      if (!done.isCompleted) done.complete();
+    }
+  }
+}
+
+/// 手工完成 Edge 的 WebSocket 握手，返回**已连接但未订阅**的 socket。
+///
+/// 不能用 `WebSocket.connect`：Dart 会在User-Agent 前拼上
+/// `Dart/<版本> (dart:io), `，微软据此判定为非浏览器客户端并返回 403。
+/// 详见 docs/PROJECT.md §5.7。
+///
+/// ⚠️ 返回后**不要**再监听返回的 socket——调用方必须先建立唯一的
+/// `listen()`，否则 `Stream has already been listened to`。
+/// 本函数内部只写握手请求、不读响应（响应由调用方的订阅消费）。
+Future<Socket> _edgeHandshake(
+  Uri url,
+  Map<String, String> headers, {
+  required Duration timeout,
+}) async {
+  final host = url.host;
+  final port = url.hasPort ? url.port : 443;
+  final sock = await SecureSocket.connect(host, port,
+      context: SecurityContext(withTrustedRoots: true))
+      .timeout(timeout);
+
+  // Sec-WebSocket-Key 必须是 base64 的 16 字节
+  final rnd = math.Random.secure();
+  final key = base64.encode(List<int>.generate(16, (_) => rnd.nextInt(256)));
+
+  final sb = StringBuffer()
+    ..write('GET ${url.path}'
+        '${url.hasQuery ? '?${url.query}' : ''} HTTP/1.1\r\n')
+    ..write('Host: $host\r\n')
+    ..write('Upgrade: websocket\r\n')
+    ..write('Connection: Upgrade\r\n')
+    ..write('Sec-WebSocket-Key: $key\r\n')
+    ..write('Sec-WebSocket-Version: 13\r\n');
+  headers.forEach((k, v) => sb.write('$k: $v\r\n'));
+  sb.write('\r\n');
+
+  sock.add(utf8.encode(sb.toString()));
+  await sock.flush();
+  return sock;
 }
 
 /// 计算 Sec-MS-GEC 签名。
@@ -460,12 +713,34 @@ String edgeSecMsGec({DateTime? now}) {
 }
 
 /// Edge 协议里的时间戳：UTC 的 `yyyy-MM-ddTHH:mm:ss.fffZ`。
+/// 用于 speech.config 消息。
 String edgeTimestamp({DateTime? now}) {
   final t = (now ?? DateTime.now()).toUtc();
   String p(int v, [int w = 2]) => v.toString().padLeft(w, '0');
   return '${t.year}-${p(t.month)}-${p(t.day)}T'
       '${p(t.hour)}:${p(t.minute)}:${p(t.second)}'
       '.${p(t.millisecond, 3)}Z';
+}
+
+/// SSML 消息专用的 JavaScript 风格时间戳。
+///
+/// ⚠️ 微软的 SSML 接口要求这种格式，且**末尾必须再补一个大写 Z**
+/// （官方 edge-tts 源码里标注 "This is not a mistake, Microsoft Edge bug"）。
+/// 形如：
+///   Sat Oct 03 2026 05:00:10 GMT+0000 (Coordinated Universal Time)Z
+/// 之前用 ISO 格式（2026-10-03T05:00:10.000Z）服务端不产音频。
+String edgeJsTimestamp({DateTime? now}) {
+  const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const months = [
+    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+  ];
+  final t = (now ?? DateTime.now()).toUtc();
+  String p(int v) => v.toString().padLeft(2, '0');
+  return '${weekdays[t.weekday - 1]} ${months[t.month - 1]} '
+      '${p(t.day)} ${t.year} '
+      '${p(t.hour)}:${p(t.minute)}:${p(t.second)} '
+      'GMT+0000 (Coordinated Universal Time)';
 }
 
 /// 生成 Edge 协议用的随机 ConnectionId（32 位十六进制）。
