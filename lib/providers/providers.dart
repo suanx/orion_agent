@@ -409,6 +409,9 @@ class ChatState {
   final String? activeSessionId;
   final bool isStreaming;
   final String streamingContent;
+
+  /// 流式期间的思考过程（开启思考且模型返回时才有内容）。
+  final String streamingReasoning;
   final List<String> steps;
   final String? error;
 
@@ -417,6 +420,7 @@ class ChatState {
     this.activeSessionId,
     this.isStreaming = false,
     this.streamingContent = '',
+    this.streamingReasoning = '',
     this.steps = const [],
     this.error,
   });
@@ -433,6 +437,7 @@ class ChatState {
     String? activeSessionId,
     bool? isStreaming,
     String? streamingContent,
+    String? streamingReasoning,
     List<String>? steps,
     String? error,
     bool clearError = false,
@@ -442,6 +447,7 @@ class ChatState {
         activeSessionId: activeSessionId ?? this.activeSessionId,
         isStreaming: isStreaming ?? this.isStreaming,
         streamingContent: streamingContent ?? this.streamingContent,
+        streamingReasoning: streamingReasoning ?? this.streamingReasoning,
         steps: steps ?? this.steps,
         error: clearError ? null : (error ?? this.error),
       );
@@ -611,6 +617,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     state = state.copyWith(
       isStreaming: true,
       streamingContent: '',
+      streamingReasoning: '',
       steps: [],
       clearError: true,
     );
@@ -660,6 +667,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
         if (ev is AgentDelta) {
           buf.write(ev.delta);
           state = state.copyWith(streamingContent: buf.toString());
+        } else if (ev is AgentReasoning) {
+          state = state.copyWith(
+              streamingReasoning:
+                  state.streamingReasoning + ev.delta);
         } else if (ev is AgentStatus) {
           state = state.copyWith(steps: [...state.steps, '⏳ ${ev.text}']);
         } else if (ev is AgentToolDone) {

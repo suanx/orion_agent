@@ -36,6 +36,12 @@ class ChatMessage {
   final List<String> images; // data URL（base64），user 消息可附带
   final DateTime createdAt;
 
+  /// 思考过程（reasoning_content / reasoning 流的累积）。
+  ///
+  /// 仅 assistant 消息可能有。**不回传**给服务端：OpenAI 兼容协议没有
+  /// 这个字段，部分网关见到未知字段会直接 400。
+  final String? reasoning;
+
   ChatMessage({
     required this.id,
     required this.role,
@@ -44,6 +50,7 @@ class ChatMessage {
     this.toolCallId,
     this.toolName,
     this.images = const [],
+    this.reasoning,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
 
@@ -69,6 +76,7 @@ class ChatMessage {
       m['tool_call_id'] = toolCallId ?? '';
       if (toolName != null) m['name'] = toolName;
     }
+    // ⚠️ reasoning 不进 API 请求体，见字段注释。
     return m;
   }
 }

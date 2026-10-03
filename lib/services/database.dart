@@ -30,6 +30,11 @@ class MessageRows extends Table {
   TextColumn get toolCallId => text().nullable()();
   TextColumn get toolName => text().nullable()();
   TextColumn get imagesJson => text().withDefault(const Constant('[]'))();
+
+  /// 思考过程（模型返回的 reasoning_content / reasoning 累积）。
+  /// assistant 消息可有；为 null 表示该模型没输出思考内容。
+  TextColumn get reasoning => text().nullable()();
+
   IntColumn get createdAt => integer()();
 
   // ⚠️ 不要把 CREATE INDEX 写在这里。
@@ -153,7 +158,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'orion_agent'));
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   /// 全部索引。单独抽出以便 onCreate 与 onUpgrade 共用，避免漏建。
   ///
@@ -200,6 +205,10 @@ class AppDatabase extends _$AppDatabase {
           if (from < 7) {
             await m.createTable(tokenUsageRows);
           }
+          if (from < 8) {
+            // 思考过程列：历史消息没有思考内容，加可空列即可。
+            await m.addColumn(messageRows, messageRows.reasoning);
+          }
           // 索引对所有旧版本都要补建（不只是 from < 6）：
           // 之前把它错放在 customConstraints 里，等于从未真正建过索引。
           await _createIndexes();
@@ -234,6 +243,7 @@ ChatMessage messageFromRow(MessageRow r) => ChatMessage(
       toolCallId: r.toolCallId,
       toolName: r.toolName,
       images: decodeStringList(r.imagesJson),
+      reasoning: r.reasoning,
       createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt),
     );
 
@@ -247,6 +257,7 @@ MessageRowsCompanion messageToCompanion(String sessionId, ChatMessage m) =>
       toolCallId: Value(m.toolCallId),
       toolName: Value(m.toolName),
       imagesJson: Value(jsonEncode(m.images)),
+      reasoning: Value(m.reasoning),
       createdAt: Value(m.createdAt.millisecondsSinceEpoch),
     );
 

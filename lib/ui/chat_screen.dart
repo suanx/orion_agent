@@ -254,7 +254,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     // 都会 copyWith 触发一次 build，于是每秒注册几十个回调，每个都重启
     // 250ms 的animateTo —— 滚动抖动且动画永远推不到底，回调队列持续膨胀。
     // 改为只在【内容长度真的变了】时注册一次。
-    final streamingLen = chat.streamingContent.length;
+    // 思考流的长度也算上：思考期间也要跟随滚动。
+    final streamingLen =
+        chat.streamingContent.length + chat.streamingReasoning.length;
     if (chat.isStreaming && streamingLen != _lastScrollLen) {
       _lastScrollLen = streamingLen;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -270,7 +272,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     if (chat.isStreaming) {
       items.add(_StreamingBubble(
-          content: chat.streamingContent, steps: chat.steps));
+          content: chat.streamingContent,
+          reasoning: chat.streamingReasoning,
+          steps: chat.steps));
     }
     final empty = items.isEmpty;
 
@@ -687,6 +691,12 @@ class _MessageBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看。
+            if ((message.reasoning ?? '').trim().isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: _ReasoningPanel(text: message.reasoning!),
+              ),
             for (final tc in message.toolCalls)
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
@@ -704,9 +714,16 @@ class _MessageBubble extends StatelessWidget {
 }
 
 class _StreamingBubble extends StatelessWidget {
-  const _StreamingBubble({required this.content, required this.steps});
+  const _StreamingBubble({
+    required this.content,
+    required this.reasoning,
+    required this.steps,
+  });
 
   final String content;
+
+  /// 流式思考过程（开启思考且模型返回时非空）。
+  final String reasoning;
   final List<String> steps;
 
   @override
@@ -726,6 +743,17 @@ class _StreamingBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            // 思考阶段（content 还没开始）默认展开实时思考内容；
+            // 正文开始后由面板自己收起，保留可展开回看。
+            if (reasoning.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: _ReasoningPanel(
+                  text: reasoning,
+                  inProgress: content.isEmpty,
+                  initiallyExpanded: true,
+                ),
+              ),
             for (final s in steps)
               Padding(
                 padding: const EdgeInsets.only(bottom: 2),
@@ -733,17 +761,133 @@ class _StreamingBubble extends StatelessWidget {
                     style: TextStyle(
                         fontSize: 12, color: onSurface(context, 0.45))),
               ),
-            if (content.isEmpty)
+            // 思考流本身就是"在进行中"的可视反馈，此时不再叠加转圈；
+            // 两者都空才是真正的等待（首字节未到）。
+            if (content.isEmpty && reasoning.isEmpty)
               const SizedBox(
                 width: 18,
                 height: 18,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
-            else
+            else if (content.isNotEmpty)
               MarkdownBody(data: content),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 可折叠的思考过程面板。
+///
+/// - 收起时一行「思考中…/已深度思考」，点击展开；
+/// - 展开时限高 220 可滚动，流式新内容自动跟随到底部；
+/// - 思考进行中 → 完成的瞬间自动收起（与主流 AI App 的交互一致），
+///   用户可再点开回看。
+class _ReasoningPanel extends StatefulWidget {
+  const _ReasoningPanel({
+    required this.text,
+    this.inProgress = false,
+    this.initiallyExpanded = false,
+  });
+
+  final String text;
+  final bool inProgress;
+  final bool initiallyExpanded;
+
+  @override
+  State<_ReasoningPanel> createState() => _ReasoningPanelState();
+}
+
+class _ReasoningPanelState extends State<_ReasoningPanel> {
+  late bool _expanded = widget.initiallyExpanded;
+  final _scroll = ScrollController();
+  int _lastLen = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastLen = widget.text.length;
+  }
+
+  @override
+  void didUpdateWidget(covariant _ReasoningPanel old) {
+    super.didUpdateWidget(old);
+    // 思考结束：自动收起，让正文接管视觉焦点
+    if (old.inProgress && !widget.inProgress && _expanded) {
+      _expanded = false;
+    }
+    // 展开且在思考中：跟随新内容滚到底
+    if (_expanded && widget.inProgress && widget.text.length != _lastLen) {
+      _lastLen = widget.text.length;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scroll.hasClients) {
+          _scroll.jumpTo(_scroll.position.maxScrollExtent);
+        }
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          borderRadius: BorderRadius.circular(8),
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.psychology_outlined,
+                    size: 14, color: onSurface(context, 0.5)),
+                const SizedBox(width: 4),
+                Text(
+                  widget.inProgress ? '思考中…' : '已深度思考',
+                  style: TextStyle(
+                      fontSize: 12, color: onSurface(context, 0.5)),
+                ),
+                Icon(
+                  _expanded
+                      ? Icons.expand_less_rounded
+                      : Icons.expand_more_rounded,
+                  size: 16,
+                  color: onSurface(context, 0.4),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_expanded)
+          Container(
+            width: double.infinity,
+            constraints: const BoxConstraints(maxHeight: 220),
+            margin: const EdgeInsets.only(top: 4),
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: onSurface(context, 0.04),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: SingleChildScrollView(
+              controller: _scroll,
+              child: SelectableText(
+                widget.text,
+                style: TextStyle(
+                    fontSize: 12.5,
+                    height: 1.5,
+                    color: onSurface(context, 0.55)),
+              ),
+            ),
+          ),
+      ],
     );
   }
 }
@@ -760,6 +904,7 @@ class _ComposerStatusBar extends ConsumerWidget {
     final config = ref.watch(configProvider);
     final active = config.activeConfig;
     final thinking = ref.watch(thinkingProvider);
+    final effort = ref.watch(reasoningEffortProvider);
     final hasModel = active?.chatModel != null;
 
     // 模型选择器列出**同一提供商**下的聊天模型。
@@ -776,22 +921,14 @@ class _ComposerStatusBar extends ConsumerWidget {
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
       child: Row(
         children: [
-          // 思考开关
+          // 思考开关 + 强度：点击弹出底部选择（快速 / 低 / 中 / 高）。
+          // 之前只有开/关两态，无法控制推理强度；reasoning_effort
+          // 参数早就支持 low/medium/high，这里把入口补上。
           _MiniChip(
             icon: Icons.psychology_outlined,
-            label: thinking ? '思考中' : '快速',
+            label: thinking ? '思考·${_effortLabel(effort)}' : '快速',
             enabled: hasModel,
-            onTap: hasModel
-                ? () {
-                    final next = !thinking;
-                    ref.read(thinkingProvider.notifier).state = next;
-                    // 必须落盘：provider 初值是从 prefs 读的，
-                    // 不写回的话杀掉进程重启后开关会弹回「快速」。
-                    unawaited(ref
-                        .read(sharedPreferencesProvider)
-                        .setBool('thinking_enabled', next));
-                  }
-                : null,
+            onTap: hasModel ? () => _pickThinking(context, ref) : null,
           ),
           const SizedBox(width: 8),
 
@@ -833,6 +970,53 @@ class _ComposerStatusBar extends ConsumerWidget {
       ),
     );
   }
+
+  /// 弹出思考强度选择。选择结果同时写入 provider 与 prefs：
+  /// provider 初值从 prefs 读，不写回的话重启后会弹回。
+  Future<void> _pickThinking(BuildContext context, WidgetRef ref) async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    // 当前选中项：关闭时用空串表示「快速」。
+    final current =
+        ref.read(thinkingProvider) ? ref.read(reasoningEffortProvider) : '';
+    final sel = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final opt in const [
+              ('', '快速回答', '不开启思考，响应更快'),
+              ('low', '思考 · 低', '简短推理，速度与深度均衡'),
+              ('medium', '思考 · 中', '常规推理强度（默认）'),
+              ('high', '思考 · 高', '最充分的推理，耗时与 token 消耗更高'),
+            ])
+              ListTile(
+                title: Text(opt.$2, style: const TextStyle(fontSize: 15)),
+                subtitle: Text(opt.$3,
+                    style: const TextStyle(fontSize: 12)),
+                trailing: current == opt.$1
+                    ? const Icon(Icons.check_rounded, size: 20)
+                    : null,
+                onTap: () => Navigator.pop(ctx, opt.$1),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (sel == null) return;
+    final on = sel.isNotEmpty;
+    ref.read(thinkingProvider.notifier).state = on;
+    ref.read(reasoningEffortProvider.notifier).state = on ? sel : 'medium';
+    unawaited(prefs.setBool('thinking_enabled', on));
+    if (on) unawaited(prefs.setString('reasoning_effort', sel));
+  }
+
+  static String _effortLabel(String effort) => switch (effort) {
+        'low' => '低',
+        'high' => '高',
+        _ => '中',
+      };
 
   /// 128000 → "128K"，1048576 → "1M"，避免长文本把状态条挤爆。
   static String _compactTokens(int n) {

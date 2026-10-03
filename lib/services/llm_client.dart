@@ -20,6 +20,17 @@ class ContentDelta extends LlmEvent {
   const ContentDelta(this.delta);
 }
 
+/// 一段思考过程增量（模型在正式回答前输出的推理文本）。
+///
+/// 两种主流下发字段都兼容（见 `_chatStreamOnce` 的解析）：
+///   - DeepSeek / 智谱 / 千问等兼容网关：`delta.reasoning_content`
+///   - OpenRouter 及部分网关：`delta.reasoning`
+/// 服务端不下发思考内容时不会有这个事件。
+class ReasoningDelta extends LlmEvent {
+  final String delta;
+  const ReasoningDelta(this.delta);
+}
+
 /// 一轮响应结束后的完整 assistant 消息（可能携带工具调用）。
 class FinalMessage extends LlmEvent {
   final ChatMessage message;
@@ -266,6 +277,8 @@ class LlmClient {
     );
 
     final contentBuf = StringBuffer();
+    // 思考过程累积：FinalMessage 带给 Agent 层，随回答一起落库展示。
+    final reasoningBuf = StringBuffer();
     final toolAcc = <int, _ToolCallAcc>{};
 
     // 本轮累积到的 usage。流式里它只在最后一帧出现，
@@ -366,6 +379,14 @@ class LlmClient {
         yield ContentDelta(c);
       }
 
+      // 思考过程：DeepSeek 系字段是 reasoning_content，OpenRouter 系是
+      // reasoning。两者取其一（并存时拼接会导致内容重复，实际上不会并存）。
+      final rc = delta['reasoning_content'] ?? delta['reasoning'];
+      if (rc is String && rc.isNotEmpty) {
+        reasoningBuf.write(rc);
+        yield ReasoningDelta(rc);
+      }
+
       final Object? rawTcs = delta['tool_calls'];
       if (rawTcs is List) {
         for (final tc in rawTcs) {
@@ -408,6 +429,7 @@ class LlmClient {
       id: 'asst_${DateTime.now().millisecondsSinceEpoch}',
       role: 'assistant',
       content: contentBuf.toString(),
+      reasoning: reasoningBuf.isEmpty ? null : reasoningBuf.toString(),
       toolCalls: entries
           .map((e) => ToolCall(
                 id: e.value.id ?? 'call_${e.key}',

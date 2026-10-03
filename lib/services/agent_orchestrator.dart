@@ -21,6 +21,14 @@ class AgentDelta extends AgentEvent {
   const AgentDelta(this.delta);
 }
 
+/// 思考过程的增量文本（模型在正式回答前输出的推理内容）。
+///
+/// 仅当请求开启思考且模型确实返回了思考流时才有。
+class AgentReasoning extends AgentEvent {
+  final String delta;
+  const AgentReasoning(this.delta);
+}
+
 /// 状态提示（如“调用工具 calculator …”）。
 class AgentStatus extends AgentEvent {
   final String text;
@@ -87,6 +95,9 @@ class AgentOrchestrator {
     final lead = StringBuffer();
     // 记录最后一次可见内容：达到 _maxSteps 时据此交付进展，而不是全部丢弃。
     var lastVisible = '';
+    // 各轮思考过程累积：回答落库时随消息一起保存，UI 可折叠回看。
+    // 多轮工具调用时每轮都可能有思考，用空行连接保持段落完整。
+    final reasoningBuf = StringBuffer();
     // 同一工具 + 同一参数连续重复调用说明模型卡住了，提前收尾避免空转烧 token。
     String? prevSig;
     var repeatCount = 0;
@@ -109,6 +120,9 @@ class AgentOrchestrator {
         )) {
           if (ev is ContentDelta) {
             yield AgentDelta(ev.delta);
+          } else if (ev is ReasoningDelta) {
+            reasoningBuf.write(ev.delta);
+            yield AgentReasoning(ev.delta);
           } else if (ev is FinalMessage) {
             assistant = ev.message;
           } else if (ev is TokenUsage) {
@@ -155,6 +169,11 @@ class AgentOrchestrator {
                   id: assistant.id,
                   role: 'assistant',
                   content: '$prefix${assistant.content}',
+                  // reasoningBuf 是全部轮次的累积（含最后一轮），
+                  // 比 assistant.reasoning 更完整
+                  reasoning: reasoningBuf.isEmpty
+                      ? null
+                      : reasoningBuf.toString(),
                   createdAt: assistant.createdAt,
                 ),
         );

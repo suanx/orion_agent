@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'workspace_store.dart';
+
 /// 一个可清理的存储类别。
 class StorageEntry {
   const StorageEntry({
@@ -99,16 +101,9 @@ class FileStorageService {
   }
 
   /// 工作区目录（与终端 /workspace 同一个）。
-  static Future<Directory> workspaceDir() async {
-    String base;
-    try {
-      base = (await getExternalStorageDirectory())?.path ?? '';
-    } catch (_) {
-      base = '';
-    }
-    if (base.isEmpty) base = (await getApplicationSupportDirectory()).path;
-    return Directory('$base/workspace');
-  }
+  /// 统一走 [WorkspaceStore]：用户可在存储设置里选择自定义目录。
+  static Future<Directory> workspaceDir() async =>
+      Directory(await WorkspaceStore.path());
 
   static Future<Directory> _support() => getApplicationSupportDirectory();
   static Future<Directory> _temp() => getTemporaryDirectory();

@@ -1,9 +1,13 @@
+import 'dart:io';
+
 import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/file_storage_service.dart';
+import '../services/workspace_store.dart';
 
 /// 存储设置：各目录占用统计、清理缓存、清空工作区。
 class StorageSettingsScreen extends ConsumerStatefulWidget {
@@ -151,6 +155,11 @@ class _StorageSettingsScreenState
                 ),
                 const SizedBox(height: 20),
 
+                // ------- 工作区目录 -------
+                _label('工作区'),
+                const _WorkspaceDirCard(),
+                const SizedBox(height: 20),
+
                 // ------- 明细 -------
                 _label('目录明细'),
                 ...entries.map(_entryTile),
@@ -294,4 +303,185 @@ class _StorageSettingsScreenState
         ),
         child: Column(children: children),
       );
+}
+
+/// 工作区目录卡片：展示当前目录，支持更换为自定义目录。
+///
+/// 工作区是 Agent 产物与终端 `/workspace` 挂载的共享目录。
+/// 默认在外部存储的应用专属目录下；选择自定义目录后立即生效
+/// （WorkspaceStore 每次解析都读最新设置，无缓存延迟）。
+class _WorkspaceDirCard extends StatefulWidget {
+  const _WorkspaceDirCard();
+
+  @override
+  State<_WorkspaceDirCard> createState() => _WorkspaceDirCardState();
+}
+
+class _WorkspaceDirCardState extends State<_WorkspaceDirCard> {
+  String? _current;
+  String? _default;
+
+  @override
+  void initState() {
+    super.initState();
+    _reload();
+  }
+
+  Future<void> _reload() async {
+    final cur = await WorkspaceStore.path();
+    final def = await WorkspaceStore.defaultPath();
+    if (mounted) {
+      setState(() {
+        _current = cur;
+        _default = def;
+      });
+    }
+  }
+
+  bool get _isCustom =>
+      _current != null && _default != null && _current != _default;
+
+  Future<void> _pick() async {
+    final prefs = await SharedPreferences.getInstance();
+    final controller =
+        TextEditingController(text: prefs.getString(WorkspaceStore.prefsKey) ?? '');
+
+    // 扫描公共存储的一级目录作为快捷选项；无权限或路径不存在时
+    // 静默降级为纯手动输入。
+    final roots = <String>[];
+    try {
+      final base = Directory('/storage/emulated/0');
+      if (base.existsSync()) {
+        await for (final e in base.list(followLinks: false)) {
+          if (e is Directory) roots.add(e.path);
+        }
+        roots.sort();
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+    final sel = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('选择工作区目录'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView(
+            shrinkWrap: true,
+            children: [
+              Text('Agent 产物与终端 /workspace 将使用该目录。',
+                  style: TextStyle(
+                      fontSize: 12,
+                      height: 1.5,
+                      color: onSurface(ctx, 0.45))),
+              const SizedBox(height: 8),
+              for (final r in roots)
+                ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.folder_outlined, size: 20),
+                  title: Text(r,
+                      style: const TextStyle(fontSize: 13)),
+                  onTap: () => Navigator.pop(ctx, r),
+                ),
+              if (roots.isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                  child: Divider(
+                      height: 1, color: onSurface(ctx, 0.08)),
+                ),
+              TextField(
+                controller: controller,
+                decoration: const InputDecoration(
+                  labelText: '或手动输入完整路径',
+                  hintText: '/storage/emulated/0/...',
+                  border: OutlineInputBorder(),
+                  isDense: true,
+                ),
+                style: const TextStyle(fontSize: 13),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ''),
+            child: const Text('恢复默认'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, controller.text.trim()),
+            child: const Text('使用输入路径'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text('取消'),
+          ),
+        ],
+      ),
+    );
+    if (sel == null) return;
+    if (sel.isEmpty) {
+      await prefs.remove(WorkspaceStore.prefsKey);
+    } else {
+      // 目录不可创建时 WorkspaceStore.path() 会自动回退默认，
+      // 这里不做二次校验，选完刷新展示真实生效路径即可。
+      await prefs.setString(WorkspaceStore.prefsKey, sel);
+    }
+    await _reload();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('工作区目录已更新，下一次执行时生效')));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cur = _current;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: surface(context),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text('工作区目录',
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w500)),
+              ),
+              TextButton(
+                onPressed: _pick,
+                child: const Text('更改目录'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Icon(Icons.folder_outlined,
+                  size: 12, color: onSurface(context, 0.3)),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  cur ?? '读取中…',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                      fontSize: 11, color: onSurface(context, 0.35)),
+                ),
+              ),
+            ],
+          ),
+          if (_isCustom) ...[
+            const SizedBox(height: 6),
+            Text('已使用自定义目录，恢复默认回到应用专属目录。',
+                style: TextStyle(
+                    fontSize: 12, color: onSurface(context, 0.45))),
+          ],
+        ],
+      ),
+    );
+  }
 }

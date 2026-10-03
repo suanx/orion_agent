@@ -156,6 +156,7 @@ orion_agent/
 │   │   ├── skill_service.dart         技能（18 个内置）
 │   │   ├── role_service.dart          角色（无预置）
 │   │   ├── file_storage_service.dart  存储统计与清理
+│   │   ├── workspace_store.dart       工作区目录解析（默认/自定义统一入口）
 │   │   └── navigation_service.dart    全局导航（通知点击跳转）
 │   │
 │   └── ui/                界面层
@@ -164,14 +165,15 @@ orion_agent/
 │       ├── sessions_drawer.dart        会话抽屉
 │       ├── tasks_screen.dart           自动任务（M3 占位页）
 │       ├── skills_screen.dart          技能管理
-│       ├── roles_screen.dart           角色管理
+│       ├── roles_screen.dart           Agent 角色管理
 │       ├── knowledge_screen.dart       知识库管理
 │       ├── mcp_screen.dart             MCP 服务器配置
 │       ├── terminal_screen.dart        终端环境管理
 │       ├── settings_screen.dart        模型服务配置
 │       ├── appearance_screen.dart      主题/明暗模式
 │       ├── notification_settings_screen.dart  通知设置
-│       ├── storage_settings_screen.dart     存储管理
+│       ├── storage_settings_screen.dart     存储管理 + 工作区目录选择
+│       ├── about_screen.dart           关于页（软件介绍 + 在线更新）
 │       ├── profile_screen.dart         我的
 │       └── setup_screen.dart           首次运行引导
 │
@@ -198,18 +200,19 @@ orion_agent/
 
 ### 4.1 Drift 表定义（`lib/services/database.dart`）
 
-`schemaVersion = 6`
+`schemaVersion = 8`
 
 | 表 | 字段 | 用途 |
 |---|---|---|
 | `session_rows` | id(PK, text), title, createdAt, updatedAt | 会话 |
-| `message_rows` | id(PK, autoInc), mid, sessionId, role, content, toolCallsJson, toolCallId, toolName, imagesJson, createdAt | 消息 |
+| `message_rows` | id(PK, autoInc), mid, sessionId, role, content, toolCallsJson, toolCallId, toolName, imagesJson, reasoning, createdAt | 消息 |
 | `memory_note_rows` | id(PK), body, createdAt | 长期记忆 |
 | `knowledge_docs` | id(PK), title, chunkCount, createdAt | 知识库文档 |
 | `knowledge_chunks` | id(PK, autoInc), docId, idx, content, embeddingJson | 知识库分块 |
 | `skill_items` | id(PK), name, template, createdAt | 技能 |
 | `agent_roles` | id(PK), name, prompt, createdAt | 角色 |
 | `mcp_servers` | id(PK), name, url, enabled, createdAt | MCP 服务器 |
+| `token_usage_rows` | id(PK), createdAt, provider, model, inputTokens, outputTokens, cachedTokens, requests, costCents | Token 用量 |
 
 **索引**：`message_rows(session_id, id)` 复合索引（`database.dart:40`）
 —— 按会话取消息是高频操作，无索引会全表扫描。
@@ -223,6 +226,8 @@ orion_agent/
 | 4 | 新增 `skill_items` / `agent_roles` |
 | 5 | 新增 `mcp_servers` |
 | 6 | 新增 `idx_message_rows_session` 索引 |
+| 7 | 新增 `token_usage_rows`（Token 统计） |
+| 8 | `message_rows` 新增 `reasoning`（思考过程） |
 
 > ⚠️ **索引绝对不能写在 `Table.customConstraints` 里**。
 > drift 会把customConstraints 的内容拼进 `CREATE TABLE` 的括号内（当作列约束，

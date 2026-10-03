@@ -7,6 +7,8 @@ import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'workspace_store.dart';
+
 /// 终端环境支持的发行版。
 enum TerminalDistro { alpine, debian }
 
@@ -111,7 +113,6 @@ class TerminalService {
   final Dio _dio;
   String? _prootPath;
   final _rootfsCache = <TerminalDistro, String>{};
-  String? _workspaceDir;
   final _runningTasks = <String, Process>{};
 
   /// 当前激活的发行版（由终端页设置并持久化，Agent 工具使用它）。
@@ -119,23 +120,12 @@ class TerminalService {
 
   // ---------------- Workspace 挂载 ----------------
 
-  /// 宿主侧工作区目录：应用外部存储目录（无需权限，系统文件管理器可见），
-  /// 在 guest 内固定挂载为 /workspace。
-  Future<String> workspaceDir() async {
-    if (_workspaceDir != null) return _workspaceDir!;
-    String base;
-    try {
-      base = (await getExternalStorageDirectory())?.path ?? '';
-    } catch (_) {
-      base = '';
-    }
-    base = base.isEmpty ? (await getApplicationSupportDirectory()).path : base;
-    final ws = Directory('$base/workspace');
-    try {
-      if (!ws.existsSync()) ws.createSync(recursive: true);
-    } catch (_) {}
-    return _workspaceDir = ws.path;
-  }
+  /// 宿主侧工作区目录：用户可在「存储」设置里选择自定义目录
+  /// （见 [WorkspaceStore]），在 guest 内固定挂载为 /workspace。
+  ///
+  /// ⚠️ 不做内存缓存：设置页随时可能改目录，缓存会让改动
+  /// 直到重启才生效。
+  Future<String> workspaceDir() => WorkspaceStore.path();
 
   // ---------------- 自启动任务 ----------------
 

@@ -15,7 +15,7 @@ class RolesScreen extends ConsumerWidget {
     final activeId = ref.watch(activeRoleIdProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Agent 角色')),
+      appBar: AppBar(title: const Text('Agent')),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => _editRole(context, ref, null),
         icon: const Icon(Icons.add),

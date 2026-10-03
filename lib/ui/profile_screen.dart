@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'status_bar_area.dart';
 
 import '../providers/providers.dart';
+import 'about_screen.dart';
 import 'appearance_screen.dart';
 import 'knowledge_screen.dart';
 import 'mcp_screen.dart';
@@ -11,14 +12,10 @@ import 'memory_screen.dart';
 import 'notification_settings_screen.dart';
 import 'roles_screen.dart';
 import 'settings_screen.dart';
-import 'skills_screen.dart';
 import 'tts_settings_screen.dart';
 import 'storage_settings_screen.dart';
 import 'terminal_screen.dart';
 import 'token_stats_screen.dart';
-
-/// 「技能」页在「我的」里只做浏览，点技能不跳转对话页。
-void _noopOnUseSkill(String _) {}
 
 /// 我的 Tab：分组白卡片列表。
 ///
@@ -87,17 +84,8 @@ class ProfileScreen extends ConsumerWidget {
               onTap: () => _push(context, const McpScreen()),
             ),
             _Row(
-              icon: Icons.auto_stories_outlined,
-              label: '技能',
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                // 从「我的」进入只浏览，不预填任何内容到输入框
-                builder: (_) =>
-                    const SkillsScreen(onUseSkill: _noopOnUseSkill),
-              )),
-            ),
-            _Row(
               icon: Icons.face_retouching_natural_rounded,
-              label: '子代理',
+              label: 'Agent',
               onTap: () => _push(context, const RolesScreen()),
             ),
           ],
@@ -169,10 +157,7 @@ class ProfileScreen extends ConsumerWidget {
               icon: Icons.info_outline_rounded,
               label: '关于',
               value: 'V0.1.0',
-              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: Text('Orion Agent V0.1.0 · Flutter 构建')),
-              ),
+              onTap: () => _push(context, const AboutScreen()),
             ),
           ],
         ),
