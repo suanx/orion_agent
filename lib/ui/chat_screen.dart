@@ -14,6 +14,7 @@ import '../models/chat_message.dart';
 import '../models/llm_config.dart';
 import '../providers/providers.dart';
 import '../services/skill_service.dart';
+import '../services/tools.dart';
 
 /// 把 data URL 解成字节。
 ///

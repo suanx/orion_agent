@@ -1451,16 +1451,14 @@ class _SwitchRow extends StatelessWidget {
     this.subtitle,
     required this.value,
     required this.onChanged,
-    this.unsupported = false,
   });
 
   final String label;
   final String? subtitle;
   final bool value;
 
-  /// null 表示不可交互（暂未支持）。
+  /// null 表示不可交互。
   final ValueChanged<bool>? onChanged;
-  final bool unsupported;
 
   @override
   Widget build(BuildContext context) {
@@ -1481,19 +1479,6 @@ class _SwitchRow extends StatelessWidget {
               ),
             ),
           ),
-          if (unsupported) ...[
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: onSurface(context, 0.06),
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text('暂未支持',
-                  style: TextStyle(
-                      fontSize: 11, color: onSurface(context, 0.45))),
-            ),
-          ],
         ],
       ),
       subtitle: subtitle == null
@@ -1512,7 +1497,6 @@ class _NavRow extends StatelessWidget {
     this.value,
     this.icon,
     required this.onTap,
-    this.enabled = true,
   });
 
   final String label;
@@ -1520,22 +1504,17 @@ class _NavRow extends StatelessWidget {
   final String? value;
   final IconData? icon;
   final VoidCallback? onTap;
-  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
     return InkWell(
-      onTap: enabled ? onTap : null,
+      onTap: onTap,
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
         child: Row(
           children: [
             if (icon != null) ...[
-              Icon(icon,
-                  size: 20,
-                  color: enabled
-                      ? onSurface(context, 0.55)
-                      : onSurface(context, 0.25)),
+              Icon(icon, size: 20, color: onSurface(context, 0.55)),
               const SizedBox(width: 12),
             ],
             Expanded(
@@ -1543,10 +1522,9 @@ class _NavRow extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(label,
-                      style: TextStyle(
+                      style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.w500,
-                        color: enabled ? null : onSurface(context, 0.35),
                       )),
                   if (subtitle != null) ...[
                     const SizedBox(height: 3),
@@ -1560,16 +1538,10 @@ class _NavRow extends StatelessWidget {
             if (value != null)
               Text(value!,
                   style: TextStyle(
-                      fontSize: 13,
-                      color: enabled
-                          ? onSurface(context, 0.55)
-                          : onSurface(context, 0.3))),
+                      fontSize: 13, color: onSurface(context, 0.55))),
             const SizedBox(width: 4),
             Icon(Icons.chevron_right,
-                size: 20,
-                color: enabled
-                    ? onSurface(context, 0.3)
-                    : onSurface(context, 0.15)),
+                size: 20, color: onSurface(context, 0.3)),
           ],
         ),
       ),

@@ -1090,8 +1090,18 @@ class TasksNotifier extends StateNotifier<TasksState> {
   }
 
   /// 入队运行（串行执行，立即返回）。
+  ///
+  /// 不用 then(...).catchError((_) {})：run 返回 Future<bool>，
+  /// catchError 回调必须返回 bool 才满足类型（CI run#24 的
+  /// body_might_complete_normally_catch_error）。包一层 async 吞掉即可。
   void _enqueue(String id) {
-    _queue = _queue.then((_) => run(id)).catchError((_) {});
+    _queue = _queue.then((_) async {
+      try {
+        await run(id);
+      } catch (_) {
+        // 单个任务失败不阻断队列
+      }
+    });
   }
 
   // ---------------- 运行 ----------------

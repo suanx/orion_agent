@@ -495,14 +495,22 @@ class _TaskEditorState extends State<_TaskEditor> {
                 enabled: true,
                 createdAt: DateTime.now().millisecondsSinceEpoch,
               )
-            : e.copyWith(
-                emoji: _emoji,
-                name: name,
-                prompt: prompt,
-                scheduleType: _daily ? 'daily' : 'manual',
-                scheduleHour: _daily ? _hour : null,
-                scheduleMinute: _daily ? _minute : null,
-              );
+        // 不用 drift 的 copyWith：可空列（scheduleHour 等）的参数类型是
+        // Value<int?>（absent 表示保留），直接全量构造更直白。
+        : TaskRow(
+            id: e.id,
+            emoji: _emoji,
+            name: name,
+            prompt: prompt,
+            scheduleType: _daily ? 'daily' : 'manual',
+            scheduleHour: _daily ? _hour : null,
+            scheduleMinute: _daily ? _minute : null,
+            enabled: e.enabled,
+            lastRunAt: e.lastRunAt,
+            lastStatus: e.lastStatus,
+            lastResult: e.lastResult,
+            createdAt: e.createdAt,
+          );
         // 必须先捕获 notifier 再 pop：pop 会销毁对话框 Consumer，
         // 其 ref 在 unmount 后不可再用（Riverpod 会抛断言）。
         final notifier = ref.read(tasksProvider.notifier);

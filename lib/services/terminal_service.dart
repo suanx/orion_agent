@@ -111,7 +111,6 @@ class TerminalService {
           : debianInstallScript();
 
   final Dio _dio;
-  String? _prootPath;
   final _rootfsCache = <TerminalDistro, String>{};
   final _runningTasks = <String, Process>{};
 
@@ -568,7 +567,8 @@ class TerminalService {
         final out =
             '${r.stdout}'.trim().replaceAll('\n', ' ⏎ ');
         final err = '${r.stderr}'.trim().replaceAll('\n', ' ⏎ ');
-        final clip = (String s) => s.length > 110 ? '${s.substring(0, 110)}…' : s;
+        String clip(String s) =>
+            s.length > 110 ? '${s.substring(0, 110)}…' : s;
         results.add('[$label] exit=${r.exitCode}');
         if (out.isNotEmpty) results.add('   out: ${clip(out)}');
         if (err.isNotEmpty) results.add('   err: ${clip(err)}');
