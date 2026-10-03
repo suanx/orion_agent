@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+// 字素簇安全截断（标题总结的输入/输出截断），避免劈开 emoji。
+import 'package:characters/characters.dart';
 //不能用 `show ThemeMode` 限制导入：material.dart 里同文件导出的
 // debugPrint（来自 foundation）会被一起挡掉，导致下面多处
 // "The method 'debugPrint' isn't defined"。改为显式补 foundation。
@@ -106,6 +108,29 @@ final ttsEngineProvider = StateProvider<TtsEngine>((ref) {
 /// 不落盘重启后会弹回）。
 final ttsEnabledProvider = StateProvider<bool>((ref) {
   return ref.watch(sharedPreferencesProvider).getBool('tts_enabled') ?? false;
+});
+
+/// ---- 专项模型（「我的 → 默认模型」页设置）----
+///
+/// 值为**模型名**；空字符串 = 「跟随当前聊天模型」。
+/// 模型名不校验存在性：所属模型被删除时该设置自然失效，
+/// 请求会退回当前聊天模型（copyWith 的名字找不到时 chatModel 不变？——
+/// 不，chatModel 是按 defaultChatModel 查找的，找不到退回第一个，
+/// 所以失效时表现为「用了该提供商的另一个模型」，可接受）。
+
+/// 识图模型：带图消息用它处理（当前聊天模型可能不支持视觉输入）。
+final visionModelProvider = StateProvider<String>((ref) {
+  return ref.watch(sharedPreferencesProvider).getString('vision_model') ?? '';
+});
+
+/// 压缩模型：长会话上下文压缩时用（暂未接入请求流程，仅保存设置）。
+final compressModelProvider = StateProvider<String>((ref) {
+  return ref.watch(sharedPreferencesProvider).getString('compress_model') ?? '';
+});
+
+/// 标题总结模型：首轮回答完成后用它生成简短会话标题。
+final summaryModelProvider = StateProvider<String>((ref) {
+  return ref.watch(sharedPreferencesProvider).getString('summary_model') ?? '';
 });
 
 /// Edge TTS 音色 id。
@@ -485,6 +510,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     bool Function()? notifyPreview,
     bool Function()? getThinking,
     String Function()? getReasoningEffort,
+    String Function()? getVisionModel,
+    String Function()? getSummaryModel,
   })  : _storage = storage,
         _orchestrator = orchestrator,
         _rag = rag,
@@ -501,6 +528,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _notifyPreview = notifyPreview ?? (() => true),
         _getThinking = getThinking ?? (() => false),
         _getReasoningEffort = getReasoningEffort ?? (() => 'medium'),
+        _getVisionModel = getVisionModel ?? (() => ''),
+        _getSummaryModel = getSummaryModel ?? (() => ''),
         super(ChatState(
           sessions: initialSessions,
           activeSessionId: initialSessions.isEmpty ? null : initialSessions.first.id,
@@ -524,6 +553,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final bool Function() _getThinking;
   final String Function() _getReasoningEffort;
   final bool Function() _notifyPreview;
+
+  /// 专项模型：识图（带图消息）、标题总结。空串 = 跟随当前聊天模型。
+  final String Function() _getVisionModel;
+  final String Function() _getSummaryModel;
+
+  /// 已做过标题总结的会话 id（内存即可：重启后标题已持久化）。
+  final _titleSummarized = <String>{};
 
   /// 由外部注入的通知发送回调（在 Provider 里绑定 NotificationService）。
   Future<void> Function(String title, String body)? onAnswerNotification;
@@ -664,9 +700,19 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final buf = StringBuffer();
     ChatMessage? answer;
 
+    // 识图模型：带图消息走识图模型（当前聊天模型可能不支持视觉输入）。
+    // 未设置时保持原样，图片直接随聊天模型发送。
+    var effConfig = config;
+    if (updated.messages.last.images.isNotEmpty) {
+      final vm = _getVisionModel();
+      if (vm.isNotEmpty) {
+        effConfig = config.copyWith(defaultChatModel: vm);
+      }
+    }
+
     try {
       await for (final ev in _orchestrator.run(
-        config: config,
+        config: effConfig,
         history: history,
         cancelToken: _cancelToken,
         knowledge: knowledge,
@@ -727,6 +773,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
       await _persistOp(
           () => _storage.insertMessage(withAnswer.id, msg), 'AI 回答');
 
+      // 标题总结：设置了总结模型时，用小模型为会话生成简短标题。
+      // 只做一次（_titleSummarized），失败静默，不影响主流程。
+      final sm = _getSummaryModel();
+      if (sm.isNotEmpty) {
+        unawaited(_summarizeTitle(sessionId, sm, answer.content));
+      }
+
       // 语音播报（引擎/音色/语速/音量都来自设置）
       if (_ttsEnabled()) {
         unawaited(_voice.speak(
@@ -778,6 +831,59 @@ class ChatNotifier extends StateNotifier<ChatState> {
       t.cancel();
     }
   }
+
+  /// 用标题总结模型为会话生成简短标题。
+  ///
+  /// 非流式语义但复用 chatStream（拿到 FinalMessage 即收敛）。
+  /// 任何失败都静默——标题是锦上添花，绝不能因为它打断对话。
+  Future<void> _summarizeTitle(
+      String sessionId, String model, String answer) async {
+    if (_titleSummarized.contains(sessionId)) return;
+    _titleSummarized.add(sessionId);
+    try {
+      final config = _getConfig();
+      if (config == null) return;
+      final eff = config.copyWith(defaultChatModel: model);
+      final buf = StringBuffer();
+      await for (final ev in _llm.chatStream(
+        config: eff,
+        messages: [
+          {
+            'role': 'system',
+            'content': '为用户提供的对话内容生成一个不超过12个字的简短标题。'
+                '直接输出标题本身，不要引号、句号或任何解释。',
+          },
+          {
+            'role': 'user',
+            'content': answer.characters.take(500).toString(),
+          },
+        ],
+      ).timeout(const Duration(seconds: 30))) {
+        if (ev is FinalMessage) {
+          buf.write(ev.message.content);
+          break;
+        }
+        if (ev is ContentDelta) buf.write(ev.delta);
+      }
+      var title = buf.toString().trim().replaceAll(RegExp(r'[\n\r"「」]'), '');
+      if (title.isEmpty) return;
+      title = title.characters.take(20).toString();
+      if (!mounted) return;
+      final s = state.sessions.where((x) => x.id == sessionId).firstOrNull;
+      if (s == null) return;
+      final updated = ChatSession(
+        id: s.id,
+        title: title,
+        messages: s.messages,
+        createdAt: s.createdAt,
+        updatedAt: DateTime.now(),
+      );
+      _touch(updated);
+      await _persistOp(() => _storage.updateSessionMeta(updated), '会话标题');
+    } catch (e) {
+      debugPrint('标题总结失败（不影响使用）：$e');
+    }
+  }
 }
 
 final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
@@ -789,6 +895,8 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     llm: ref.watch(llmClientProvider),
     voice: ref.watch(voiceProvider),
     ttsEnabled: () => ref.read(ttsEnabledProvider),
+    getVisionModel: () => ref.read(visionModelProvider),
+    getSummaryModel: () => ref.read(summaryModelProvider),
     getPersona: () {
       final id = ref.read(activeRoleIdProvider);
       return ref.read(roleServiceProvider).promptOf(id) ?? '';

@@ -6,6 +6,7 @@ import 'status_bar_area.dart';
 import '../providers/providers.dart';
 import 'about_screen.dart';
 import 'appearance_screen.dart';
+import 'default_models_screen.dart';
 import 'knowledge_screen.dart';
 import 'mcp_screen.dart';
 import 'memory_screen.dart';
@@ -76,7 +77,7 @@ class ProfileScreen extends ConsumerWidget {
                       ? '${config.activeConfig!.displayName} · '
                           '${config.activeConfig!.model}'
                       : config.activeConfig!.model),
-              onTap: () => _push(context, const SettingsScreen()),
+              onTap: () => _push(context, const DefaultModelsScreen()),
             ),
             _Row(
               icon: Icons.record_voice_over_outlined,
