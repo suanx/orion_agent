@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orion_agent/services/terminal_service.dart';
 
@@ -59,5 +61,62 @@ void main() {
     expect(TerminalTask.decodeList(null), isEmpty);
     expect(TerminalTask.decodeList('not json'), isEmpty);
     expect(TerminalTask.decodeList('[{"name":"a"}]'), hasLength(1));
+  });
+
+  // ---- runOn 卡死回归（详见 docs/PROJECT.md §11.12）----
+
+  group('drainProcessStreams', () {
+    /// 造一对订阅：内容立即可读，但 close 行为可控。
+    /// [closeOut]/[closeErr] 为 false 时模拟 proot 把 fd 继承给 guest 里的
+    /// 残留进程 —— Dart 侧 stream 永远收不到 done 事件。
+    ({StreamSubscription<String> out, StreamSubscription<String> err})
+        makeSubs({required bool closeOut, required bool closeErr}) {
+      final o = StreamController<String>();
+      final e = StreamController<String>();
+      final so = o.stream.listen((_) {});
+      final se = e.stream.listen((_) {});
+      o.add('__ok__\naarch64\n');
+      if (closeOut) o.close();
+      if (closeErr) e.close();
+      return (out: so, err: se);
+    }
+
+    test('两个 stream 正常关闭时立即返回', () async {
+      final subs = makeSubs(closeOut: true, closeErr: true);
+      final sw = Stopwatch()..start();
+      await drainProcessStreams(subs.out, subs.err,
+          grace: const Duration(milliseconds: 1500));
+      expect(sw.elapsedMilliseconds, lessThan(300),
+          reason: '正常路径不该等满 grace');
+    });
+
+    test('stream 永不关闭时也在 grace 后放行（回归：曾永久挂起）', () async {
+      // proot 会把 stdout/stderr 的 fd 继承给 guest 子进程；只要有进程
+      // 持有，asFuture() 永不完成 → 旧实现下检测界面永久转圈。
+      final subs = makeSubs(closeOut: true, closeErr: false);
+      final sw = Stopwatch()..start();
+      await drainProcessStreams(subs.out, subs.err,
+          grace: const Duration(milliseconds: 200));
+      expect(sw.elapsedMilliseconds, lessThan(1500),
+          reason: '必须超时放行，不能无限等待');
+    });
+
+    test('放行后两个订阅都被 cancel，不泄漏', () async {
+      // 用 controller 的 onCancel 判定：cancel() 被调用时必定触发。
+      // ⚠️ 不能用 subscription.asFuture() 判断「是否已关闭」——流没关闭时
+      // 它根本不会完成，用它断言会得到错误的结论（实测踩过）。
+      final cancelled = <String>[];
+      final o = StreamController<String>(onCancel: () => cancelled.add('out'));
+      final e = StreamController<String>(onCancel: () => cancelled.add('err'));
+      // 两个 controller 都不 close，模拟 proot 把 fd 泄漏给 guest 进程
+      await drainProcessStreams(
+        o.stream.listen((_) {}),
+        e.stream.listen((_) {}),
+        grace: const Duration(milliseconds: 100),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(cancelled, containsAll(<String>['out', 'err']),
+          reason: '实际被取消的流=$cancelled');
+    });
   });
 }

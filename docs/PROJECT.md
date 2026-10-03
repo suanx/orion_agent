@@ -1160,6 +1160,53 @@ Flutter 画，所以**不能设成 true**。
 `home_shell.dart`，是因为 HomeShell 导入了 tasks/profile/skills 三个页面，
 组件放那里会让它们形成循环依赖。
 
+### 11.12 环境组件检测永久卡死（runOn 死锁）
+
+**症状**：安装 Alpine 完成后，日志停在最后一行「检测 alpine 环境组件…」，
+界面永久转圈、再也点不动。rootfs 其实**早已安装成功**。
+
+**根因**：`runOn` 里的这两行
+
+```dart
+await sub1.asFuture<void>();
+await sub2.asFuture<void>();
+```
+
+等的是「**stream 关闭**」，不是「进程退出」。proot 会把 stdout/stderr 的
+文件描述符**继承**给 guest 里的子进程；只要 guest 内还有任何进程持有这个
+fd（残留的 apk 进程、后台任务、甚至 proot 自身的辅助线程），Dart 侧的
+stream 就永远收不到 done 事件 → `asFuture()` 永不完成。
+
+关键点：**此时 `proc.exitCode` 早就返回了**（进程确实退出了），
+是这两行白等。所以表现为「命令跑完了但界面不动」，极具迷惑性——
+我第一反应是 proot 起不来、rootfs 损坏，方向完全错了。
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 64 | **检测永久卡死** | `await sub.asFuture()` 等 stream 关闭；proot 把 fd 继承给 guest 进程后永不关闭 | 抽出 `drainProcessStreams()`，加 1.5s grace 超时，超时后 `cancel()` 订阅 |
+| 65 | 探测串行极慢 | 9 个组件串行，每个 proot 启动 0.3~2 秒 → 最坏 18 秒 | 改 `Future.wait` 并发探测 |
+| 66 | 单个组件可拖垮整轮 | 用 `runOn` 默认的 120s 超时；某个组件（如 `opencode --version` 可能联网）挂住就卡 2 分钟 | 单项降到 20s，且 `catchError` 兜住不让单点失败中断整轮 |
+| 67 | 异常时 `_busy` 永不复位 | `_checkTools` 没有 try/finally，未预料的异常直接冒泡，界面卡在 busy | 整体包 try/catch/finally，`finally` 里强制 `_busy = false` |
+| 68 | `startOn` 无超时 | 读 asset（proot 几 MB）+ 准备挂载点，任一步卡住就无限等 | 加 20s 超时并给出可读错误 |
+
+**修复后的实测**（用真实 Dart 复现「stderr 永不关闭」场景）：
+
+| 场景 | 耗时 | 结果 |
+|---|---|---|
+| stderr 正常关闭 | 44 ms | 立即返回 |
+| stderr 永不关闭 | 226 ms | grace 后放行，输出完整 |
+| 旧实现（无 grace） | 800 ms 后仍未完成 | 确认会挂死 |
+
+**排查方法**：`Process` 无法在单元测试里构造，所以把「等待 stream 关闭」
+这段抽成顶层函数 `drainProcessStreams()`，用 `StreamController` 精确控制
+close 行为即可复现。测试里还踩了两个坑（都靠跑真实 Dart 抓到）：
+
+1. `Future.wait(...).timeout()` 的 `onTimeout` **必须返回 `List<void>`**，
+   返回 `null` 或 `void` 会编译失败 —— 本地 `dart analyze` 漏报。
+2. `StreamSubscription` **没有 `isClosed` 属性**；且不能用 `asFuture()`
+   判断「是否已关闭」—— 流没关闭时它不会完成。正确做法是用
+   `StreamController(onCancel: ...)` 判定。
+
 ---
 
 ## 12. 待修复的问题

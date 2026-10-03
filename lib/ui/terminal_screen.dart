@@ -139,56 +139,76 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     _envBroken = false;
     _checks.clear();
     _appendLog('检测 ${_distro.name} 环境组件…');
-
-    // 先确认环境本身能跑起来。rootfs 损坏 / proot 起不来时，
-    // 逐个探测只会得到一屏 lost，看不出真实原因。
+    // 外层 finally：任何未预料的异常都必须复位 _busy，
+    // 否则界面永久停在「检测中…」转圈，再也点不动。
     try {
-      final probe = await _terminal.runOn(
-          _distro, 'echo __ok__ && uname -m');
-      final out = probe.output.trim();
-      if (!out.contains('__ok__')) {
+      // 先确认环境本身能跑起来。rootfs 损坏 / proot 起不来时，
+      // 逐个探测只会得到一屏 lost，看不出真实原因。
+      try {
+        final probe = await _terminal
+            .runOn(_distro, 'echo __ok__ && uname -m')
+            .timeout(const Duration(seconds: 30));
+        final out = probe.output.trim();
+        if (!out.contains('__ok__')) {
+          _envBroken = true;
+          _appendLog('环境无法运行：echo 没有返回预期结果。');
+          _appendLog('exitCode=${probe.exitCode} 输出=${_clip(out)}');
+          _appendLog('请尝试「删除环境」后重新安装。');
+          return;
+        }
+        _appendLog('环境可用（${out.split('\n').last.trim()}）');
+      } catch (e) {
         _envBroken = true;
-        _appendLog('环境无法运行：echo 没有返回预期结果。');
-        _appendLog('exitCode=${probe.exitCode} 输出=${_clip(out)}');
+        _appendLog('环境无法启动：${_clip(e.toString())}');
         _appendLog('请尝试「删除环境」后重新安装。');
-        _checked = true;
-        if (mounted) setState(() => _busy = false);
         return;
       }
-      _appendLog('环境可用（${out.split('\n').last.trim()}）');
-    } catch (e) {
-      _envBroken = true;
-      _appendLog('环境无法启动：${_clip(e.toString())}');
-      _appendLog('请尝试「删除环境」后重新安装。');
-      _checked = true;
-      if (mounted) setState(() => _busy = false);
-      return;
-    }
 
-    for (final t in _toolChecks) {
-      try {
-        // 不用管道。command -v 判断二进制是否存在，
-        // 存在时再跑probe 取版本号。
-        final r = await _terminal.runOn(_distro,
-            'if command -v ${t.binary} >/dev/null 2>&1; '
-            'then ${t.probe} 2>&1; '
-            'else echo __missing__; fi');
-        final text = r.output.trim();
-        if (text.contains('__missing__') || text.isEmpty) {
+      // 并发探测，且每个组件独立短超时。
+      //
+      // 为什么并发：proot 每次启动都要做路径重写，耗时 0.3~2 秒。
+      // 9 个组件串行最坏要 9 × 2 = 18 秒，用户看着像卡死。
+      // 为什么单项短超时（20s 而非默认 120s）：某个组件的探测命令若在
+      // guest 里挂住（例如 opencode 的 --version 会尝试联网），
+      // 串行下会拖住整轮检测。并发 + 短超时把最坏情况压到 20 秒。
+      final results = await Future.wait<String?>([
+        for (final t in _toolChecks)
+          _terminal
+              .runOn(
+                _distro,
+                'if command -v ${t.binary} >/dev/null 2>&1; '
+                'then ${t.probe} 2>&1; '
+                'else echo __missing__; fi',
+                timeout: const Duration(seconds: 20),
+              )
+              .then<String?>((r) => r.output.trim())
+              // 单个组件失败不该中断整轮
+              .catchError((Object e) {
+            _appendLog('${t.name} 探测异常：${_clip(e.toString())}');
+            return null;
+          }),
+      ]);
+
+      for (var i = 0; i < _toolChecks.length; i++) {
+        final t = _toolChecks[i];
+        final text = results[i];
+        if (text == null || text.isEmpty || text.contains('__missing__')) {
           _checks[t.name] = (false, null);
         } else {
           _checks[t.name] = (true, _firstLine(text));
         }
-      } catch (e) {
-        // 保留原因：某个组件探测异常不该中断整轮检测
-        _checks[t.name] = (false, null);
-        _appendLog('${t.name} 探测异常：${_clip(e.toString())}');
+        // 每项完成就更新一次，UI 上能看到进度在走而不是一直空白
+        if (mounted) setState(() {});
       }
+
+      final okCount = _checks.values.where((v) => v.$1).length;
+      _appendLog('检测完成：$okCount/${_toolChecks.length} 个组件可用');
+    } catch (e) {
+      _appendLog('检测异常终止：${_clip(e.toString())}');
+    } finally {
+      _checked = true;
+      if (mounted) setState(() => _busy = false);
     }
-    _checked = true;
-    final okCount = _checks.values.where((v) => v.$1).length;
-    _appendLog('检测完成：$okCount/${_checks.length} 个组件可用');
-    if (mounted) setState(() => _busy = false);
   }
 
   /// 取首个非空行并限长，避免整段输出撑爆日志区。
