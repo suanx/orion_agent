@@ -23,10 +23,10 @@ jobs:
 
       - name: Generate Android scaffolding
         # 本地不提交平台目录，在 CI 中按当前 Flutter stable 生成，保证版本一致
-        run: flutter create --platforms android --project-name pocket_agent .
+        run: flutter create --platforms android --project-name orion_agent .
 
       - name: Inject MainActivity with system MethodChannel
-        run: cp ci/MainActivity.kt android/app/src/main/kotlin/com/example/pocket_agent/MainActivity.kt
+        run: cp ci/MainActivity.kt android/app/src/main/kotlin/com/example/orion_agent/MainActivity.kt
 
       - name: Lower targetSdk to 28
         # Android 10+ 禁止 app 自带目录内 exec()；终端环境(proot) 需要
@@ -297,5 +297,5 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pocket-agent-apk
+          name: orion-agent-apk
           path: build/app/outputs/flutter-apk/app-release.apk

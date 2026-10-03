@@ -1,8 +1,8 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pocket_agent/services/database.dart';
-import 'package:pocket_agent/services/rag_service.dart';
-import 'package:pocket_agent/services/text_chunker.dart';
+import 'package:orion_agent/services/database.dart';
+import 'package:orion_agent/services/rag_service.dart';
+import 'package:orion_agent/services/text_chunker.dart';
 
 /// 伪向量化：按「猫」「狗」出现次数生成二维向量，确定且可预测。
 Future<List<List<double>>> fakeEmbed(List<String> inputs) async {

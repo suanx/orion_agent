@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pocket_agent/services/terminal_service.dart';
+import 'package:orion_agent/services/terminal_service.dart';
 
 void main() {
   test('TerminalResult.versionLine 取首个非空行并截断', () {

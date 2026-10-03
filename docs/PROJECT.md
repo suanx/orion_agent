@@ -1,6 +1,6 @@
-# Pocket Agent 项目详细说明
+# Orion Agent 项目详细说明
 
->本文档是 Pocket Agent 的**技术实现全集**，记录真实代码行为（含行号定位）、
+>本文档是 Orion Agent 的**技术实现全集**，记录真实代码行为（含行号定位）、
 > 已验证的缺陷与修复、待办事项与后续规划。
 >
 > **文档约定**：本文所有结论均以实际代码为准，行号对应 `main` 分支。
@@ -45,7 +45,7 @@
 
 ## 1. 项目定位
 
-**Pocket Agent** 是一个运行在 Android 手机上的个人 AI 助手，形态接近 ChatGPT / Claude 移动端
+**Orion Agent** 是一个运行在 Android 手机上的个人 AI 助手，形态接近 ChatGPT / Claude 移动端
 应用，但强调「能干活」而不只是「能聊天」。
 
 三个差异化能力：
@@ -125,7 +125,7 @@
 ## 3. 目录结构与文件职责
 
 ```
-pocket-agent/
+orion_agent/
 ├── lib/
 │   ├── main.dart                      应用入口、ProviderContainer、沉浸式 UI
 │   ├── theme.dart                     6 套配色主题 + Material3 主题构建
@@ -242,12 +242,22 @@ String uniqueId(String prefix) =>
 
 | 数据 | 位置 |
 |---|---|
-| 会话/消息/记忆/知识库 | `<appSupport>/pocket_agent.sqlite` |
+| 会话/消息/记忆/知识库 | `<appSupport>/orion_agent.sqlite` |
 | 设置项 | SharedPreferences |
 | API Key | FlutterSecureStorage（Keystore/Keychain 加密） |
 | Alpine rootfs | `<appSupport>/alpine-rootfs` |
 | Debian rootfs | `<appSupport>/debian-rootfs` |
 | TTS 临时音频 | `<temp>/tts/` |
+
+> ⚠️ **数据库文件名随项目更名而改**（`database.dart:122`）。
+> 原为 `pocket_agent.sqlite`，现为 `orion_agent.sqlite`，**未做迁移**。
+> 旧版安装的用户升级后会读到空库（数据文件仍在，只是不会被打开）。
+> 若后续要支持平滑升级，在这里加一步「检测旧库并改名/复制」即可。
+
+> ⚠️ **rootfs 目录名未随项目更名**（仍是 `alpine-rootfs` / `debian-rootfs`）。
+> 这是有意的——改名会让已安装终端环境的用户需要重新下载几百 MB。
+> 同理通知渠道 id 虽然改了（`orion_agent_agent`），但旧渠道残留不影响，
+> Android 会保留未使用的渠道。
 
 ---
 
@@ -485,8 +495,8 @@ $nativeLibraryDir/libproot.so \
 
 | id | 名称 | importance |
 |---|---|---|
-| `pocket_agent_agent` | Agent 通知 | `defaultImportance` |
-| `pocket_agent_answer_silent` | Agent 通知（静音） | `low` |
+| `orion_agent_agent` | Agent 通知 | `defaultImportance` |
+| `orion_agent_answer_silent` | Agent 通知（静音） | `low` |
 
 > ⚠️ **必须两个渠道**：Android O 起通知重要度由**渠道**决定，实例级
 > importance 会被**向上钳制**到渠道、不能低于渠道。只有一个 defaultImportance
@@ -733,9 +743,9 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 **18 个步骤**：
 
 1. Flutter stable setup（`subosito/flutter-action@v2`，带缓存）
-2. `flutter create --platforms android --project-name pocket_agent .`
+2. `flutter create --platforms android --project-name orion_agent .`
    ——平台目录**不提交**，CI 按当前 stable 生成
-3. 注入 `ci/MainActivity.kt`（MethodChannel `pocket_agent/system`）
+3. 注入 `ci/MainActivity.kt`（MethodChannel `orion_agent/system`）
 4. `sed` 把 `targetSdk` 降到 **28**
 5. 追加第二个 `android {}` 块（关闭 release lint + 开启 core library desugaring）
 6. **校验** Kotlin jvmTarget（不注入任何 DSL，见下）
@@ -749,7 +759,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 14. `flutter analyze`
 15. `flutter test`
 16. `flutter build apk --release --target-platform android-arm64`
-17. 上传 artifact `pocket-agent-apk`
+17. 上传 artifact `orion-agent-apk`
 18. job 收尾
 
 ### 为什么 targetSdk = 28

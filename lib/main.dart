@@ -104,12 +104,12 @@ Future<void> main() async {
 
   runApp(UncontrolledProviderScope(
     container: container,
-    child: const PocketAgentApp(),
+    child: const OrionAgentApp(),
   ));
 }
 
-class PocketAgentApp extends ConsumerWidget {
-  const PocketAgentApp({super.key});
+class OrionAgentApp extends ConsumerWidget {
+  const OrionAgentApp({super.key});
 
   /// 明暗模式 → 状态栏图标亮度（浅色底用深色图标）。
   static Brightness _iconBrightness(ThemeMode mode, Brightness platform) {
@@ -132,7 +132,7 @@ class PocketAgentApp extends ConsumerWidget {
     _applyImmersiveUI(_iconBrightness(mode, MediaQuery.platformBrightnessOf(context)));
 
     return MaterialApp(
-      title: 'Pocket Agent',
+      title: 'Orion Agent',
       debugShowCheckedModeBanner: false,
       theme: buildAppTheme(accent),
       darkTheme: buildAppTheme(accent, dark: true),

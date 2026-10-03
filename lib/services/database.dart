@@ -119,7 +119,7 @@ class McpServers extends Table {
 class AppDatabase extends _$AppDatabase {
   /// 生产环境不传 executor；测试注入 NativeDatabase.memory()。
   AppDatabase([QueryExecutor? executor])
-      : super(executor ?? driftDatabase(name: 'pocket_agent'));
+      : super(executor ?? driftDatabase(name: 'orion_agent'));
 
   @override
   int get schemaVersion => 6;

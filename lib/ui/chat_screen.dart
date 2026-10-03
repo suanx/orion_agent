@@ -269,7 +269,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Pocket Agent',
+                      const Text('Orion Agent',
                           style: TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w600)),
                       Row(

@@ -1,9 +1,15 @@
-# Pocket Agent
+# Orion Agent
 
 运行在 Android 手机上的个人 AI 助手。能聊天，也能干活——内置 Linux 终端、本地知识库、
 MCP 工具扩展，数据全部留在本机。
 
 > **当前状态**：功能完整可用，侧载分发（不上架应用商店）。Android arm64 only。
+
+> ⚠️ **从旧版（pocket_agent）升级说明**：本项目已更名为 orion_agent，
+> 数据库文件名同步改为 `orion_agent.sqlite`，**不做迁移**。
+> 旧版安装的用户升级后会看到空库（会话、长期记忆、知识库都读不到，
+> 但数据文件仍在），需要重新配置模型服务与知识库。
+> 全新安装不受影响。
 
 ---
 
@@ -83,7 +89,7 @@ MCP 工具扩展，数据全部留在本机。
 ### 1. 获取安装包
 
 前往 [Actions](https://github.com/suanx/pocket-agent/actions) → 最新成功 run →
-**Artifacts** → 下载 `pocket-agent-apk` → 解压得到 `app-release.apk`。
+**Artifacts** → 下载 `orion-agent-apk` → 解压得到 `app-release.apk`。
 
 > 需允许「安装未知来源应用」。
 
@@ -135,7 +141,7 @@ Agent 会自动调用工具。
 本地**无需安装 Flutter**，推送后由 GitHub Actions 自动构建。
 
 - 工作流：`.github/workflows/build.yml`
-- 产物：Actions → 最新 run → Artifacts → `pocket-agent-apk`
+- 产物：Actions → 最新 run → Artifacts → `orion-agent-apk`
 
 平台目录（`android/`）不提交，由 CI 在构建时按当前 Flutter stable 生成，
 保证平台配置与 Flutter 版本一致。

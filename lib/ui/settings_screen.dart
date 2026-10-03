@@ -24,7 +24,7 @@ class _TtsSettingsCardState extends ConsumerState<_TtsSettingsCard> {
     setState(() => _playing = true);
     try {
       await ref.read(voiceProvider).speak(
-            '你好，我是 Pocket Agent，这是当前的播报音色。',
+            '你好，我是 Orion Agent，这是当前的播报音色。',
             engine: ref.read(ttsEngineProvider),
             edgeVoice: ref.read(ttsVoiceProvider),
             rate: ref.read(ttsRateProvider),

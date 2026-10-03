@@ -1,8 +1,8 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pocket_agent/services/database.dart';
-import 'package:pocket_agent/services/role_service.dart';
-import 'package:pocket_agent/services/skill_service.dart';
+import 'package:orion_agent/services/database.dart';
+import 'package:orion_agent/services/role_service.dart';
+import 'package:orion_agent/services/skill_service.dart';
 
 void main() {
   late AppDatabase db;

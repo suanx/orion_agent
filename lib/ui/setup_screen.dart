@@ -62,7 +62,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     return PopScope(
       canPop: false, // 只能通过「进入应用」离开，保证用户看到选择
       child: Scaffold(
-        appBar: AppBar(title: const Text('欢迎使用 Pocket Agent')),
+        appBar: AppBar(title: const Text('欢迎使用 Orion Agent')),
         body: ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
@@ -79,7 +79,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                     children: [
                       MascotAvatar(size: 48, image: mascotAsset(context)),
                       const SizedBox(width: 12),
-                      Text('欢迎使用 Pocket Agent',
+                      Text('欢迎使用 Orion Agent',
                           style: const TextStyle(
                               fontSize: 18, fontWeight: FontWeight.w600)),
                     ],

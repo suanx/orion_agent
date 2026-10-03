@@ -24,7 +24,7 @@ class SessionDrawer extends ConsumerWidget {
               const Padding(
                 padding: EdgeInsets.fromLTRB(4, 24, 0, 16),
                 child: Text(
-                  'Pocket Agent',
+                  'Orion Agent',
                   style: TextStyle(fontSize: 28, fontWeight: FontWeight.w600),
                 ),
               ),

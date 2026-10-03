@@ -1,10 +1,10 @@
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pocket_agent/models/chat_message.dart';
-import 'package:pocket_agent/models/chat_session.dart';
-import 'package:pocket_agent/services/database.dart';
-import 'package:pocket_agent/services/memory_service.dart';
-import 'package:pocket_agent/services/storage_service.dart';
+import 'package:orion_agent/models/chat_message.dart';
+import 'package:orion_agent/models/chat_session.dart';
+import 'package:orion_agent/services/database.dart';
+import 'package:orion_agent/services/memory_service.dart';
+import 'package:orion_agent/services/storage_service.dart';
 
 void main() {
   late AppDatabase db;

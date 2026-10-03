@@ -3,11 +3,11 @@ import 'dart:convert';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pocket_agent/services/database.dart';
-import 'package:pocket_agent/services/memory_service.dart';
-import 'package:pocket_agent/services/rag_service.dart';
-import 'package:pocket_agent/services/text_chunker.dart';
-import 'package:pocket_agent/services/tools.dart';
+import 'package:orion_agent/services/database.dart';
+import 'package:orion_agent/services/memory_service.dart';
+import 'package:orion_agent/services/rag_service.dart';
+import 'package:orion_agent/services/text_chunker.dart';
+import 'package:orion_agent/services/tools.dart';
 
 void main() {
   group('分块：emoji / 扩展汉字不被劈开', () {

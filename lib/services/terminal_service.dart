@@ -29,7 +29,7 @@ class DistroSpec {
 class TerminalService {
   TerminalService({Dio? dio}) : _dio = dio ?? Dio();
 
-  static const _channel = MethodChannel('pocket_agent/system');
+  static const _channel = MethodChannel('orion_agent/system');
 
   /// 自启动任务在 shared_preferences 中的存储键。
   static const tasksPrefsKey = 'terminal_tasks';

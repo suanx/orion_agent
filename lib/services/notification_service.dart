@@ -12,12 +12,12 @@ import 'navigation_service.dart';
 class NotificationService {
   NotificationService();
 
-  static const _channelId = 'pocket_agent_agent';
+  static const _channelId = 'orion_agent_agent';
   static const _channelName = 'Agent 通知';
   static const _channelDesc = '回答完成、任务结束等提醒';
   /// 静音专用渠道。Android O 起通知重要度由渠道决定，实例级 importance
   /// 会被向上钳制到渠道，不能低于渠道——所以静音必须靠独立渠道实现。
-  static const _silentChannelId = 'pocket_agent_answer_silent';
+  static const _silentChannelId = 'orion_agent_answer_silent';
 
   final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();

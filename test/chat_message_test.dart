@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pocket_agent/models/chat_message.dart';
+import 'package:orion_agent/models/chat_message.dart';
 
 void main() {
   test('带图片的 user 消息转为多段 content API 格式', () {

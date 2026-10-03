@@ -30,7 +30,7 @@ class McpClient {
     await _rpc('initialize', {
       'protocolVersion': _protocolVersion,
       'capabilities': {},
-      'clientInfo': {'name': 'pocket_agent', 'version': '0.1.0'},
+      'clientInfo': {'name': 'orion_agent', 'version': '0.1.0'},
     });
     await _notify('notifications/initialized');
   }

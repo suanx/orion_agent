@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pocket_agent/theme.dart';
+import 'package:orion_agent/theme.dart';
 
 void main() {
   test('主题定义：id 唯一且至少 4 套', () {

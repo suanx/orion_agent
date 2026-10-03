@@ -43,7 +43,7 @@ class ProfileScreen extends ConsumerWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Pocket Agent',
+                      const Text('Orion Agent',
                           style: TextStyle(
                               fontSize: 20, fontWeight: FontWeight.w500)),
                       const SizedBox(height: 6),
@@ -161,7 +161,7 @@ class ProfileScreen extends ConsumerWidget {
                     fontSize: 13, color: onSurface(context, 0.4))),
             onTap: () => ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                    content: Text('Pocket Agent V0.1.0 · Flutter 构建'))),
+                    content: Text('Orion Agent V0.1.0 · Flutter 构建'))),
           ),
         ]),
         const SizedBox(height: 12),

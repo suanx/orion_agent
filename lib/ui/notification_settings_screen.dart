@@ -161,7 +161,7 @@ class _NotificationSettingsScreenState
                 final svc = ref.read(notificationServiceProvider);
                 await svc.requestPermission();
                 await svc.notifyTaskDone(
-                  title: 'Pocket Agent 测试通知',
+                  title: 'Orion Agent 测试通知',
                   detail: '如果你看到了这条消息，说明通知已正常工作。',
                   silent: silent,
                 );

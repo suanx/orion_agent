@@ -1,7 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pocket_agent/providers/providers.dart';
-import 'package:pocket_agent/services/navigation_service.dart';
+import 'package:orion_agent/providers/providers.dart';
+import 'package:orion_agent/services/navigation_service.dart';
 
 void main() {
   // 每个用例一个独立容器：provider 状态互不污染。
