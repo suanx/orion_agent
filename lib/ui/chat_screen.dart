@@ -1040,7 +1040,7 @@ void _showContextDialog(BuildContext context, WidgetRef ref) {
   final pct = total > 0 ? (est / total).clamp(0.0, 1.0) : null;
   final tokens = chat.sessionPromptTokens + chat.sessionCompletionTokens;
 
-  String row(String label, String value) => Padding(
+  Widget row(String label, String value) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Row(
           crossAxisAlignment: CrossAxisAlignment.start,
