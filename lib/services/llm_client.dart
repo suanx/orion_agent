@@ -66,12 +66,12 @@ class LlmClient {
   /// 无代理时复用的 Dio（绝大多数请求走这里，不必每次新建连接池）。
   final Dio _defaultDio;
 
-  /// 按代理地址缓存 Dio：同一代理下的所有请求复用同一个连接池。
+  /// 按「代理 + UA」组合缓存的 Dio：同一组合的所有请求复用同一个连接池。
+  ///
+  /// UA 的隔离也靠这个 key 完成 —— 临时改 UA 会写到 Dio 的默认 header 上，
+  /// 而 Dio 是共享实例，所以带自定义 UA 的组合必须各自持有独立实例，
+  /// 否则会污染走默认 UA 的请求。
   final _proxyDioCache = <String, Dio>{};
-
-  /// 临时 User-Agent 覆盖会改 Dio 的默认 header，而 Dio 是共享实例，
-  /// 所以带自定义 UA 的请求走独立实例，避免污染其它请求。
-  final _uaDioCache = <String, Dio>{};
 
   /// 默认 User-Agent。
   ///

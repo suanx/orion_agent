@@ -1366,18 +1366,34 @@ Responses 协议栈，后者需要脚本运行时 + 面板渲染，都是独立�
 
 ### 11.15 打包前全量复查（2026-10-03，第三次推送前）
 
-本地无 Flutter SDK，无法跑 `flutter analyze`，改用「语法配平扫描 +
-import 有效性 + 逐文件人工对照 + CI shell 块 `bash -n`」四层静态体检，
-覆盖 58 个 dart 文件与 11 个 CI run 块。查出 2 个会在 CI 上失败的问题：
+本地无 Flutter SDK，跑不了 `flutter analyze`，改用四层静态体检：
+语法配平扫描、import 有效性、**类作用域检查**、CI shell 块 `bash -n`，
+覆盖 58 个 dart 文件与 11 个 CI run 块。
+
+第一轮（run#16 前）改了 2 处，CI 仍挂在 Analyze；annotation 暴露出真正的
+error 是另一个文件。合并成下表：
 
 | # | 缺陷 | 根因 | 修复 |
 |---|---|---|---|
-| 76 | **composer 模型选择器编译不过** | `active` 声明为 `LlmConfig?`。同一表达式里写过 `active!.chatModel!.name`，但 `!` **只在它所在的那个表达式内生效，不会把变量本身提升为非空**；紧随其后的闭包 `onChanged: (name) => ... active.copyWith(...)` 里 receiver 仍可空，analyzer 报 `The method 'copyWith' can't be unconditionally invoked because the receiver can be null` | 闭包内补 `active!`，并加注释说明「`!` 不提升变量」这个坑 |
-| 77 | CI 构建失败时的诊断信息被污染 | `build.yml` 的 Build APK 步骤里有一行 `// Execution failed、Caused by 等`。YAML 的 `run:` 块是 **sh**，`//` 不是注释而是命令，会被当成路径 `/` 执行并报 `Is a directory`，把真正的 Gradle 错误挤走 | 改为 shell 的 `#`；并用 `bash -n` 校验全部 11 个 run 块 |
+| 78 | **`drainProcessStreams` 外部不可见**（error ×3） | 函数写在了 `class TerminalService` 的**大括号之内**，只是缩进为 0。Dart 按成员声明解析它 → 变成实例方法。类内 `runOn` 调用一切正常，测试 `import` 后却是 `undefined_function` | 移到两个 class 之间（真正顶层） |
+| 79 | 构建失败诊断被污染 | `build.yml` 里有一行 `// Execution failed、Caused by 等`。`run:` 块是 **sh**，`//` 不是注释而是命令，会去执行路径 `/` 并报 `Is a directory`，把真正的 Gradle 错误挤走 | 改回 shell 的 `#` |
+| 80 | `_uaDioCache` 未使用（warning） | 注释写「UA 单独缓存」，但实现里 UA 其实拼进了 `_proxyDioCache` 的 key，字段是多余的 | 删字段，注释改成与实现一致 |
+| 81 | 多余的 `!`（warning） | 见下方「Dart 的 `!` 会提升变量」 | 去掉 |
 
-**Dart 的 `!` 不提升变量**是这次唯一靠静态阅读发现、无法被任何 lint 规则
-提示的坑（`flutter_lints` 不含 `unnecessary_non_null_assertion` 之外的相关检查），
-后续凡「先 `x!` 取值、后在闭包里用 `x`」的写法都要复核。
+**踩坑一 · 缩进 0 不等于顶层**。`drainProcessStreams` 缩进是 0，
+括号配平也对，肉眼和格式化工具都不会报错——但它在类的 `{` 与 `}` 之间。
+判断只能靠**全局大括号深度**（深度 ≥1 即在某个类型体内）。
+为此写了 `ci_check/class_scope.py` 专查这一类，并用手写样例验证过它
+确实能报出该问题、且不误报正常代码。教训：凡往 Dart 文件里插入
+顶层函数/常量，先确认插入点在类的闭合大括号之外。
+
+**踩坑二 · Dart 的 `!` 会提升变量**（第一轮判断反了，CI 打脸）。
+初看 `active!.chatModel!.name` 后面接闭包里的 `active.copyWith(...)`，
+认定 `!` 只作用于所在表达式、闭包里 receiver 仍可空，于是补了个 `!`。
+CI 立刻报 `unnecessary_non_null_assertion` —— 说明原写法本来就是对的：
+Dart 的 flow analysis 把 `x!` 当作**类型提升点**，且 `active` 是 final 局部
+变量时，提升在闭包内同样有效。`flutter_lints` 不提示这一点，只能靠
+annotation 验证。以后遇到「`!` 之后又在别处用该变量」，先怀疑原代码没问题。
 
 **顺带修正**：附录 A 中 `schemaVersion` 记为 6，实际已是 7
 （Token 用量统计表 `TokenUsageRows` 加入时升版）。

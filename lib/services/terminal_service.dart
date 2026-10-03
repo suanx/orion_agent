@@ -458,39 +458,6 @@ class TerminalService {
     return runOn(activeDistro, command, timeout: timeout);
   }
 
-/// 等待 stdout/stderr 两个订阅**结束**，带超时兜底。
-///
-/// ⚠️ 这里**不能**直接 `await sub1.asFuture()` / `await sub2.asFuture()`
-/// 且不设超时。那两个 await 等的是「stream 关闭」，不是「进程退出」。
-/// proot 会把 stdout/stderr 的文件描述符**继承**给 guest 里的子进程；
-/// 只要 guest 内还有任何进程持有这个 fd（后台进程、残留的 apk 进程、
-/// 甚至 proot 自身的辅助线程），Dart 侧的 stream 就永远收不到 done
-/// 事件—— 于是 `asFuture()` 永不完成。
-///
-/// 后果：进程早就退出了（`exitCode` 已返回），但调用方一直挂着。
-/// 实测症状是终端页「检测 alpine 环境组件…」永久转圈、按钮再点不动
-/// （`_busy` 永不复位），而 rootfs 其实早已安装完成。
-///
-/// 正常情况下 stream 在进程退出时立即 close，这里毫秒级返回；
-/// 异常情况最多多等 [grace] 就放行 —— 输出可能不完整，但不会卡死。
-///
-/// 抽成顶层函数是为了能在单元测试里复现「stream 永不关闭」这个场景
-/// （`test/terminal_test.dart`），`runOn` 本身依赖真实 Process 无法测试。
-Future<void> drainProcessStreams(
-  StreamSubscription<String> sub1,
-  StreamSubscription<String> sub2, {
-  Duration grace = const Duration(milliseconds: 1500),
-}) async {
-  try {
-    await Future.wait<void>([sub1.asFuture<void>(), sub2.asFuture<void>()])
-        .timeout(grace);
-  } on TimeoutException {
-    // 主动 cancel：否则订阅会泄漏（proot 每次调用泄漏两个）。
-    unawaited(sub1.cancel());
-    unawaited(sub2.cancel());
-  }
-}
-
   Future<TerminalResult> runOn(
     TerminalDistro d,
     String command, {
@@ -563,6 +530,45 @@ Future<void> drainProcessStreams(
   Future<void> uninstall(TerminalDistro d) async {
     final dir = Directory(await rootfsDir(d));
     if (dir.existsSync()) dir.deleteSync(recursive: true);
+  }
+}
+
+/// 等待 stdout/stderr 两个订阅**结束**，带超时兜底。
+///
+/// ⚠️ 这里**不能**直接 `await sub1.asFuture()` / `await sub2.asFuture()`
+/// 且不设超时。那两个 await 等的是「stream 关闭」，不是「进程退出」。
+/// proot 会把 stdout/stderr 的文件描述符**继承**给 guest 里的子进程；
+/// 只要 guest 内还有任何进程持有这个 fd（后台进程、残留的 apk 进程、
+/// 甚至 proot 自身的辅助线程），Dart 侧的 stream 就永远收不到 done
+/// 事件—— 于是 `asFuture()` 永不完成。
+///
+/// 后果：进程早就退出了（`exitCode` 已返回），但调用方一直挂着。
+/// 实测症状是终端页「检测 alpine 环境组件…」永久转圈、按钮再点不动
+/// （`_busy` 永不复位），而 rootfs 其实早已安装完成。
+///
+/// 正常情况下 stream 在进程退出时立即 close，这里毫秒级返回；
+/// 异常情况最多多等 [grace] 就放行 —— 输出可能不完整，但不会卡死。
+///
+/// 抽成**顶层函数**（而不是 TerminalService 的方法）是为了能在单元测试里
+/// 复现「stream 永不关闭」这个场景（`test/terminal_test.dart`）——
+/// runOn 本身依赖真实 Process，无法测试。
+///
+/// ⚠️ 注意它必须待在 class `TerminalService` **之外**。写在大括号里面、
+/// 只是缩进为 0 也不行：Dart 会按成员声明解析成实例方法，
+/// 外部 import 就再也找不到它（analyze 报 undefined_function）。
+/// 这就是它放在两个 class 之间的原因。
+Future<void> drainProcessStreams(
+  StreamSubscription<String> sub1,
+  StreamSubscription<String> sub2, {
+  Duration grace = const Duration(milliseconds: 1500),
+}) async {
+  try {
+    await Future.wait<void>([sub1.asFuture<void>(), sub2.asFuture<void>()])
+        .timeout(grace);
+  } on TimeoutException {
+    // 主动 cancel：否则订阅会泄漏（proot 每次调用泄漏两个）。
+    unawaited(sub1.cancel());
+    unawaited(sub2.cancel());
   }
 }
 

@@ -796,6 +796,11 @@ class _ComposerStatusBar extends ConsumerWidget {
           const SizedBox(width: 8),
 
           // 模型选择
+          //
+          // 上一行的 `active!` 不只是取值：Dart 的 flow analysis 把它当作
+          // **类型提升点**，把 final 局部变量 `active` 在后续（含闭包内）
+          // 提升为非空。所以下面闭包里可以直接写 `active`；
+          // 再补一个 `!` 反而会被报 unnecessary_non_null_assertion。
           if (hasModel)
             Expanded(
               child: _ModelPicker(
@@ -803,10 +808,7 @@ class _ComposerStatusBar extends ConsumerWidget {
                 activeName: active!.chatModel!.name,
                 onChanged: (name) => ref
                     .read(configProvider.notifier)
-                    // active 是 LlmConfig?：`active!` 只在它所在的那个表达式里
-                    // 生效，不会把变量本身提升为非空。闭包里必须再写一次 !，
-                    // 否则 analyzer 报「receiver 可能为 null」。
-                    .upsert(active!.copyWith(defaultChatModel: name)),
+                    .upsert(active.copyWith(defaultChatModel: name)),
               ),
             )
           else
