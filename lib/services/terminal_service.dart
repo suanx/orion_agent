@@ -159,21 +159,59 @@ class TerminalService {
 
   /// proot 所在目录与可执行文件路径。
   ///
-  /// ⚠️ 部署方式的演变（三个坑都踩过）：
+  /// proot 五件套（见 [prootPath] 的部署演变说明与 vendor/proot/README.md）。
   ///
-  /// 1. **asset 复制到 appSupport 再 chmod** —— 失败。
-  ///    除复制/chmod 环节易错外，部分 ROM（小米 HyperOS 实测）对
-  ///    exec app 数据目录里的二进制有额外拦截，症状是进程能 fork
-  ///    但 exec 静默失败（exit=127 + 来历不明的报错文本）。
+  /// 注意 DT_NEEDED 是 `libtalloc.so`（无 .2 后缀）——这是 vendored
+  /// proot 的构建特性，库文件名必须与之一致，改名即链接失败。
+  static const _prootLibs = [
+    'libproot.so',
+    'libproot-loader.so',
+    'libproot-loader32.so',
+    'libtalloc.so',
+    'libandroid-shmem.so',
+  ];
+
+  static const _systemChannel = MethodChannel('orion_agent/system');
+
+  String? _libDir;
+  String? _prootPath;
+
+  /// proot 全套所在的目录（nativeLibraryDir）。
+  Future<String> prootLibDir() async {
+    if (_libDir != null) return _libDir!;
+    String dir;
+    try {
+      dir = await _systemChannel.invokeMethod<String>('nativeLibDir') ?? '';
+    } catch (e) {
+      throw Exception('无法获取 nativeLibraryDir（$e）。');
+    }
+    if (dir.isEmpty) {
+      throw Exception('nativeLibraryDir 为空：APK 可能未正确打包 native 库。');
+    }
+    return _libDir = dir;
+  }
+
+  /// proot 可执行文件路径（**双路解析**）。
+  ///
+  /// ⚠️ 部署方式的演变（四个坑都踩过）：
+  ///
+  /// 1. **asset 复制到 appSupport 再 chmod** —— 依赖库缺失/改名坑已修，
+  ///    但当时从未在用户设备上真正验证过（历次报错截图其实来自
+  ///    另一个 App，见 docs §11.16）。
   ///
   /// 2. **直接 exec APK 内的 asset** —— 不可行，asset 只读无执行位。
   ///
-  /// 3. **当前方案（参考 jieapi/aicode 的成熟模式）**：proot 全套以
-  ///    `lib*.so` 命名打进 jniLibs，gradle 设 useLegacyPackaging=true，
-  ///    安装后由系统解压到 `applicationInfo.nativeLibraryDir`。
-  ///    该目录由系统管理、天然可执行，W^X 限制不拦，无需 chmod。
-  ///    五件套：libproot.so / libproot-loader.so / libproot-loader32.so /
-  ///    libtalloc.so / libandroid-shmem.so（见 vendor/proot/README.md）。
+  /// 3. **jniLibs → nativeLibraryDir 直跑（V0.1.3/4）** —— 用户实测
+  ///    仍失败：矩阵输出 `/system/bin/sh: 1: <nativeLibDir>/libproot.so:
+  ///    not found`——shell 对一个**存在且合法**的 ELF 报 not found，
+  ///    是内核层拒绝加载的典型表现（提取文件 exec 位/SELinux 上下文
+  ///    因 ROM 而异）。
+  ///
+  /// 4. **当前方案（V0.1.5，双路）**：
+  ///    主路 = 把五件套从 nativeLibraryDir **复制到应用数据目录** +
+  ///    chmod 755（targetSdk 28 允许 exec 数据目录二进制）；
+  ///    后备 = 复制失败时退回 nativeLibraryDir。
+  ///    两路都在实验矩阵里自测上报，用户截图即可知道哪路可用。
   ///
   /// 注意 DT_NEEDED 是 `libtalloc.so`（无 .2 后缀）——这是 vendored
   /// proot 的构建特性，库文件名必须与之一致，改名即链接失败。
@@ -208,13 +246,45 @@ class TerminalService {
   /// proot 可执行文件路径。
   Future<String> prootPath() async {
     if (_prootPath != null) return _prootPath!;
+    // ---- 主路：复制到 appSupport/bin + chmod 755 ----
+    try {
+      final dir = await prootLibDir();
+      final support = await getApplicationSupportDirectory();
+      final binDir = Directory('${support.path}/bin');
+      if (!binDir.existsSync()) binDir.createSync(recursive: true);
+      var ok = true;
+      for (final name in _prootLibs) {
+        final src = File('$dir/$name');
+        final dst = File('${binDir.path}/$name');
+        try {
+          if (!src.existsSync()) {
+            ok = false;
+            break;
+          }
+          // 按大小增量复制：升级后字节数变化会自动刷新
+          if (!dst.existsSync() ||
+              (await dst.stat()).size != (await src.stat()).size) {
+            await src.copy(dst.path);
+          }
+          final chmod =
+              await Process.run('/system/bin/chmod', ['755', dst.path]);
+          if (chmod.exitCode != 0) ok = false;
+        } catch (_) {
+          ok = false;
+        }
+      }
+      if (ok) {
+        return _prootPath = '${binDir.path}/libproot.so';
+      }
+    } catch (_) {
+      // 复制链路任一环失败 → 走后备
+    }
+    // ---- 后备：nativeLibraryDir 直跑 ----
     final dir = await prootLibDir();
     final proot = '$dir/libproot.so';
     if (!File(proot).existsSync()) {
       throw Exception(
-          '$proot 不存在。nativeLibraryDir 内容：'
-          '${Directory(dir).existsSync() ? Directory(dir).listSync().map((e) => e.path.split('/').last).join(', ') : '目录不存在'}。'
-          '请检查 APK 是否带 proot 五件套并启用 useLegacyPackaging。');
+          '$proot 不存在，且复制部署失败。请重新安装最新版 APK。');
     }
     return _prootPath = proot;
   }
@@ -226,14 +296,16 @@ class TerminalService {
   ///   而 proot（bionic 动态链接程序）需要 ANDROID_ROOT/ANDROID_DATA 等
   ///   系统变量才能正常工作。aicode 注释证实：只喂自定义环境会让 proot
   ///   exec 瞬间失败（终端表现为「会话已结束」且无其他报错）。
-  /// - LD_LIBRARY_PATH 除了 proot 目录还要带 /system/lib64:/system/lib。
+  /// - 库/loader/proot 必须同目录（[prootPath] 保证），LD_LIBRARY_PATH
+  ///   除该目录外还要带 /system/lib64:/system/lib。
   /// - PROOT_LOADER_32 也要设：32 位客户程序用 loader32，缺了它
   ///   执行 32 位 ELF 时按编译进去的 Termux 路径找必败。
   /// - **刻意不设 PROOT_NO_SECCOMP**：这是 Termux 自己用 proot 的方式；
   ///   aicode 实测强制全量 ptrace 反而在部分设备触发 ptrace(PEEKDATA)
   ///   I/O error。
   Future<Map<String, String>> prootEnv() async {
-    final dir = await prootLibDir();
+    final proot = await prootPath();
+    final dir = proot.substring(0, proot.lastIndexOf('/'));
     final tmp = await getTemporaryDirectory();
     if (!Directory(tmp.path).existsSync()) {
       Directory(tmp.path).createSync(recursive: true);
@@ -530,7 +602,22 @@ class TerminalService {
         continue;
       }
       final size = f.lengthSync();
-      buf.writeln('[诊断] $name: $size 字节');
+      // 提取文件的执行位因 ROM 而异：缺执行位 → execve EACCES，
+      // 这正是双路部署（复制到数据目录再 chmod）要解决的问题。
+      final mode = f.statSync().mode;
+      final execBit = (mode & 0x40) != 0;
+      buf.writeln('[诊断] $name: $size 字节, 执行位=${execBit ? '有' : '无'}');
+    }
+    // 运行时实际解析出的位置（filesDir/bin 优先）
+    try {
+      final p = await prootPath();
+      buf.writeln('[诊断] 实际运行位置: $p');
+      final pf = File(p);
+      if (pf.existsSync()) {
+        buf.writeln('[诊断] 运行副本: ${pf.lengthSync()} 字节');
+      }
+    } catch (e) {
+      buf.writeln('[诊断] 运行位置解析失败: $e');
     }
     final rootfs = await rootfsDir(d);
     buf.writeln('[诊断] rootfs: $rootfs '
@@ -559,9 +646,10 @@ class TerminalService {
     final shell = d == TerminalDistro.alpine ? '/bin/sh' : '/bin/bash';
 
     Future<void> run(String label, List<String> args,
-        {Map<String, String>? extraEnv}) async {
+        {String? exe, Map<String, String>? extraEnv}) async {
+      final p = exe ?? proot;
       try {
-        final r = await Process.run(proot, args,
+        final r = await Process.run(p, args,
                 environment: {...env, ...?extraEnv})
             .timeout(const Duration(seconds: 15));
         final out =
@@ -572,6 +660,10 @@ class TerminalService {
         results.add('[$label] exit=${r.exitCode}');
         if (out.isNotEmpty) results.add('   out: ${clip(out)}');
         if (err.isNotEmpty) results.add('   err: ${clip(err)}');
+      } on ProcessException catch (e) {
+        // errorCode = errno：EACCES(13)=权限拒绝、ENOENT(2)=文件不存在、
+        // ENOEXEC(8)=格式不可执行——能直接区分「被拦」还是「文件问题」。
+        results.add('[$label] 异常 errno=${e.errorCode}: ${e.message}');
       } catch (e) {
         results.add('[$label] 异常: $e');
       }
@@ -600,6 +692,15 @@ class TerminalService {
       '-b', '/dev', '-b', '/proc', '-b', '/sys',
       shell, '-c', 'echo ok',
     ], extraEnv: {'PROOT_NO_SECCOMP': '1'});
+    // 对照组：绕过 filesDir 复制，直跑 nativeLibraryDir 里的原件。
+    // 若 1-8 全挂而 9 过 → 复制环节有问题；若 9 也挂 → 该 ROM 不允许
+    // exec nativeLibraryDir/数据目录其一，双路数据一起看。
+    try {
+      final native = '${await prootLibDir()}/libproot.so';
+      await run('9.对照 nativeLibraryDir 直跑', ['--version'], exe: native);
+    } catch (e) {
+      results.add('[9.对照 nativeLibraryDir 直跑] 异常: $e');
+    }
     return results;
   }
 

@@ -8,7 +8,7 @@ import '../theme.dart';
 import '../providers/providers.dart';
 
 /// 当前版本号。发版时与 pubspec.yaml 的 `version` 同步更新。
-const String kAppVersion = '0.1.4';
+const String kAppVersion = '0.1.5';
 
 /// GitHub Releases 页面（检查逻辑在 UpdateService）。
 const _releasesPage = 'https://github.com/suanx/orion_agent/releases';
