@@ -177,13 +177,10 @@ Future<T?> _showAnchoredPanel<T>({
   if (ro is! RenderBox || !ro.attached || !ro.hasSize) {
     return showGlassDialog<T>(context: context, builder: builder);
   }
-  final Object? overlayRo =
-      Overlay.of(context, rootOverlay: true).context.findRenderObject();
-  if (overlayRo is! RenderBox) {
-    return showGlassDialog<T>(context: context, builder: builder);
-  }
-  final anchorTopLeft =
-      ro.localToGlobal(Offset.zero, ancestor: overlayRo);
+  // localToGlobal 不带 ancestor 返回的是**根坐标系**的全局坐标，
+  // 与路由 overlay（全屏）的 LayoutBuilder 坐标系一致，直接可用。
+  // ⚠️ 它的 ancestor 参数是 Matrix4 而非 RenderBox，不要画蛇添足。
+  final anchorTopLeft = ro.localToGlobal(Offset.zero);
   final rect = anchorTopLeft & ro.size;
 
   return Navigator.of(context, rootNavigator: true).push(
@@ -225,16 +222,20 @@ class _AnchoredGlassRoute<T> extends PopupRoute<T> {
       final screenW = cons.maxWidth;
       final screenH = cons.maxHeight;
 
-      // 水平：以锚点中心对齐，两侧夹紧不出屏
-      final maxLeft = (screenW - width - 12).clamp(12.0, double.infinity);
-      var left = (anchorRect.center.dx - width / 2).clamp(12.0, maxLeft);
+      // 水平：以锚点中心对齐，两侧夹紧不出屏。
+      // ⚠️ num.clamp 返回 num 不是 double（run#18 的同类坑），
+      // 必须显式 toDouble()，否则 Positioned(left:) 编译不过。
+      final maxLeft =
+          (screenW - width - 12).clamp(12.0, double.infinity).toDouble();
+      final double left =
+          (anchorRect.center.dx - width / 2).clamp(12.0, maxLeft).toDouble();
 
       // 垂直：默认面板底边贴在锚点上方 10px；
       // 锚点本身在屏幕上半部（上方放不下菜单）时改到锚点下方。
       final bool above = anchorRect.center.dy >= screenH * 0.35;
       final double top = above
           ? 0
-          : (anchorRect.bottom + 10).clamp(0.0, screenH - 120);
+          : (anchorRect.bottom + 10).clamp(0.0, screenH - 120).toDouble();
       final double? bottom =
           above ? (screenH - anchorRect.top + 10) : null;
 
