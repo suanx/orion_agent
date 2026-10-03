@@ -347,11 +347,47 @@ jobs:
           fi
           exit "$RC"
 
+      - name: Inject release signing config
+        # 正式版签名：keystore/orion-release.p12（PKCS12，别名 orion）。
+        # ⚠️ 每次发布必须使用同一签名，否则用户无法覆盖安装升级。
+        # 该文件随仓库分发（密码仅用于本地加密 keystore，应用签名的
+        # 唯一性由私钥本身保证；公开仓库场景下这是个人项目的务实取舍，
+        # 后续可改用 GitHub Secrets 覆盖密码）。
+        run: |
+          test -s keystore/orion-release.p12 || { echo "keystore/orion-release.p12 缺失"; exit 1; }
+          cat >> android/app/build.gradle.kts <<'EOF'
+
+          // 正式版签名（追加块，Kotlin DSL 多块合并）。密码优先取
+          // 环境变量 ORION_KS_PASS（GitHub Secrets），未配置用内置默认值。
+          android {
+              signingConfigs {
+                  create("release") {
+                      storeFile = file("../../keystore/orion-release.p12")
+                      storePassword = System.getenv("ORION_KS_PASS") ?: "orion-ks-2026-secure"
+                      keyAlias = "orion"
+                      keyPassword = System.getenv("ORION_KS_PASS") ?: "orion-ks-2026-secure"
+                      storeType = "PKCS12"
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig = signingConfigs.getByName("release")
+                  }
+              }
+          }
+          EOF
+          tail -20 android/app/build.gradle.kts
+
       - name: Build APK
         # 同样把失败明细以 annotation 暴露（job log 无权限查看）
+        # versionName 取自 pubspec（每次发版手动递增），
+        # versionCode 用 workflow run number（严格单调递增，满足覆盖安装）
         run: |
           set +e
-          flutter build apk --release --target-platform android-arm64 2>&1 \
+          VN=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
+          echo "versionName=$VN versionCode=$GITHUB_RUN_NUMBER"
+          flutter build apk --release --target-platform android-arm64 \
+            --build-name="$VN" --build-number="$GITHUB_RUN_NUMBER" 2>&1 \
             | tee /tmp/build.txt
           RC=${PIPESTATUS[0]}
           if [ "$RC" -ne 0 ]; then
@@ -374,3 +410,27 @@ jobs:
         with:
           name: orion-agent-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Publish to GitHub Releases
+        # 正式发布：APK 上传到 Releases（tag = 版本号），更新说明取
+        # 仓库根的 RELEASE_NOTES.md（每次发版随代码一起更新）。
+        # 应用内「关于 → 检查更新」读取的就是这里的 latest release。
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          VN=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
+          TAG="v$VN"
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          test -s "$APK" || { echo "APK 不存在"; exit 1; }
+          test -s RELEASE_NOTES.md || { echo "RELEASE_NOTES.md 缺失"; exit 1; }
+          echo "发布 $TAG（versionCode=$GITHUB_RUN_NUMBER）"
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK#orion-agent-v$VN.apk" --clobber -R "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "$APK#orion-agent-v$VN.apk" \
+              -R "$GITHUB_REPOSITORY" \
+              --title "Orion Agent v$VN" \
+              --notes-file RELEASE_NOTES.md
+          fi
+          echo "已发布 $TAG"

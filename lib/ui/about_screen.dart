@@ -6,7 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import '../theme.dart';
 
 /// 当前版本号。发版时与 pubspec.yaml 的 `version` 同步更新。
-const String kAppVersion = '0.1.1';
+const String kAppVersion = '0.1.2';
 
 /// GitHub Releases 最新版 API 与页面。
 const _latestApi =
