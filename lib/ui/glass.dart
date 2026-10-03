@@ -13,8 +13,12 @@ import '../theme.dart';
 
 /// 居中弹出液态玻璃对话框。
 ///
-/// [builder] 返回的内容会被包进玻璃面板；面板本身不提供标题/按钮，
-/// 由调用方用 AlertDialog 或自定义 Column 组装。
+/// [builder] 通常返回 AlertDialog（也可以是任意内容）。实现要点：
+/// - 外层 [Dialog] 背景透明 + insetPadding 归零，宽度由内层内容决定；
+/// - [glassPanel] 提供模糊 + 半透明 + 亮边；
+/// - 用 Theme 覆写 dialogTheme（背景透明、无阴影），这样 builder 里
+///   **不指定 backgroundColor 的 AlertDialog 也是透明的**——机械替换
+///   进来的旧弹窗不用逐个改颜色，玻璃面板都能透出来。
 Future<T?> showGlassDialog<T>({
   required BuildContext context,
   required WidgetBuilder builder,
@@ -26,12 +30,20 @@ Future<T?> showGlassDialog<T>({
     barrierColor: Colors.black26,
     builder: (ctx) => Dialog(
       backgroundColor: Colors.transparent,
-      // 去掉 Dialog 默认的内边距与最小尺寸约束，
-      // 由玻璃面板自己控制（否则窄弹窗两侧有大片透明区）。
-      insetPadding: const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+      // 归零：面板宽度交给内层 AlertDialog 的 insetPadding 决定，
+      // 否则两层 padding 叠加会把窄屏的面板挤得过窄。
+      insetPadding: EdgeInsets.zero,
       child: glassPanel(
         context,
-        builder(ctx),
+        Theme(
+          data: Theme.of(context).copyWith(
+            dialogTheme: const DialogThemeData(
+              backgroundColor: Colors.transparent,
+              elevation: 0,
+            ),
+          ),
+          child: builder(ctx),
+        ),
         borderRadius: 24,
       ),
     ),
@@ -54,7 +66,7 @@ Widget glassPanel(
       filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
       child: Container(
         decoration: BoxDecoration(
-          // 深浅模式各给一层半透明底：玻璃感的关键是透出不模糊的上层内容
+          // 深浅模式各给一层半透明底：玻璃感的关键是透出被模糊的内容
           color: isDark
               ? Colors.white.withValues(alpha: 0.10)
               : Colors.white.withValues(alpha: 0.72),
@@ -74,61 +86,6 @@ Widget glassPanel(
           ],
         ),
         child: child,
-      ),
-    ),
-  );
-}
-
-/// 居中选项列表（替代 showModalBottomSheet 的标准形态）。
-///
-/// [groups] 为选项分组：组间有分隔线。返回选中项的 value。
-Future<T?> showGlassOptionSheet<T>({
-  required BuildContext context,
-  required String title,
-  required List<List<({T value, String label, String? desc})>> groups,
-}) {
-  return showGlassDialog<T>(
-    context: context,
-    builder: (ctx) => ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 340),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 14, 8, 10),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(14, 2, 14, 8),
-              child: Text(title,
-                  style: const TextStyle(
-                      fontSize: 16, fontWeight: FontWeight.w600)),
-            ),
-            for (var g = 0; g < groups.length; g++) ...[
-              if (g > 0)
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  child: Divider(
-                      height: 1, color: onSurface(context, 0.08)),
-                ),
-              for (final opt in groups[g])
-                ListTile(
-                  dense: true,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14)),
-                  title: Text(opt.label,
-                      style: const TextStyle(
-                          fontSize: 14.5, fontWeight: FontWeight.w500)),
-                  subtitle: opt.desc == null
-                      ? null
-                      : Text(opt.desc!,
-                          style: TextStyle(
-                              fontSize: 12,
-                              color: onSurface(context, 0.45))),
-                  onTap: () => Navigator.pop(ctx, opt.value),
-                ),
-            ],
-          ],
-        ),
       ),
     ),
   );

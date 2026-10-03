@@ -36,7 +36,6 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
         title: const Text('导入文档'),
         content: SingleChildScrollView(
           child: Column(

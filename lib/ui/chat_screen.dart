@@ -213,7 +213,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
         title: const Text('选择模型'),
         content: ConstrainedBox(
           constraints: const BoxConstraints(maxHeight: 420, maxWidth: 320),
@@ -254,7 +253,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
         title: const Text('添加图片'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1043,7 +1041,6 @@ class _ComposerStatusBar extends ConsumerWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
         title: const Text('思考强度'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1084,7 +1081,6 @@ class _ComposerStatusBar extends ConsumerWidget {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
         title: const Text('权限模式'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
