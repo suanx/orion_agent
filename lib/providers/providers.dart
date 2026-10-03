@@ -2,6 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+//不能用 `show ThemeMode` 限制导入：material.dart 里同文件导出的
+// debugPrint（来自 foundation）会被一起挡掉，导致下面多处
+// "The method 'debugPrint' isn't defined"。改为显式补 foundation。
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/material.dart' show ThemeMode;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -209,7 +213,6 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
   /// （数十毫秒）。用户在返回前点「添加」，upsert 写入新列表后，
   /// _load 结尾会用加载出来的旧列表整体覆盖，刚添加的模型凭空消失。
   bool _localTouched = false;
-  bool _loadDone = false;
 
   Future<void> _load() async {
     var raw = await _secure.read(key: _kConfigs);
@@ -235,7 +238,6 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
         debugPrint('读取模型配置失败，使用空列表：$e');
       }
     }
-    _loadDone = true;
     if (!mounted) return;
     // 用户已在加载期间改过配置 → 不能用旧数据覆盖
     if (_localTouched) return;

@@ -263,8 +263,9 @@ String uniqueId(String prefix) =>
 > 不硬编码仓库名）。
 >
 > **迁移状态**：旧仓库 `suanx/pocket-agent` 已删除，代码与 git remote 均已
-> 指向 `suanx/orion_agent`并推送完成。该仓库首次 CI 运行会自动重建
-> `terminal-env` release（当前 release 列表为空，属正常中间态）。
+> 指向 `suanx/orion_agent` 并推送完成（60 个提交历史完整保留）。
+> 新仓库首次 CI 已成功运行并自动重建 `terminal-env` release
+> （`debian-bookworm-arm64-rootfs.tar.xz`，14.7 MB）。
 >
 > 好在它只是**备用源**：`install()` 里国内 Docker 镜像
 > （daocloud / 1ms / dockerproxy）**优先**尝试，三个全失败才走 GitHub

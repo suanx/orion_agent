@@ -72,9 +72,26 @@ class LlmClient {
 
     // 服务端返回空响应体（代理拦截、204、网关返回空）时 resp.data 为 null，
     // 原来的 resp.data! 会直接抛空指针。这里改为给出明确错误。
-    final body0 = resp.data;
-    if (body0 == null) {
+    //
+    // 必须显式转型为 ResponseBody：resp.data 是 dynamic，不收窄的话
+    // analyzer 会把它当成 Dio 的内部实现类型，随后 body.close() 报
+    // invalid_use_of_internal_member（warning，升级易炸）。
+    // 也因此不能用三元表达式——其静态类型会退化成 Object。
+    final raw = resp.data;
+    if (raw == null) {
       throw Exception('模型服务返回空响应体（HTTP ${resp.statusCode}）');
+    }
+    final ResponseBody body0;
+    if (raw is ResponseBody) {
+      body0 = raw;
+    } else {
+      // 非流式响应（例如拦截器把 body 转成了 Map）：包一层再按行解析，
+      // 保证下游只有一条代码路径。
+      body0 = ResponseBody.fromString(
+        jsonEncode(raw),
+        resp.statusCode ?? 200,
+        headers: const {},
+      );
     }
 
     final lines = body0.stream.cast<List<int>>().transform(utf8.decoder).transform(
@@ -228,7 +245,8 @@ class LlmClient {
     }
     // 少数服务不返回 index 字段，此时按响应顺序对应（OpenAI 规范要求 index，
     // 但不能因此直接判失败）。仅当一条都没带 index 时才退回顺序对齐。
-    final List<double> ordered;
+    final List<List<double>> ordered =
+        List<List<double>>.filled(inputs.length, const <double>[]);
     if (!anyIndex) {
       final vecs = <List<double>>[];
       for (final item in data) {
