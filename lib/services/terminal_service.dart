@@ -457,7 +457,9 @@ class TerminalService {
     final from = fromDir.split('/').where((s) => s.isNotEmpty).toList();
     final to = toAbs.split('/').where((s) => s.isNotEmpty).toList();
     var i = 0;
-    while (i < from.length && i < to.length && from[i] == to[i]) i++;
+    while (i < from.length && i < to.length && from[i] == to[i]) {
+      i++;
+    }
     final ups = List<String>.filled(from.length - i, '..');
     return ups.followedBy(to.sublist(i)).join('/');
   }
