@@ -158,6 +158,14 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
           try {
             _appendLog(await _terminal.diagnose(_distro));
           } catch (_) {}
+          // 实验矩阵：递增参数跑 7 组 proot 变体，锁定故障环节。
+          try {
+            _appendLog('—— 实验矩阵 ——');
+            for (final line in await _terminal.probeMatrix(_distro)) {
+              _appendLog(line);
+            }
+            _appendLog('—— 实验矩阵结束 ——');
+          } catch (_) {}
           _appendLog('请尝试「删除环境」后重新安装；若诊断为缺失，请重新下载安装最新 APK。');
           return;
         }

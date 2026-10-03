@@ -572,6 +572,66 @@ class TerminalService {
     return buf.toString();
   }
 
+  /// 实验矩阵：probe 失败时跑一组「递增参数」的 proot 变体，
+  /// 定位故障到底出在哪一环（本体 / rootfs / 初始程序 / 某个参数）。
+  ///
+  /// 每个变体独立超时并记录退出码与输出，结果拼成多行文本供 UI 展示。
+  /// 这是「文件层面全部正常但仍起不来」时的最后诊断手段。
+  Future<List<String>> probeMatrix(TerminalDistro d) async {
+    final results = <String>[];
+    final rootfs = await rootfsDir(d);
+    final proot = await prootPath();
+    final binDir = proot.substring(0, proot.lastIndexOf('/'));
+    final tmp = await getTemporaryDirectory();
+    final env = <String, String>{
+      'PROOT_TMP_DIR': tmp.path,
+      'PROOT_NO_SECCOMP': '1',
+      'LD_LIBRARY_PATH': binDir,
+      'PROOT_LOADER': '$binDir/proot-loader',
+      'HOME': '/root',
+      'TMPDIR': '/tmp',
+      'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      'LANG': 'C.UTF-8',
+    };
+    final shell = d == TerminalDistro.alpine ? '/bin/sh' : '/bin/bash';
+
+    Future<void> run(String label, List<String> args) async {
+      try {
+        final r = await Process.run(proot, args, environment: env)
+            .timeout(const Duration(seconds: 15));
+        final out =
+            '${r.stdout}'.trim().replaceAll('\n', ' ⏎ ');
+        final err = '${r.stderr}'.trim().replaceAll('\n', ' ⏎ ');
+        final clip = (String s) => s.length > 110 ? '${s.substring(0, 110)}…' : s;
+        results.add('[$label] exit=${r.exitCode}');
+        if (out.isNotEmpty) results.add('   out: ${clip(out)}');
+        if (err.isNotEmpty) results.add('   err: ${clip(err)}');
+      } catch (e) {
+        results.add('[$label] 异常: $e');
+      }
+    }
+
+    await run('1.proot本体 --version', ['--version']);
+    await run('2.仅rootfs+true', ['-r', rootfs, '/bin/true']);
+    await run('3.仅rootfs+sh', ['-r', rootfs, shell, '-c', 'echo ok']);
+    await run('4.-0(伪装root)', [
+      '-r', rootfs, '-0', shell, '-c', 'echo ok',
+    ]);
+    await run('5.-w /root', [
+      '-r', rootfs, '-0', '-w', '/root', shell, '-c', 'echo ok',
+    ]);
+    await run('6.+link2symlink', [
+      '-r', rootfs, '-0', '-w', '/root', '--link2symlink',
+      shell, '-c', 'echo ok',
+    ]);
+    await run('7.+binds(与正式调用一致)', [
+      '-r', rootfs, '-0', '-w', '/root', '--link2symlink',
+      '-b', '/dev', '-b', '/proc', '-b', '/sys',
+      shell, '-c', 'echo ok',
+    ]);
+    return results;
+  }
+
   /// 删除指定发行版的环境。
   Future<void> uninstall(TerminalDistro d) async {
     final dir = Directory(await rootfsDir(d));
