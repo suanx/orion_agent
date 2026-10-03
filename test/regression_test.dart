@@ -17,7 +17,7 @@ void main() {
     // 表现为知识库里的 emoji 变成"�"。
     test('按字素簇切分，emoji 完整且内容无损', () {
       const emoji = '\u{1F600}';
-      const text = '$emoji文${emoji}文${emoji}文$emoji';
+      const text = '$emoji文$emoji文$emoji文$emoji';
       final chunks = chunkText(text, maxLen: 3);
 
       expect(chunks.join(), text, reason: '分块后内容必须无损');
@@ -31,7 +31,7 @@ void main() {
     test('切分点落在代理对中间时也不产生损坏字符', () {
       const emoji = '\u{1F600}';
       // maxLen=2 时，边界正好落在 emoji 的高代理项之后
-      const text = '文${emoji}文${emoji}文${emoji}';
+      const text = '文$emoji文$emoji文$emoji';
       final chunks = chunkText(text, maxLen: 2);
       expect(chunks.join(), text, reason: '内容必须无损');
       for (final c in chunks) {
@@ -147,6 +147,8 @@ void main() {
       expect(mem3.notes, hasLength(1));
       expect(mem3.notes.single.text, '一条记忆');
     });
+
+    test('memoryPrompt 注入有条数与长度上限', () async {
       // 直接写库绕过写入上限，验证的是"注入 prompt"这一层的截断
       for (var i = 0; i < 80; i++) {
         await db.into(db.memoryNoteRows).insert(MemoryNoteRowsCompanion(
