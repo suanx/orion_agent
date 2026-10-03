@@ -47,8 +47,10 @@ class TerminalService {
       id: TerminalDistro.debian,
       displayName: 'Debian 12',
       dirName: 'debian-rootfs',
+      // 备用源（国内 Docker 镜像不可用时才走这里）。国内镜像优先，
+      // 见 install() 里_downloadDebianFromMirror 的优先级。
       downloadUrl:
-          'https://github.com/suanx/pocket-agent/releases/download/terminal-env/debian-bookworm-arm64-rootfs.tar.xz',
+          'https://github.com/suanx/orion_agent/releases/download/terminal-env/debian-bookworm-arm64-rootfs.tar.xz',
       isGzip: false,
     ),
   };

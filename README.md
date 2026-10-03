@@ -88,7 +88,7 @@ MCP 工具扩展，数据全部留在本机。
 
 ### 1. 获取安装包
 
-前往 [Actions](https://github.com/suanx/pocket-agent/actions) → 最新成功 run →
+前往 [Actions](https://github.com/suanx/orion_agent/actions) → 最新成功 run →
 **Artifacts** → 下载 `orion-agent-apk` → 解压得到 `app-release.apk`。
 
 > 需允许「安装未知来源应用」。

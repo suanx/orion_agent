@@ -256,6 +256,16 @@ String uniqueId(String prefix) =>
 
 > ⚠️ **rootfs 目录名未随项目更名**（仍是 `alpine-rootfs` / `debian-rootfs`）。
 > 这是有意的——改名会让已安装终端环境的用户需要重新下载几百 MB。
+
+> ⚠️ **Debian rootfs 的备用下载地址依赖 GitHub Release**（`terminal_service.dart:53`）：
+> `https://github.com/suanx/orion_agent/releases/download/terminal-env/...`
+> 该 asset 由 CI 第 11 步自动构建并发布（用 `gh` CLI 绑定当前仓库，
+> 不硬编码仓库名）。**仓库删除后该 URL 失效**，新仓库首次 push 时
+> 会自动重建 release。
+>
+> 好在它只是**备用源**：`install()` 里国内Docker 镜像
+> （daocloud / 1ms / dockerproxy）**优先**尝试，三个全失败才走 GitHub
+> （`terminal_service.dart:212-225`）。所以国内用户通常感知不到这个依赖。
 > 同理通知渠道 id 虽然改了（`orion_agent_agent`），但旧渠道残留不影响，
 > Android 会保留未使用的渠道。
 
@@ -753,7 +763,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 8. ImageMagick 从 `assets/images/mascot.webp` 生成全套图标
 9. 下载 Termux 的 proot + libtalloc → `jniLibs/arm64-v8a/lib*.so`
 10. 注入权限与通知 receiver
-11. 构建 Debian rootfs 并发布到 Release（`terminal-env`，已存在则跳过）
+11. 构建 Debian rootfs 并发布到 Release（tag `terminal-env`，已存在则跳过）
 12. `flutter pub get`
 13. `dart run build_runner build`（Drift codegen）
 14. `flutter analyze`
