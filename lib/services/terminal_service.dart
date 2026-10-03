@@ -158,103 +158,98 @@ class TerminalService {
     }
   }
 
-  /// proot 可执行文件的**实际可执行路径**。
+  /// proot 所在目录与可执行文件路径。
   ///
-  /// ⚠️ 三个坑（都踩过）：
+  /// ⚠️ 部署方式的演变（三个坑都踩过）：
   ///
-  /// 1. **不能从 nativeLibraryDir 取**。
-  ///    把 proot 改名成 libproot.so 放进 jniLibs 是行不通的：Android 会
-  ///    把它当共享库处理，而且从 Android 15 起native 库直接由 APK 映射
-  ///    加载、**不再解压到磁盘**。运行时 exec /libproot.so
-  ///    会得到 （表现为「环境装好了但所有组件
-  ///    都 lost」，而 rootfs 本身没问题）。
+  /// 1. **asset 复制到 appSupport 再 chmod** —— 失败。
+  ///    除复制/chmod 环节易错外，部分 ROM（小米 HyperOS 实测）对
+  ///    exec app 数据目录里的二进制有额外拦截，症状是进程能 fork
+  ///    但 exec 静默失败（exit=127 + 来历不明的报错文本）。
   ///
-  /// 2. **不能直接 exec APK 内的 asset**。
-  ///    Asset 随包只读，没有执行位。
+  /// 2. **直接 exec APK 内的 asset** —— 不可行，asset 只读无执行位。
   ///
-  /// 3. **proot 不是单文件可执行**，必须连依赖一起部署（2026-10-03 用
-  ///    python 解析 ELF 的 DT_NEEDED 逐一确认）。此前只带了 proot 和
-  ///    一个被改错名字的库，proot 在设备上根本无法通过动态链接：
-  ///      - libtalloc.so.2      —— DT_NEEDED 按 libtalloc.so.2 精确查找，
-  ///                              复制成 libtalloc.so 等于没带
-  ///      - libandroid-shmem.so —— Termux 构建的 proot 链接了它
-  ///      - proot-loader        —— proot 启动 ptrace 的辅助二进制，
-  ///                              运行时要设 PROOT_LOADER 指向它，
-  ///                              否则按编译进去的 Termux 路径找必然失败
-  ///    另需在 startOn 里设 LD_LIBRARY_PATH 指向本目录（bionic 不会搜
-  ///    app 的数据目录）。
+  /// 3. **当前方案（参考 jieapi/aicode 的成熟模式）**：proot 全套以
+  ///    `lib*.so` 命名打进 jniLibs，gradle 设 useLegacyPackaging=true，
+  ///    安装后由系统解压到 `applicationInfo.nativeLibraryDir`。
+  ///    该目录由系统管理、天然可执行，W^X 限制不拦，无需 chmod。
+  ///    五件套：libproot.so / libproot-loader.so / libproot-loader32.so /
+  ///    libtalloc.so / libandroid-shmem.so（见 vendor/proot/README.md）。
   ///
-  /// 正确做法：四个文件都从 asset 读出 → 写到 appSupport 下的可执行目录 →
-  /// chmod +x。复制按「asset 字节数」判断是否需要重做。
-  static const _prootAssets = <String, String>{
-    'proot': 'assets/proot',
-    'proot-loader': 'assets/proot-loader',
-    'libtalloc.so.2': 'assets/libtalloc.so.2',
-    'libandroid-shmem.so': 'assets/libandroid-shmem.so',
-  };
+  /// 注意 DT_NEEDED 是 `libtalloc.so`（无 .2 后缀）——这是 vendored
+  /// proot 的构建特性，库文件名必须与之一致，改名即链接失败。
+  static const _prootLibs = [
+    'libproot.so',
+    'libproot-loader.so',
+    'libproot-loader32.so',
+    'libtalloc.so',
+    'libandroid-shmem.so',
+  ];
 
-  Future<String> prootPath() async {
-    if (_prootPath != null) return _prootPath!;
-    final support = await getApplicationSupportDirectory();
-    final binDir = Directory('${support.path}/bin');
-    if (!binDir.existsSync()) {
-      binDir.createSync(recursive: true);
+  static const _systemChannel = MethodChannel('orion_agent/system');
+
+  String? _libDir;
+  String? _prootPath;
+
+  /// proot 全套所在的目录（nativeLibraryDir）。
+  Future<String> prootLibDir() async {
+    if (_libDir != null) return _libDir!;
+    String dir;
+    try {
+      dir = await _systemChannel.invokeMethod<String>('nativeLibDir') ?? '';
+    } catch (e) {
+      throw Exception('无法获取 nativeLibraryDir（$e）。');
     }
-
-    for (final entry in _prootAssets.entries) {
-      final name = entry.key;
-      final assetPath = entry.value;
-      final target = File('${binDir.path}/$name');
-
-      ByteData? data;
-      try {
-        data = await rootBundle.load(assetPath);
-      } catch (_) {
-        // 四件套都是硬依赖：缺 proot 无法启动，缺 loader/任一库
-        // 会被动态链接器当场拒绝，晚暴露不如这里给出可读错误。
-        throw Exception(
-            '安装包内缺少终端运行库（$assetPath）。'
-            '当前设备可能不是 arm64，或该APK 构建时未注入 proot 依赖。');
-      }
-      final bytes = data.buffer.asUint8List(
-        data.offsetInBytes,
-        data.lengthInBytes,
-      );
-      if (bytes.isEmpty) {
-        throw Exception('终端运行库（$assetPath）为空，构建产物不完整。');
-      }
-
-      // 大小一致则跳过重写（asset 是只读的，内容不会变）
-      if (!await _sameSize(target, bytes.length)) {
-        await target.writeAsBytes(bytes, flush: true);
-      }
-      // chmod 必须在写入之后：新文件继承 umask，不一定有执行位。
-      //
-      // 用 /system/bin/chmod 绝对路径：Android 上 app 进程的 PATH 通常
-      // 不含 /system/bin，`Process.run('chmod', ...)` 会抛 ProcessException
-      // 而不是返回非 0退出码。
-      final res = await Process.run(
-          '/system/bin/chmod', ['755', target.path]);
-      if (res.exitCode != 0) {
-        throw Exception('无法为 $name 设置执行权限：${res.stderr}');
-      }
+    if (dir.isEmpty) {
+      throw Exception('nativeLibraryDir 为空：APK 可能未正确打包 native 库。');
     }
-
-    // ⚠️ 必须在循环【外】赋值。
-    // 循环里每轮都写 _prootPath 的话，最终值是字典里最后一个键
-    // （libandroid-shmem.so）的路径，startOn 拿它去 exec 会失败——
-    // 共享库不是可执行文件。
-    return _prootPath = '${binDir.path}/proot';
+    return _libDir = dir;
   }
 
-  /// 目标文件是否已是期望大小（避免每次启动都重写几十 MB）。
-  Future<bool> _sameSize(File f, int expected) async {
-    if (!f.existsSync()) return false;
-    try {
-      return (await f.stat()).size == expected;
-    } catch (_) {
-      return false;
+  /// proot 可执行文件路径。
+  Future<String> prootPath() async {
+    if (_prootPath != null) return _prootPath!;
+    final dir = await prootLibDir();
+    final proot = '$dir/libproot.so';
+    if (!File(proot).existsSync()) {
+      throw Exception(
+          '$proot 不存在。nativeLibraryDir 内容：'
+          '${Directory(dir).existsSync() ? Directory(dir).listSync().map((e) => e.path.split('/').last).join(', ') : '目录不存在'}。'
+          '请检查 APK 是否带 proot 五件套并启用 useLegacyPackaging。');
     }
+    return _prootPath = proot;
+  }
+
+  /// proot 子进程环境变量（对齐 aicode 的验证过的组合）。
+  ///
+  /// - 必须先合并 [Platform.environment]：Dart 的 Process 与 Java 的
+  ///   ProcessBuilder 不同——给了 environment 就**完全替换**父进程环境，
+  ///   而 proot（bionic 动态链接程序）需要 ANDROID_ROOT/ANDROID_DATA 等
+  ///   系统变量才能正常工作。aicode 注释证实：只喂自定义环境会让 proot
+  ///   exec 瞬间失败（终端表现为「会话已结束」且无其他报错）。
+  /// - LD_LIBRARY_PATH 除了 proot 目录还要带 /system/lib64:/system/lib。
+  /// - PROOT_LOADER_32 也要设：32 位客户程序用 loader32，缺了它
+  ///   执行 32 位 ELF 时按编译进去的 Termux 路径找必败。
+  /// - **刻意不设 PROOT_NO_SECCOMP**：这是 Termux 自己用 proot 的方式；
+  ///   aicode 实测强制全量 ptrace 反而在部分设备触发 ptrace(PEEKDATA)
+  ///   I/O error。
+  Future<Map<String, String>> prootEnv() async {
+    final dir = await prootLibDir();
+    final tmp = await getTemporaryDirectory();
+    if (!Directory(tmp.path).existsSync()) {
+      Directory(tmp.path).createSync(recursive: true);
+    }
+    return {
+      ...Platform.environment,
+      'PROOT_TMP_DIR': tmp.path,
+      'PROOT_LOADER': '$dir/libproot-loader.so',
+      'PROOT_LOADER_32': '$dir/libproot-loader32.so',
+      'LD_LIBRARY_PATH': '$dir:/system/lib64:/system/lib',
+      'HOME': '/root',
+      'TMPDIR': '/tmp',
+      'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      'LANG': 'C.UTF-8',
+    };
   }
 
   Future<String> rootfsDir(TerminalDistro d) async {
@@ -491,9 +486,6 @@ class TerminalService {
   Future<Process> startOn(TerminalDistro d, String command) async {
     final rootfs = await rootfsDir(d);
     final proot = await prootPath();
-    // proot 与它的库/loader 都部署在同目录（见 prootPath）。
-    final binDir = proot.substring(0, proot.lastIndexOf('/'));
-    final tmp = await getTemporaryDirectory();
     final shell = d == TerminalDistro.alpine ? '/bin/sh' : '/bin/bash';
     final binds = <String>[
       '-b', '/dev',
@@ -514,50 +506,32 @@ class TerminalService {
         ...binds,
         shell, '-c', command,
       ],
-      environment: {
-        'PROOT_TMP_DIR': tmp.path,
-        'PROOT_NO_SECCOMP': '1',
-        // proot 是动态链接的：libtalloc.so.2 / libandroid-shmem.so 都在
-        // binDir，而 bionic 链接器默认只搜 /system 等系统路径，
-        // **不会**搜 app 的数据目录——不设这个，proot 在 exec 的那一刻
-        // 就被链接器拒绝（CANNOT LINK EXECUTABLE ... not found）。
-        'LD_LIBRARY_PATH': binDir,
-        // Termux 构建的 proot 启动 ptrace 需要辅助二进制 loader；
-        // 不设 PROOT_LOADER 时它按编译进去的 Termux 路径找，必然失败
-        // （报「the loader was not found or doesn't work」）。
-        'PROOT_LOADER': '$binDir/proot-loader',
-        'HOME': '/root',
-        'TMPDIR': '/tmp',
-        'PATH':
-            '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-        'LANG': 'C.UTF-8',
-      },
+      environment: await prootEnv(),
     );
   }
 
   /// 环境诊断：终端起不来时输出关键状态，供用户截图反馈。
   ///
   /// 覆盖所有「文件层面」的可能故障点：
-  ///   - proot 四件套是否部署、大小是否正常（占位文本 ~50 字节即 APK 没注入）
+  ///   - nativeLibraryDir 里 proot 五件套是否存在、大小是否正常
   ///   - rootfs 是否存在、/bin/sh（symlink）与 busybox 是否就位
-  ///   - 执行位是否有效（chmod 后 st_mode 的 user-exec 位）
   Future<String> diagnose(TerminalDistro d) async {
     final buf = StringBuffer();
-    final support = await getApplicationSupportDirectory();
-    final binDir = Directory('${support.path}/bin');
-    buf.writeln('[诊断] 可执行目录: ${binDir.path}');
-    for (final name in _prootAssets.keys) {
-      final f = File('${binDir.path}/$name');
+    String libDir;
+    try {
+      libDir = await prootLibDir();
+      buf.writeln('[诊断] nativeLibraryDir: $libDir');
+    } catch (e) {
+      return '[诊断] 获取 nativeLibraryDir 失败：$e';
+    }
+    for (final name in _prootLibs) {
+      final f = File('$libDir/$name');
       if (!f.existsSync()) {
         buf.writeln('[诊断] $name: 缺失');
         continue;
       }
       final size = f.lengthSync();
-      final mode = f.statSync().mode;
-      // 0o100 = S_IXUSR（owner 执行位）
-      final execBit = (mode & 0x40) != 0;
-      buf.writeln(
-          '[诊断] $name: $size 字节, 可执行位=${execBit ? '有' : '无'}');
+      buf.writeln('[诊断] $name: $size 字节');
     }
     final rootfs = await rootfsDir(d);
     buf.writeln('[诊断] rootfs: $rootfs '
@@ -576,28 +550,20 @@ class TerminalService {
   /// 定位故障到底出在哪一环（本体 / rootfs / 初始程序 / 某个参数）。
   ///
   /// 每个变体独立超时并记录退出码与输出，结果拼成多行文本供 UI 展示。
-  /// 这是「文件层面全部正常但仍起不来」时的最后诊断手段。
+  /// 第 8 组带 PROOT_NO_SECCOMP=1：默认 seccomp 在个别内核会出
+  /// EPERM/PEEKDATA 错，这组用于对比定位。
   Future<List<String>> probeMatrix(TerminalDistro d) async {
     final results = <String>[];
     final rootfs = await rootfsDir(d);
     final proot = await prootPath();
-    final binDir = proot.substring(0, proot.lastIndexOf('/'));
-    final tmp = await getTemporaryDirectory();
-    final env = <String, String>{
-      'PROOT_TMP_DIR': tmp.path,
-      'PROOT_NO_SECCOMP': '1',
-      'LD_LIBRARY_PATH': binDir,
-      'PROOT_LOADER': '$binDir/proot-loader',
-      'HOME': '/root',
-      'TMPDIR': '/tmp',
-      'PATH': '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-      'LANG': 'C.UTF-8',
-    };
+    final env = await prootEnv();
     final shell = d == TerminalDistro.alpine ? '/bin/sh' : '/bin/bash';
 
-    Future<void> run(String label, List<String> args) async {
+    Future<void> run(String label, List<String> args,
+        {Map<String, String>? extraEnv}) async {
       try {
-        final r = await Process.run(proot, args, environment: env)
+        final r = await Process.run(proot, args,
+                environment: {...env, ...?extraEnv})
             .timeout(const Duration(seconds: 15));
         final out =
             '${r.stdout}'.trim().replaceAll('\n', ' ⏎ ');
@@ -629,6 +595,11 @@ class TerminalService {
       '-b', '/dev', '-b', '/proc', '-b', '/sys',
       shell, '-c', 'echo ok',
     ]);
+    await run('8.同7但PROOT_NO_SECCOMP=1', [
+      '-r', rootfs, '-0', '-w', '/root', '--link2symlink',
+      '-b', '/dev', '-b', '/proc', '-b', '/sys',
+      shell, '-c', 'echo ok',
+    ], extraEnv: {'PROOT_NO_SECCOMP': '1'});
     return results;
   }
 

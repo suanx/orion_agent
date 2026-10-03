@@ -1,7 +1,7 @@
 name: orion_agent
 description: "Orion Agent - A mobile AI Agent app built with Flutter."
 publish_to: "none"
-version: 0.1.2+3
+version: 0.1.3+4
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -46,13 +46,5 @@ flutter:
     - assets/images/mascot.webp
     - assets/images/mascot_dark.webp
     - assets/images/user_img.webp
-    # proot 及其全部运行时依赖：CI 从 Termux 官方源取出后放到这里。
-    # 运行时由 TerminalService.prootPath() 复制到 appSupport 并 chmod +x
-    # （不能直接 exec —— APK 内的 asset 不可执行）。
-    #
-    # ⚠️ 四个文件缺一不可（proot 的 DT_NEEDED 是 libtalloc.so.2 +
-    # libandroid-shmem.so；proot 启动 ptrace 还需要 proot-loader）。
-    - assets/proot
-    - assets/proot-loader
-    - assets/libtalloc.so.2
-    - assets/libandroid-shmem.so
+    # proot 全套不再走 assets：改由 CI 放进 jniLibs，安装后系统解压到
+    # nativeLibraryDir（天然可执行、不受 W^X 限制），见 vendor/proot/README.md。
