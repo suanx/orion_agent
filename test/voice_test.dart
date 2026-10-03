@@ -29,13 +29,16 @@ void main() {
 
   group('Edge TTS 协议', () {
     test('SSML 时间戳必须是 JS 风格且以大写 Z 结尾', () {
-      final ts = edgeJsTimestamp(DateTime.utc(2026, 10, 3, 5, 0, 10));
+      // now 是命名参数（{DateTime? now}），不是位置参数
+      final ts = edgeJsTimestamp(now: DateTime.utc(2026, 10, 3, 5, 0, 10));
       // 周六 2026-10-03
       expect(ts, startsWith('Sat Oct 03 2026 05:00:10 GMT+0000'));
       expect(ts, endsWith('(Coordinated Universal Time)'),
           reason: '微软要求这个 JS 风格后缀，实际=$ts');
-      // 旧实现用 ISO 格式，服务端不产音频
-      expect(ts, isNot(contains('T')));
+      // 旧实现用 ISO 格式（2026-10-03T05:00:10.000Z），服务端不产音频。
+      // JS 风格里唯一的大写 T 在 Coordinated Universal Time 里，
+      // 所以不能断言「不含 T」，要断言不含 ISO 的日期分隔符。
+      expect(ts, isNot(matches(RegExp(r'^\d{4}-\d{2}-\d{2}T'))));
     });
 
     test('ConnectionId 必须是 32 位十六进制', () {
@@ -47,7 +50,7 @@ void main() {
 
     test('parseEdgeFrame 能解析文本帧里的音频（原实现只认二进制帧）', () {
       // 服务端实际格式：头部 ASCII + \r\n\r\n + MP3 数据
-      final header = 'X-RequestId:abc\r\nContent-Type:audio/mpeg\r\n'
+      const header = 'X-RequestId:abc\r\nContent-Type:audio/mpeg\r\n'
           'X-StreamId:xyz\r\nPath:audio\r\n\r\n';
       final mp3 = <int>[0xFF, 0xFB, 0x90, 0x64];
       final raw = <int>[...latin1.encode(header), ...mp3];
@@ -58,7 +61,7 @@ void main() {
     });
 
     test('parseEdgeFrame 仍支持二进制帧（前 2 字节为头长度）', () {
-      final header = 'Path:turn.end';
+      const header = 'Path:turn.end';
       final raw = <int>[
         (header.length >> 8) & 0xFF, header.length & 0xFF,
         ...latin1.encode(header),
