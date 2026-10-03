@@ -297,7 +297,15 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
-          if gh release view terminal-env >/dev/null 2>&1; then
+          # release 查询带 3 次重试：偶发 API 抖动会让 view 误报「不存在」，
+          # 随后走 9 分钟全量构建、最后 create 撞「tag 已存在」而失败
+          # （run#33 实际发生）。查询成功即跳过。
+          FOUND=0
+          for i in 1 2 3; do
+            if gh release view terminal-env >/dev/null 2>&1; then FOUND=1; break; fi
+            sleep 3
+          done
+          if [ "$FOUND" = "1" ]; then
             echo "terminal-env release 已存在，跳过构建"
             exit 0
           fi
@@ -310,9 +318,12 @@ jobs:
           sudo tar -xzf "/tmp/debimg/$LAYER" -C /tmp/droot
           sudo tar -C /tmp/droot --numeric-owner -cJf /tmp/debian-bookworm-arm64-rootfs.tar.xz .
           ls -la /tmp/debian-bookworm-arm64-rootfs.tar.xz
-          gh release create terminal-env /tmp/debian-bookworm-arm64-rootfs.tar.xz \
-            --title "Terminal environment bootstrap" \
-            --notes "Debian bookworm arm64 rootfs for the in-app terminal environment"
+          # 发布兜底：若构建期间 release 被并发 run 创建，改为向已有
+          # release 覆盖上传，避免 create 因 tag 已存在而整体失败
+          gh release upload terminal-env /tmp/debian-bookworm-arm64-rootfs.tar.xz --clobber 2>/dev/null || \
+            gh release create terminal-env /tmp/debian-bookworm-arm64-rootfs.tar.xz \
+              --title "Terminal environment bootstrap" \
+              --notes "Debian bookworm arm64 rootfs for the in-app terminal environment"
 
       - name: Pub get
         run: flutter pub get
