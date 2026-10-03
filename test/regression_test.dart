@@ -54,22 +54,39 @@ void main() {
       db = AppDatabase(NativeDatabase.memory());
       reg = ToolRegistry(memoryService: MemoryService(db));
     });
-    tearDown(() async => db.close());
+    // 幂等关闭：部分用例会主动 db.close()，tearDown 再关一次会抛。
+    tearDown(() async {
+      try {
+        await db.close();
+      } catch (_) {
+        // 已关闭
+      }
+    });
 
+    // ToolRegistry 构造函数会预注册内置工具（DateTime/Calculator/
+    // WebSearch/WebFetch/SaveMemory，ragService 与 terminalService 传 null
+    // 时不注册），所以这里必须用【相对断言】，不能断言绝对数量。
     test('unregisterPrefix 移除指定前缀的工具', () {
+      final before = reg.toolNames;
       reg.register(_FakeTool('srv__alpha'));
       reg.register(_FakeTool('srv__beta'));
       reg.register(_FakeTool('other__gamma'));
-      expect(reg.toolNames, hasLength(3));
+      expect(reg.toolNames.length, before.length + 3,
+          reason: '实际=${reg.toolNames}');
 
       reg.unregisterPrefix('srv__');
-      expect(reg.toolNames, ['other__gamma'], reason: '实际=${reg.toolNames}');
+      expect(reg.toolNames, contains('other__gamma'));
+      expect(reg.toolNames, isNot(contains('srv__alpha')));
+      expect(reg.toolNames, isNot(contains('srv__beta')));
+      // 内置工具不应被波及
+      expect(reg.toolNames, contains('calculator'));
     });
 
     test('同名工具不重复注册', () {
       reg.register(_FakeTool('dup'));
+      final afterFirst = reg.toolNames.length;
       reg.register(_FakeTool('dup'));
-      expect(reg.toolNames, ['dup']);
+      expect(reg.toolNames.length, afterFirst, reason: '实际=${reg.toolNames}');
     });
   });
 
@@ -81,7 +98,14 @@ void main() {
       db = AppDatabase(NativeDatabase.memory());
       mem = MemoryService(db);
     });
-    tearDown(() async => db.close());
+    // 幂等关闭：部分用例会主动 db.close()，tearDown 再关一次会抛。
+    tearDown(() async {
+      try {
+        await db.close();
+      } catch (_) {
+        // 已关闭
+      }
+    });
 
     test('重复内容不重复入库', () async {
       await mem.addNote('用户喜欢安静');
@@ -95,7 +119,8 @@ void main() {
       // 否则长期记忆会永久失效（只能重启 App）。
       await db.close();
       await expectLater(mem.load(), throwsA(anything));
-      // 换成可用库后必须仍能加载 —— 证明上次失败没有把状态锁死
+      // 换成可用库后必须仍能加载 —— 证明上次失败没有把状态锁死。
+      // 用新实例而非复用 mem：它内部的 _db 已关闭，无法复用。
       final db2 = AppDatabase(NativeDatabase.memory());
       addTearDown(db2.close);
       final mem2 = MemoryService(db2);
@@ -134,7 +159,14 @@ void main() {
       db = AppDatabase(NativeDatabase.memory());
       rag = RagService(db);
     });
-    tearDown(() async => db.close());
+    // 幂等关闭：部分用例会主动 db.close()，tearDown 再关一次会抛。
+    tearDown(() async {
+      try {
+        await db.close();
+      } catch (_) {
+        // 已关闭
+      }
+    });
 
     test('单条损坏向量不会毁掉整次检索', () async {
       final id = await rag.addDocument(
