@@ -80,3 +80,23 @@ class ChatMessage {
     return m;
   }
 }
+
+/// 估算一段文本的 token 数。
+///
+/// 经验规则：CJK 字符约 1 字 1 token，拉丁/数字/符号约 4 字符 1 token，
+/// 与主流 BPE 分词器的量级一致。仅用于上下文占用的本地估算，
+/// 真实用量以 API 返回的 usage 为准。
+int estimateTokens(String text) {
+  if (text.isEmpty) return 0;
+  var cjk = 0;
+  var other = 0;
+  for (final r in text.runes) {
+    // CJK 统一表意文字及扩展区（含 emoji 所在的符号区之外的主要区间）
+    if (r >= 0x2E80 && r <= 0x9FFF || r >= 0x3400 && r <= 0x4DBF) {
+      cjk++;
+    } else {
+      other++;
+    }
+  }
+  return cjk + (other / 4).ceil();
+}

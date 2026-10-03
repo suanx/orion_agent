@@ -50,6 +50,20 @@ class StorageService {
   Future<void> insertMessage(String sessionId, ChatMessage m) =>
       _db.into(_db.messageRows).insert(messageToCompanion(sessionId, m));
 
+  /// 整体替换一个会话的消息（上下文自动压缩用：
+  /// 旧历史 + 摘要消息 → 摘要消息 + 保留的近期消息）。
+  Future<void> replaceMessages(String sessionId, List<ChatMessage> msgs) =>
+      _db.transaction(() async {
+        await (_db.delete(_db.messageRows)
+              ..where((m) => m.sessionId.equals(sessionId)))
+            .go();
+        for (final m in msgs) {
+          await _db
+              .into(_db.messageRows)
+              .insert(messageToCompanion(sessionId, m));
+        }
+      });
+
   Future<void> deleteSession(String id) => _db.transaction(() async {
         await (_db.delete(_db.messageRows)
               ..where((m) => m.sessionId.equals(id)))

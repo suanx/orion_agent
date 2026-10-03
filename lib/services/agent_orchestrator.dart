@@ -134,6 +134,8 @@ class AgentOrchestrator {
               outputTokens: ev.completionTokens,
               cachedTokens: ev.cachedTokens,
             );
+            // 转发给 UI 层（对话页的用量弹窗按会话累计展示）
+            yield ev;
           }
         }
       } on DioException catch (e) {

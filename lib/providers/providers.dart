@@ -479,6 +479,16 @@ class ChatState {
   final List<String> steps;
   final String? error;
 
+  /// 当前会话的用量统计（应用启动以来累计；会话切换时按记录重置）。
+  /// - prompt/completion：API 返回的真实 token 用量
+  /// - toolRounds：工具调度轮次（内置 vs MCP）
+  /// - compressCount：上下文自动压缩次数
+  final int sessionPromptTokens;
+  final int sessionCompletionTokens;
+  final int toolRoundsBuiltIn;
+  final int toolRoundsMcp;
+  final int compressionCount;
+
   const ChatState({
     required this.sessions,
     this.activeSessionId,
@@ -487,6 +497,11 @@ class ChatState {
     this.streamingReasoning = '',
     this.steps = const [],
     this.error,
+    this.sessionPromptTokens = 0,
+    this.sessionCompletionTokens = 0,
+    this.toolRoundsBuiltIn = 0,
+    this.toolRoundsMcp = 0,
+    this.compressionCount = 0,
   });
 
   ChatSession? get activeSession {
@@ -505,6 +520,11 @@ class ChatState {
     List<String>? steps,
     String? error,
     bool clearError = false,
+    int? sessionPromptTokens,
+    int? sessionCompletionTokens,
+    int? toolRoundsBuiltIn,
+    int? toolRoundsMcp,
+    int? compressionCount,
   }) =>
       ChatState(
         sessions: sessions ?? this.sessions,
@@ -514,6 +534,12 @@ class ChatState {
         streamingReasoning: streamingReasoning ?? this.streamingReasoning,
         steps: steps ?? this.steps,
         error: clearError ? null : (error ?? this.error),
+        sessionPromptTokens: sessionPromptTokens ?? this.sessionPromptTokens,
+        sessionCompletionTokens:
+            sessionCompletionTokens ?? this.sessionCompletionTokens,
+        toolRoundsBuiltIn: toolRoundsBuiltIn ?? this.toolRoundsBuiltIn,
+        toolRoundsMcp: toolRoundsMcp ?? this.toolRoundsMcp,
+        compressionCount: compressionCount ?? this.compressionCount,
       );
 }
 
@@ -538,6 +564,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     String Function()? getReasoningEffort,
     String Function()? getVisionModel,
     String Function()? getSummaryModel,
+    String Function()? getCompressModel,
   })  : _storage = storage,
         _orchestrator = orchestrator,
         _rag = rag,
@@ -556,6 +583,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _getReasoningEffort = getReasoningEffort ?? (() => 'medium'),
         _getVisionModel = getVisionModel ?? (() => ''),
         _getSummaryModel = getSummaryModel ?? (() => ''),
+        _getCompressModel = getCompressModel ?? (() => ''),
         super(ChatState(
           sessions: initialSessions,
           activeSessionId: initialSessions.isEmpty ? null : initialSessions.first.id,
@@ -580,12 +608,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final String Function() _getReasoningEffort;
   final bool Function() _notifyPreview;
 
-  /// 专项模型：识图（带图消息）、标题总结。空串 = 跟随当前聊天模型。
+  /// 专项模型：识图（带图消息）、标题总结、上下文压缩。
+  /// 空串 = 跟随当前聊天模型。
   final String Function() _getVisionModel;
   final String Function() _getSummaryModel;
+  final String Function() _getCompressModel;
 
   /// 已做过标题总结的会话 id（内存即可：重启后标题已持久化）。
   final _titleSummarized = <String>{};
+
+  /// 每会话用量：[prompt, completion, 内置工具轮, MCP 工具轮, 压缩次数]。
+  /// 应用启动以来累计；会话切换时从该表恢复到 ChatState。
+  final _usage = <String, List<int>>{};
 
   /// 由外部注入的通知发送回调（在 Provider 里绑定 NotificationService）。
   Future<void> Function(String title, String body)? onAnswerNotification;
@@ -609,7 +643,31 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void selectSession(String id) {
-    state = state.copyWith(activeSessionId: id, clearError: true);
+    // 切换会话时把用量统计恢复为该会话的记录（应用启动以来累计）
+    final u = _usage[id] ?? const [0, 0, 0, 0, 0];
+    state = state.copyWith(
+      activeSessionId: id,
+      clearError: true,
+      sessionPromptTokens: u[0],
+      sessionCompletionTokens: u[1],
+      toolRoundsBuiltIn: u[2],
+      toolRoundsMcp: u[3],
+      compressionCount: u[4],
+    );
+  }
+
+  /// 累加当前会话的一项用量并同步到 state。
+  void _bumpUsage(String sessionId, int index, int delta) {
+    final u = _usage.putIfAbsent(sessionId, () => [0, 0, 0, 0, 0]);
+    u[index] += delta;
+    if (state.activeSessionId != sessionId) return;
+    state = state.copyWith(
+      sessionPromptTokens: u[0],
+      sessionCompletionTokens: u[1],
+      toolRoundsBuiltIn: u[2],
+      toolRoundsMcp: u[3],
+      compressionCount: u[4],
+    );
   }
 
   /// 清除当前错误提示（供 UI 关闭错误条使用）。
@@ -698,7 +756,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
     );
 
     _cancelToken = CancelToken();
-    final history = List<ChatMessage>.from(updated.messages);
+    // 上下文自动压缩：历史 token 估算超过模型窗口 75% 时，
+    // 用压缩模型把较旧的历史折叠成一条摘要（保留最近几条原文）。
+    // 失败静默降级为不压缩——压缩是优化，绝不能阻断对话。
+    final historyMessages = await _maybeCompressHistory(updated, config);
+    final history = List<ChatMessage>.from(historyMessages);
     // 锁定本次请求所属的会话 id。原实现到最后用 state.activeSession 取会话，
     // 而整个 await for 期间用户可以切换/新建/删除会话——回答会被追加到
     // 另一个会话，或写入一个没有 session 行的孤儿记录，重启即消失。
@@ -759,11 +821,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
         } else if (ev is AgentStatus) {
           state = state.copyWith(steps: [...state.steps, '⏳ ${ev.text}']);
         } else if (ev is AgentToolDone) {
+          // 工具调度统计：MCP 工具名带「服务器名__工具名」双下划线约定
+          if (ev.toolName.contains('__')) {
+            _bumpUsage(sessionId, 3, 1);
+          } else {
+            _bumpUsage(sessionId, 2, 1);
+          }
           final brief = ev.result.length > 120
               ? '${ev.result.substring(0, 120)}…'
               : ev.result;
           state = state.copyWith(
               steps: [...state.steps, '🔧 ${ev.toolName} → $brief']);
+        } else if (ev is TokenUsage) {
+          _bumpUsage(sessionId, 0, ev.promptTokens);
+          _bumpUsage(sessionId, 1, ev.completionTokens);
         } else if (ev is AgentAnswer) {
           answer = ev.message;
         } else if (ev is AgentFailure) {
@@ -860,6 +931,97 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   /// 用标题总结模型为会话生成简短标题。
   ///
+
+  /// 上下文自动压缩：估算整个历史的 token 占用，超过模型窗口 75% 时
+  /// 把较旧的消息（保留最近 6 条）交给压缩模型生成要点摘要，
+  /// 用「摘要消息 + 近期原文」整体替换会话消息（内存 + 落库）。
+  ///
+  /// - 压缩模型：专项设置优先，未设置回退当前聊天模型
+  /// - 任何失败都静默返回原消息（压缩是优化，不能阻断对话）
+  /// - 摘要以 role=system 消息存入历史：发送时随上下文带给模型，
+  ///   UI 上显示为普通消息气泡（用户能看到被压缩成什么）
+  Future<List<ChatMessage>> _maybeCompressHistory(
+      ChatSession session, LlmConfig config) async {
+    final msgs = session.messages;
+    final total = config.chatModel?.contextWindow ?? 0;
+    if (total <= 0) return msgs; // 未知窗口大小，无法判断何时压缩
+    var est = 0;
+    for (final m in msgs) {
+      est += estimateTokens(m.content) + 8; // 每条消息的包装开销
+    }
+    if (est < total * 0.75) return msgs;
+    if (msgs.length <= 8) return msgs; // 太短不值得压缩
+
+    final cm = _getCompressModel();
+    final model = cm.isNotEmpty ? cm : (config.chatModel?.name ?? '');
+    if (model.isEmpty) return msgs;
+
+    const keep = 6;
+    final older = msgs.take(msgs.length - keep).toList();
+    final olderText = older
+        .map((m) => '${m.role == 'user' ? '用户' : 'AI'}：${m.content}')
+        .join('\n\n');
+    // 只取较旧部分的【后半段】（靠近当下的内容信息密度更高）
+    final text = olderText.length > 20000
+        ? olderText.substring(olderText.length - 20000)
+        : olderText;
+
+    try {
+      final eff = config.copyWith(defaultChatModel: model);
+      final buf = StringBuffer();
+      await for (final ev in _llm.chatStream(
+        config: eff,
+        messages: [
+          {
+            'role': 'system',
+            'content': '把以下对话历史压缩成一份要点摘要。必须保留：'
+                '用户的偏好与明确要求、关键事实与结论、未完成的任务。'
+                '不超过 500 字，直接输出摘要正文，不要任何开场白。',
+          },
+          {'role': 'user', 'content': text},
+        ],
+      )) {
+        if (ev is FinalMessage) {
+          buf
+            ..clear()
+            ..write(ev.message.content);
+        }
+      }
+      final summary = buf.toString().trim();
+      if (summary.isEmpty) return msgs;
+
+      final summaryMsg = ChatMessage(
+        id: uniqueId('sum'),
+        role: 'system',
+        content: '【此前对话已自动压缩，摘要如下】\n$summary',
+      );
+      final kept = msgs.sublist(msgs.length - keep);
+      final newMessages = <ChatMessage>[summaryMsg, ...kept];
+
+      // 持久化 + 同步内存会话
+      await _storage.replaceMessages(session.id, newMessages);
+      final sessions = state.sessions
+          .map((s) => s.id == session.id
+              ? ChatSession(
+                  id: s.id,
+                  title: s.title,
+                  messages: newMessages,
+                  createdAt: s.createdAt,
+                  updatedAt: s.updatedAt,
+                )
+              : s)
+          .toList();
+      state = state.copyWith(
+          sessions: sessions, compressionCount: state.compressionCount + 1);
+      _bumpUsage(session.id, 4, 1);
+      debugPrint('上下文压缩完成：${older.length} 条旧消息 → 摘要 '
+          '(${estimateTokens(summary)} tokens)，保留最近 $keep 条');
+      return newMessages;
+    } catch (e) {
+      debugPrint('上下文压缩失败（降级为不压缩）：$e');
+      return msgs;
+    }
+  }
   /// 非流式语义但复用 chatStream（拿到 FinalMessage 即收敛）。
   /// 任何失败都静默——标题是锦上添花，绝不能因为它打断对话。
   Future<void> _summarizeTitle(
@@ -930,6 +1092,7 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     ttsEnabled: () => ref.read(ttsEnabledProvider),
     getVisionModel: () => ref.read(visionModelProvider),
     getSummaryModel: () => ref.read(summaryModelProvider),
+    getCompressModel: () => ref.read(compressModelProvider),
     getPersona: () {
       final id = ref.read(activeRoleIdProvider);
       return ref.read(roleServiceProvider).promptOf(id) ?? '';

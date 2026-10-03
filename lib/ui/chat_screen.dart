@@ -955,6 +955,162 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
   }
 }
 
+/// 上下文用量动态图标：环形进度 + 百分比 + 数值，颜色随占用率变化。
+class _ContextGauge extends StatelessWidget {
+  const _ContextGauge({
+    required this.used,
+    required this.total,
+    required this.onTap,
+  });
+
+  final int used;
+  final int total;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final hasTotal = total > 0;
+    final pct = hasTotal ? (used / total).clamp(0.0, 1.0) : null;
+    // 占用率分级：<70% 正常色，70-90% 橙，>90% 红
+    final color = pct == null
+        ? onSurface(context, 0.3)
+        : pct > 0.9
+            ? const Color(0xFFD93025)
+            : pct > 0.7
+                ? const Color(0xFFF9AB00)
+                : primary;
+    return InkWell(
+      borderRadius: BorderRadius.circular(10),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  CircularProgressIndicator(
+                    value: pct,
+                    strokeWidth: 2.6,
+                    color: color,
+                    backgroundColor: onSurface(context, 0.08),
+                  ),
+                  Text(
+                    pct == null ? '?' : '${(pct * 100).round()}',
+                    style: TextStyle(
+                        fontSize: 7.5,
+                        fontWeight: FontWeight.w600,
+                        color: onSurface(context, 0.55)),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              hasTotal
+                  ? '${_ComposerStatusBar._compactTokens(used)} / ${_ComposerStatusBar._compactTokens(total)}'
+                  : '上下文不限',
+              style: TextStyle(fontSize: 11, color: onSurface(context, 0.5)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 上下文用量明细弹窗（居中玻璃样式）：窗口占用 + 真实 Token 统计 +
+/// 工具调度轮次（内置 / MCP）+ 自动压缩次数。
+void _showContextDialog(BuildContext context, WidgetRef ref) {
+  final chat = ref.read(chatProvider);
+  final session = chat.activeSession;
+  final active = ref.read(configProvider).activeConfig;
+  final total = active?.chatModel?.contextWindow ?? 0;
+  var est = 0;
+  if (session != null) {
+    for (final m in session.messages) {
+      est += estimateTokens(m.content) + 8;
+    }
+  }
+  final pct = total > 0 ? (est / total).clamp(0.0, 1.0) : null;
+  final tokens = chat.sessionPromptTokens + chat.sessionCompletionTokens;
+
+  String row(String label, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              width: 96,
+              child: Text(label,
+                  style: TextStyle(
+                      fontSize: 13, color: onSurface(context, 0.5))),
+            ),
+            Expanded(
+              child: Text(value,
+                  style: const TextStyle(
+                      fontSize: 13, fontWeight: FontWeight.w500)),
+            ),
+          ],
+        ),
+      );
+
+  showGlassDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('上下文用量'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (pct != null) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: pct,
+                minHeight: 6,
+                backgroundColor: onSurface(ctx, 0.08),
+              ),
+            ),
+            const SizedBox(height: 4),
+          ],
+          row(
+              '上下文窗口',
+              total > 0
+                  ? '${_ComposerStatusBar._compactTokens(est)} / '
+                      '${_ComposerStatusBar._compactTokens(total)} tokens'
+                      '（${(pct! * 100).toStringAsFixed(1)}%，估算）'
+                  : '该模型未设置窗口大小，不启用自动压缩'),
+          row('会话 Token',
+              '输入 ${chat.sessionPromptTokens} · 输出 ${chat.sessionCompletionTokens}'
+              ' · 合计 $tokens（API 真实用量）'),
+          row('工具调度',
+              '内置工具 ${chat.toolRoundsBuiltIn} 轮 · MCP 工具 '
+              '${chat.toolRoundsMcp} 轮'),
+          row('自动压缩',
+              '已压缩 ${chat.compressionCount} 次'
+              '（占用超窗口 75% 时触发，保留最近 6 条原文）'),
+          Text('估算按 CJK 1 字 1 token、其他 4 字符 1 token 计算，'
+              '未含工具定义等固定开销。',
+              style: TextStyle(
+                  fontSize: 11.5,
+                  height: 1.5,
+                  color: onSurface(ctx, 0.4))),
+        ],
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+      ],
+    ),
+  );
+}
+
 /// 输入栏上方的状态条：思考开关 + 模型选择 + 上下文长度。
 ///
 /// 没有可用模型时整条置灰并提示，发送按钮同时禁用——避免用户
@@ -971,10 +1127,6 @@ class _ComposerStatusBar extends ConsumerWidget {
     final ttsOn = ref.watch(ttsEnabledProvider);
     final permission = ref.watch(agentPermissionProvider);
     final hasModel = active?.chatModel != null;
-
-    final textColor = hasModel
-        ? onSurface(context, 0.6)
-        : onSurface(context, 0.28);
 
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
@@ -1019,19 +1171,29 @@ class _ComposerStatusBar extends ConsumerWidget {
           ),
           const Spacer(),
 
-          // 上下文长度（挂在模型上，所以读当前聊天模型的值）。
+          // 上下文用量动态图标：环形进度 = 估算占用 / 模型窗口，
+          // 颜色随占用率变化（正常→70% 橙→90% 红），点击弹出用量明细。
           // 模型选择已移到输入框内（麦克风旁的调音图标）——
           // 状态条此前塞了五个元素，窄屏上模型选择被挤出可视区。
           if (hasModel)
-            Text(
-              (active!.chatModel!.contextWindow) <= 0
-                  ? '上下文 不限制'
-                  : '上下文 ${_compactTokens(active.chatModel!.contextWindow)}',
-              style: TextStyle(fontSize: 11, color: textColor),
+            _ContextGauge(
+              used: _estimateSessionTokens(ref.watch(chatProvider).activeSession),
+              total: active!.chatModel!.contextWindow,
+              onTap: () => _showContextDialog(context, ref),
             ),
         ],
       ),
     );
+  }
+
+  /// 估算当前会话历史占用的 token（不含工具定义等固定开销）。
+  static int _estimateSessionTokens(session) {
+    if (session == null) return 0;
+    var est = 0;
+    for (final m in session.messages) {
+      est += estimateTokens(m.content) + 8;
+    }
+    return est;
   }
 
   /// 弹出思考强度选择。选择结果同时写入 provider 与 prefs：
