@@ -1,4 +1,5 @@
 import '../theme.dart';
+import 'glass.dart';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
@@ -63,7 +64,7 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     if (info == null || !mounted) return;
     ref.read(pendingUpdateProvider.notifier).state = info;
     if (!mounted) return;
-    await showDialog<void>(
+    await showGlassDialog<void>(
       context: context,
       barrierDismissible: true,
       builder: (ctx) => AlertDialog(

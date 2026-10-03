@@ -1,6 +1,7 @@
 import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'glass.dart';
 import 'status_bar_area.dart';
 
 import '../providers/providers.dart';
@@ -185,7 +186,7 @@ class ProfileScreen extends ConsumerWidget {
         _DangerButton(
           label: '清空所有会话',
           onTap: () async {
-            final ok = await showDialog<bool>(
+            final ok = await showGlassDialog<bool>(
               context: context,
               builder: (ctx) => AlertDialog(
                 title: const Text('清空所有会话'),

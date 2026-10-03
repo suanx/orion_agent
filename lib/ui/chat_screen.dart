@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'glass.dart';
 import 'status_bar_area.dart';
 
 import '../models/chat_message.dart';
@@ -52,7 +53,7 @@ void _showImageViewer(BuildContext context, String dataUrl) {
         .showSnackBar(const SnackBar(content: Text('图片数据已损坏，无法显示')));
     return;
   }
-  showDialog(
+  showGlassDialog(
     context: context,
     builder: (_) => Dialog.fullscreen(
       backgroundColor: Colors.black,
@@ -195,11 +196,67 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  Future<void> _addImage() async {
-    final source = await showModalBottomSheet<ImageSource>(
+  /// 居中弹窗选择当前聊天模型。
+  ///
+  /// 模型列表来自当前提供商的 chatModels；选择写入 defaultChatModel。
+  /// 未配置模型时此入口在输入栏不可点（图标置灰），这里再兜底一次。
+  Future<void> _pickModel() async {
+    final active = ref.read(configProvider).activeConfig;
+    final models = active?.chatModels ?? const <ProviderModel>[];
+    if (active == null || active.chatModel == null || models.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('请先在「我的 → AI 提供商」配置模型服务')));
+      return;
+    }
+    final current = active.chatModel!.name;
+    final sel = await showGlassDialog<String>(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        title: const Text('选择模型'),
+        content: ConstrainedBox(
+          constraints: const BoxConstraints(maxHeight: 420, maxWidth: 320),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final m in models)
+                  ListTile(
+                    dense: true,
+                    title: Text(m.name,
+                        style: const TextStyle(fontSize: 14.5)),
+                    subtitle: m.contextWindow > 0
+                        ? Text('上下文 ${_compactTokens(m.contextWindow)}',
+                            style: const TextStyle(fontSize: 11.5))
+                        : null,
+                    trailing: m.name == current
+                        ? Icon(Icons.check_rounded,
+                            size: 20,
+                            color: Theme.of(context).colorScheme.primary)
+                        : null,
+                    onTap: () => Navigator.pop(ctx, m.name),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    if (sel == null || sel == current) return;
+    await ref
+        .read(configProvider.notifier)
+        .upsert(active.copyWith(defaultChatModel: sel));
+  }
+
+  Future<void> _addImage() async {
+    final source = await showGlassDialog<ImageSource>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        title: const Text('添加图片'),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
@@ -427,6 +484,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           onStop: () => ref.read(chatProvider.notifier).stop(),
           onAddImage: _addImage,
           onMic: _toggleMic,
+          // 模型选择：麦克风旁的调音图标，点击居中弹窗选择当前模型
+          modelName: ref.watch(configProvider).activeConfig?.chatModel?.name,
+          onPickModel: _pickModel,
         ),
         const SizedBox(height: 72), // 给磨砂底导航留出空间
       ],
@@ -910,12 +970,6 @@ class _ComposerStatusBar extends ConsumerWidget {
     final permission = ref.watch(agentPermissionProvider);
     final hasModel = active?.chatModel != null;
 
-    // 模型选择器列出**同一提供商**下的聊天模型。
-    // 换模型不应要求用户去改「当前提供商」，所以这里不再按提供商过滤，
-    // 而是在当前提供商的模型列表里选。
-    final chatModels =
-        active?.chatModels ?? const <ProviderModel>[];
-
     final textColor = hasModel
         ? onSurface(context, 0.6)
         : onSurface(context, 0.28);
@@ -961,35 +1015,11 @@ class _ComposerStatusBar extends ConsumerWidget {
             enabled: true,
             onTap: () => _pickPermission(context, ref),
           ),
-          const SizedBox(width: 8),
+          const Spacer(),
 
-          // 模型选择
-          //
-          // 上一行的 `active!` 不只是取值：Dart 的 flow analysis 把它当作
-          // **类型提升点**，把 final 局部变量 `active` 在后续（含闭包内）
-          // 提升为非空。所以下面闭包里可以直接写 `active`；
-          // 再补一个 `!` 反而会被报 unnecessary_non_null_assertion。
-          if (hasModel)
-            Expanded(
-              child: _ModelPicker(
-                models: chatModels,
-                activeName: active!.chatModel!.name,
-                onChanged: (name) => ref
-                    .read(configProvider.notifier)
-                    .upsert(active.copyWith(defaultChatModel: name)),
-              ),
-            )
-          else
-            Expanded(
-              child: Text(
-                '请先在「我的 → 模型设置」配置模型服务',
-                style: TextStyle(fontSize: 12, color: textColor),
-                overflow: TextOverflow.ellipsis,
-              ),
-            ),
-          const SizedBox(width: 8),
-
-          // 上下文长度（挂在模型上，所以读当前聊天模型的值）
+          // 上下文长度（挂在模型上，所以读当前聊天模型的值）。
+          // 模型选择已移到输入框内（麦克风旁的调音图标）——
+          // 状态条此前塞了五个元素，窄屏上模型选择被挤出可视区。
           if (hasModel)
             Text(
               (active!.chatModel!.contextWindow) <= 0
@@ -1009,10 +1039,13 @@ class _ComposerStatusBar extends ConsumerWidget {
     // 当前选中项：关闭时用空串表示「快速」。
     final current =
         ref.read(thinkingProvider) ? ref.read(reasoningEffortProvider) : '';
-    final sel = await showModalBottomSheet<String>(
+    final sel = await showGlassDialog<String>(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        title: const Text('思考强度'),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             for (final opt in const [
@@ -1030,7 +1063,6 @@ class _ComposerStatusBar extends ConsumerWidget {
                     : null,
                 onTap: () => Navigator.pop(ctx, opt.$1),
               ),
-            const SizedBox(height: 8),
           ],
         ),
       ),
@@ -1048,10 +1080,13 @@ class _ComposerStatusBar extends ConsumerWidget {
   Future<void> _pickPermission(BuildContext context, WidgetRef ref) async {
     final prefs = ref.read(sharedPreferencesProvider);
     final current = ref.read(agentPermissionProvider);
-    final sel = await showModalBottomSheet<AgentPermission>(
+    final sel = await showGlassDialog<AgentPermission>(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        title: const Text('权限模式'),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             for (final p in AgentPermission.values)
@@ -1065,7 +1100,6 @@ class _ComposerStatusBar extends ConsumerWidget {
                     : null,
                 onTap: () => Navigator.pop(ctx, p),
               ),
-            const SizedBox(height: 8),
           ],
         ),
       ),
@@ -1134,52 +1168,6 @@ class _MiniChip extends StatelessWidget {
 }
 
 /// 模型选择下拉。仅列出聊天模型。
-class _ModelPicker extends StatelessWidget {
-  const _ModelPicker({
-    required this.models,
-    required this.activeName,
-    required this.onChanged,
-  });
-
-  final List<ProviderModel> models;
-  final String activeName;
-  final ValueChanged<String> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    if (models.length <= 1) {
-      final only = models.isEmpty ? null : models.first;
-      return Text(
-        only?.name ?? '',
-        style: TextStyle(fontSize: 12, color: onSurface(context, 0.6)),
-        overflow: TextOverflow.ellipsis,
-      );
-    }
-    return DropdownButtonHideUnderline(
-      child: DropdownButton<String>(
-        // 选中的模型若已被删除，退回列表第一个，避免 Dropdown 断言失败
-        value: models.any((m) => m.name == activeName)
-            ? activeName
-            : models.first.name,
-        isDense: true,
-        isExpanded: true,
-        icon: Icon(Icons.expand_more, size: 16, color: onSurface(context, 0.4)),
-        style: TextStyle(fontSize: 12, color: onSurface(context, 0.7)),
-        items: [
-          for (final m in models)
-            DropdownMenuItem(
-              value: m.name,
-              child: Text(m.name, overflow: TextOverflow.ellipsis),
-            ),
-        ],
-        onChanged: (v) {
-          if (v != null) onChanged(v);
-        },
-      ),
-    );
-  }
-}
-
 class _InputBar extends StatelessWidget {
   const _InputBar({
     required this.controller,
@@ -1191,6 +1179,8 @@ class _InputBar extends StatelessWidget {
     required this.onStop,
     required this.onAddImage,
     required this.onMic,
+    required this.onPickModel,
+    this.modelName,
   });
 
   final TextEditingController controller;
@@ -1202,6 +1192,10 @@ class _InputBar extends StatelessWidget {
   final VoidCallback onStop;
   final VoidCallback onAddImage;
   final VoidCallback onMic;
+
+  /// 当前聊天模型名（null = 未配置，图标置灰）。
+  final String? modelName;
+  final VoidCallback onPickModel;
 
   @override
   Widget build(BuildContext context) {
@@ -1291,6 +1285,26 @@ class _InputBar extends StatelessWidget {
                   onPressed: onMic,
                 ),
               ),
+            // 模型选择：麦克风旁的调音图标。
+            // 之前在输入栏上方的状态条里做下拉，但状态条塞了思考/朗读/
+            // 权限/上下文后，窄屏上模型被挤出可视区；移到这里用居中
+            // 弹窗选择（tooltip 显示当前模型名）。
+            SizedBox(
+              width: 40,
+              height: 40,
+              child: IconButton(
+                padding: EdgeInsets.zero,
+                tooltip: modelName == null ? '未配置模型' : '当前模型：$modelName',
+                icon: Icon(
+                  Icons.tune_rounded,
+                  size: 22,
+                  color: modelName == null
+                      ? onSurface(context, 0.2)
+                      : onSurface(context, 0.35),
+                ),
+                onPressed: modelName == null ? null : onPickModel,
+              ),
+            ),
           ],
         ),
       ),

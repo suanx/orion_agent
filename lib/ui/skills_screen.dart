@@ -1,6 +1,7 @@
 import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'glass.dart';
 import 'status_bar_area.dart';
 
 import '../providers/providers.dart';
@@ -329,7 +330,7 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
   Future<void> _addSkill(BuildContext context) async {
     final nameCtrl = TextEditingController();
     final tmplCtrl = TextEditingController();
-    final saved = await showDialog<bool>(
+    final saved = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('新建快捷指令'),
@@ -379,7 +380,7 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
   }
 
   Future<void> _deleteSkill(BuildContext context, SkillItem skill) async {
-    final ok = await showDialog<bool>(
+    final ok = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('删除「${skill.name}」？'),

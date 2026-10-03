@@ -32,47 +32,43 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
     final titleCtrl = TextEditingController();
     final textCtrl = TextEditingController();
 
-    final saved = await showModalBottomSheet<bool>(
+    final saved = await showGlassDialog<bool>(
       context: context,
-      isScrollControlled: true,
-      builder: (ctx) => Padding(
-        padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
-          top: 16,
-          bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('导入文档', style: Theme.of(ctx).textTheme.titleLarge),
-            const SizedBox(height: 4),
-            Text('粘贴文档或笔记文本，导入后会自动分块并向量化。',
-                style: TextStyle(
-                    fontSize: 13, color: onSurface(context, 0.45))),
-            const SizedBox(height: 12),
-            TextField(
-              controller: titleCtrl,
-              decoration: const InputDecoration(
-                  labelText: '标题（如：产品说明书）'),
-            ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: textCtrl,
-              minLines: 6,
-              maxLines: 12,
-              decoration: const InputDecoration(
-                hintText: '在此粘贴文档全文…',
-                border: OutlineInputBorder(),
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        title: const Text('导入文档'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text('粘贴文档或笔记文本，导入后会自动分块并向量化。',
+                  style: TextStyle(
+                      fontSize: 13, color: onSurface(context, 0.45))),
+              const SizedBox(height: 12),
+              TextField(
+                controller: titleCtrl,
+                decoration: const InputDecoration(
+                    labelText: '标题（如：产品说明书）'),
               ),
-            ),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
-              child: const Text('导入并向量化'),
-            ),
-          ],
+              const SizedBox(height: 8),
+              TextField(
+                controller: textCtrl,
+                minLines: 6,
+                maxLines: 12,
+                decoration: const InputDecoration(
+                  hintText: '在此粘贴文档全文…',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('导入并向量化'),
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -2,6 +2,7 @@ import '../theme.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'glass.dart';
 import 'status_bar_area.dart';
 
 import '../providers/providers.dart';
@@ -42,7 +43,7 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
   }
 
   Future<void> _openEditor({TaskRow? existing, (String, String, String)? preset}) async {
-    final saved = await showDialog<bool>(
+    final saved = await showGlassDialog<bool>(
       context: context,
       builder: (_) => _TaskEditor(existing: existing, preset: preset),
     );
@@ -55,7 +56,7 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
   }
 
   Future<void> _delete(TaskRow t) async {
-    final ok = await showDialog<bool>(
+    final ok = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('删除「${t.name}」？'),

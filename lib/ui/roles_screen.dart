@@ -1,4 +1,5 @@
 import '../theme.dart';
+import 'glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -97,7 +98,7 @@ class RolesScreen extends ConsumerWidget {
       BuildContext context, WidgetRef ref, AgentRole? existing) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final promptCtrl = TextEditingController(text: existing?.prompt ?? '');
-    final saved = await showDialog<bool>(
+    final saved = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(existing == null ? '新建角色' : '编辑角色'),

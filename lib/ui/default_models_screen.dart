@@ -141,17 +141,17 @@ class DefaultModelsScreen extends ConsumerWidget {
       return;
     }
 
-    await showModalBottomSheet<void>(
+    await showGlassDialog<void>(
       context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => _ModelPickerSheet(
-        title: item.label,
-        prefsKey: item.keyName,
-        models: models,
-        providerName: config?.displayName ?? '',
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        child: _ModelPickerSheet(
+          title: item.label,
+          prefsKey: item.keyName,
+          models: models,
+          providerName: config?.displayName ?? '',
+        ),
       ),
     );
   }
@@ -224,22 +224,14 @@ class _ModelPickerSheetState extends ConsumerState<_ModelPickerSheet> {
             .where((m) => m.name.toLowerCase().contains(keyword))
             .toList();
 
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(0, 8, 0, 0),
+    // 居中玻璃弹窗形态：无底部拖柄，整体限高防止列表过长顶出屏幕
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 4, 0, 4),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxHeight: 460, maxWidth: 340),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 拖柄
-            Container(
-              width: 36,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
-                color: onSurface(context, 0.2),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
             // 标题 + 重置
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 10),

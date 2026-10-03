@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/providers.dart';
 import '../services/token_stats_service.dart';
 import '../theme.dart';
+import 'glass.dart';
 
 /// Token 统计页。
 ///
@@ -43,7 +44,7 @@ class _TokenStatsScreenState extends ConsumerState<TokenStatsScreen> {
   }
 
   Future<void> _confirmClear() async {
-    final ok = await showDialog<bool>(
+    final ok = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('清空统计'),

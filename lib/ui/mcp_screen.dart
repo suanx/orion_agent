@@ -46,7 +46,7 @@ class _McpScreenState extends ConsumerState<McpScreen> {
   Future<void> _addServer() async {
     final nameCtrl = TextEditingController();
     final urlCtrl = TextEditingController(text: 'http://');
-    final saved = await showDialog<bool>(
+    final saved = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('添加 MCP 服务器'),

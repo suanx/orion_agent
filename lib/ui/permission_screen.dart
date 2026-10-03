@@ -133,6 +133,58 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen>
                 ),
                 const SizedBox(height: 20),
 
+                // ---------------- 录音与拍摄 ----------------
+                _sectionLabel(context, '录音与拍摄'),
+                Text('语音输入与拍照取图的运行时权限，点击直接弹出系统授权。',
+                    style: TextStyle(
+                        fontSize: 12, height: 1.5, color: onSurface(context, 0.45))),
+                const SizedBox(height: 8),
+                _card(
+                  context,
+                  child: Column(
+                    children: [
+                      _PermissionRow(
+                        icon: Icons.mic_none_rounded,
+                        title: '麦克风权限',
+                        subtitle: '按住输入框麦克风进行语音输入时需要，'
+                            '点击弹出系统授权对话框。',
+                        granted: s.mic,
+                        actionLabel: s.mic ? null : '去授权',
+                        onOpen: s.mic
+                            ? null
+                            : () async {
+                                await ref
+                                    .read(permissionServiceProvider)
+                                    .requestRuntime('mic');
+                                await Future<void>.delayed(
+                                    const Duration(milliseconds: 600));
+                                await _reload();
+                              },
+                      ),
+                      Divider(height: 1, color: onSurface(context, 0.06)),
+                      _PermissionRow(
+                        icon: Icons.photo_camera_outlined,
+                        title: '相机权限',
+                        subtitle: '对话中拍照添加图片时需要，'
+                            '点击弹出系统授权对话框。',
+                        granted: s.camera,
+                        actionLabel: s.camera ? null : '去授权',
+                        onOpen: s.camera
+                            ? null
+                            : () async {
+                                await ref
+                                    .read(permissionServiceProvider)
+                                    .requestRuntime('camera');
+                                await Future<void>.delayed(
+                                    const Duration(milliseconds: 600));
+                                await _reload();
+                              },
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 20),
+
                 // ---------------- 核心权限 ----------------
                 _sectionLabel(context, '核心权限'),
                 Text('这些授权用于操作界面、悬浮显示、后台运行和识别已安装应用。',

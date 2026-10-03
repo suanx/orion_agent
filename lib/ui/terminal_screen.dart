@@ -1,4 +1,5 @@
 import '../theme.dart';
+import 'glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -586,7 +587,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     var enabled = existing?.enabled ?? true;
     var distro = existing?.distro ?? _distro;
 
-    final saved = await showDialog<bool>(
+    final saved = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialog) => AlertDialog(

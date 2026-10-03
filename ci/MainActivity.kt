@@ -39,6 +39,26 @@ class MainActivity : FlutterActivity() {
                                 packageManager.canRequestPackageInstalls()
                         } catch (_: Exception) { false }
                     )
+                    // 运行时权限（相机/麦克风等）：直接弹系统授权对话框。
+                    // 结果由系统回调 activity，Dart 侧在 resumed 时刷新状态。
+                    "requestRuntimePermission" -> {
+                        val kind = call.argument<String>("kind") ?: ""
+                        val perms = when (kind) {
+                            "camera" -> arrayOf(
+                                android.Manifest.permission.CAMERA
+                            )
+                            "mic" -> arrayOf(
+                                android.Manifest.permission.RECORD_AUDIO
+                            )
+                            else -> null
+                        }
+                        if (perms != null) {
+                            androidx.core.app.ActivityCompat.requestPermissions(
+                                this, perms, 7001
+                            )
+                        }
+                        result.success(null)
+                    }
                     "openPermission" -> {
                         openPermission(call.argument<String>("kind") ?: "")
                         result.success(null)
@@ -62,6 +82,16 @@ class MainActivity : FlutterActivity() {
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
 
         out["notification"] = nm?.areNotificationsEnabled() ?: false
+        out["camera"] = try {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.CAMERA
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } catch (_: Exception) { false }
+        out["mic"] = try {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.RECORD_AUDIO
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        } catch (_: Exception) { false }
         out["overlay"] = try {
             Settings.canDrawOverlays(this)
         } catch (_: Exception) { false }

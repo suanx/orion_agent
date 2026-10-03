@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../theme.dart';
+import 'glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -592,10 +593,13 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
   }
 
   Future<void> _pickType(BuildContext context, LlmConfig config) async {
-    final picked = await showModalBottomSheet<ProviderType>(
+    final picked = await showGlassDialog<ProviderType>(
       context: context,
-      builder: (ctx) => SafeArea(
-        child: Column(
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        title: const Text('提供商类型'),
+        content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             for (final t in ProviderType.values)
@@ -617,7 +621,7 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
 
   Future<void> _editProxy(BuildContext context, LlmConfig config) async {
     final ctrl = TextEditingController(text: config.proxy);
-    final ok = await showDialog<bool>(
+    final ok = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('网络代理'),
@@ -665,7 +669,7 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
 
   Future<void> _testConnection(BuildContext context, LlmConfig config) async {
     final messenger = ScaffoldMessenger.of(context);
-    showDialog<void>(
+    showGlassDialog<void>(
       context: context,
       barrierDismissible: false,
       builder: (_) => const Center(child: CircularProgressIndicator()),
@@ -682,7 +686,7 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
     }
     if (!context.mounted) return;
     Navigator.of(context).pop(); // 关掉 loading
-    await showDialog<void>(
+    await showGlassDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('测试连接'),
@@ -761,7 +765,7 @@ class _KeyList extends StatelessWidget {
 
   Future<void> _add(BuildContext context) async {
     final ctrl = TextEditingController();
-    final v = await showDialog<String>(
+    final v = await showGlassDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('添加备用 Key'),
@@ -892,7 +896,7 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
   }
 
   Future<void> _delete(ProviderModel m) async {
-    final ok = await showDialog<bool>(
+    final ok = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('删除模型'),
@@ -938,7 +942,7 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
 
     // 已存在的模型默认不勾选，避免重复导入
     final existing = {for (final m in config.models) m.name};
-    final picked = await showDialog<Set<String>>(
+    final picked = await showGlassDialog<Set<String>>(
       context: context,
       builder: (ctx) => _FetchResultDialog(
         names: names,
@@ -978,12 +982,15 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
   static Future<void> _addModel(
       BuildContext context, WidgetRef ref, LlmConfig config,
       {ProviderModel? existing}) {
-    return showModalBottomSheet<void>(
+    return showGlassDialog<void>(
       context: context,
-      isScrollControlled: true,
-      builder: (_) => _ModelEditorSheet(
-        configId: config.id,
-        existing: existing,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: EdgeInsets.zero,
+        child: _ModelEditorSheet(
+          configId: config.id,
+          existing: existing,
+        ),
       ),
     );
   }

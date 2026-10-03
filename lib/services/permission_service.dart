@@ -8,6 +8,8 @@ import 'package:flutter/services.dart';
 class PermissionStatus {
   const PermissionStatus({
     this.notification = false,
+    this.camera = false,
+    this.mic = false,
     this.accessibility = false,
     this.battery = false,
     this.overlay = false,
@@ -16,6 +18,10 @@ class PermissionStatus {
   });
 
   final bool notification;
+
+  /// 相机 / 麦克风：语音输入与拍照取图用，运行时弹系统对话框授权。
+  final bool camera;
+  final bool mic;
   final bool accessibility;
   final bool battery;
   final bool overlay;
@@ -26,9 +32,11 @@ class PermissionStatus {
   int get coreReady =>
       [accessibility, battery, overlay, appsList].where((e) => e).length;
 
-  factory PermissionStatus.fromMap(Map<Object?, Object?> map) =>
+      factory PermissionStatus.fromMap(Map<Object?, Object?> map) =>
       PermissionStatus(
         notification: map['notification'] == true,
+        camera: map['camera'] == true,
+        mic: map['mic'] == true,
         accessibility: map['accessibility'] == true,
         battery: map['battery'] == true,
         overlay: map['overlay'] == true,
@@ -69,5 +77,13 @@ class PermissionService {
     } catch (_) {
       return false;
     }
+  }
+
+  /// 请求运行时权限（camera / mic）：直接弹系统授权对话框。
+  /// 结果不从这里返回——对话框关闭触发 app resumed，页面自行刷新。
+  Future<void> requestRuntime(String kind) async {
+    try {
+      await _channel.invokeMethod('requestRuntimePermission', {'kind': kind});
+    } catch (_) {}
   }
 }

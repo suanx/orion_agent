@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import '../theme.dart';
+import 'glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open_filex/open_filex.dart';
@@ -68,7 +69,7 @@ class _StorageSettingsScreenState
     required String message,
     required Future<int> Function() action,
   }) async {
-    final ok = await showDialog<bool>(
+    final ok = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(title),
@@ -360,7 +361,7 @@ class _WorkspaceDirCardState extends State<_WorkspaceDirCard> {
     } catch (_) {}
 
     if (!mounted) return;
-    final sel = await showDialog<String>(
+    final sel = await showGlassDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('选择工作区目录'),
