@@ -758,7 +758,10 @@ Future<Socket> _edgeHandshake(
 /// 服务端直接 403。属于低概率但必现于固定时段的签名错位。
 String edgeSecMsGec({DateTime? now}) {
   final t = (now ?? DateTime.now()).toUtc();
-  var sec = (t.millisecondsSinceEpoch / 1000).floor() + _winEpochSeconds;
+  // ⚠️ 本函数在 VoiceService 类【外部】，访问其私有静态常量必须带类名前缀，
+  // 裸写 _winEpochSeconds 是 undefined_identifier。
+  var sec =
+      (t.millisecondsSinceEpoch / 1000).floor() + VoiceService._winEpochSeconds;
   sec -= sec % 300;
   final ticks = sec * 10000000; // 64 位 int 容得下（约 7.3e16）
   final raw = '$ticks${VoiceService.trustedClientToken}';

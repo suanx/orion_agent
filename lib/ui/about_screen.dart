@@ -49,7 +49,6 @@ class _AboutScreenState extends State<AboutScreen> {
       if (tag.isEmpty) throw Exception('release 缺少 tag_name');
       final changelog = (data['body'] as String? ?? '').trim();
       String? apkUrl;
-      int? apkSize;
       final assets = data['assets'];
       if (assets is List) {
         for (final a in assets) {
@@ -58,7 +57,6 @@ class _AboutScreenState extends State<AboutScreen> {
           final name = m['name'] as String? ?? '';
           if (name.toLowerCase().endsWith('.apk')) {
             apkUrl = m['browser_download_url'] as String?;
-            apkSize = (m['size'] as num?)?.toInt();
             break;
           }
         }
@@ -256,7 +254,9 @@ class _AboutScreenState extends State<AboutScreen> {
         leading: const Icon(Icons.system_update_outlined, size: 20),
         title: const Text('检查更新',
             style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-        subtitle: _updateSubtitle(context),
+        // _updateSubtitle 返回 String?，ListTile.subtitle 要 Widget?，
+        // 必须包一层 Text（CI run#18 的 error 之一）
+        subtitle: _subtitleText(context),
         trailing: _updateTrailing(context),
         onTap:
             (_state == 'checking' || _state == 'downloading')
@@ -290,6 +290,14 @@ class _AboutScreenState extends State<AboutScreen> {
       ));
     }
     return tiles;
+  }
+
+  /// 取检查更新状态对应的副标题文本，包成 Text（null 则不显示）。
+  Widget? _subtitleText(BuildContext context) {
+    final s = _updateSubtitle(context);
+    if (s == null) return null;
+    return Text(s,
+        style: TextStyle(fontSize: 12, color: onSurface(context, 0.4)));
   }
 
   String? _updateSubtitle(BuildContext context) {
