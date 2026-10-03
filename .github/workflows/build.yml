@@ -425,10 +425,14 @@ jobs:
           test -s "$APK" || { echo "APK 不存在"; exit 1; }
           test -s RELEASE_NOTES.md || { echo "RELEASE_NOTES.md 缺失"; exit 1; }
           echo "发布 $TAG（versionCode=$GITHUB_RUN_NUMBER）"
+          # 先重命名再上传：gh 的 filepath#label 重命名在部分版本不生效
+          cp "$APK" "orion-agent-v$VN.apk"
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APK#orion-agent-v$VN.apk" --clobber -R "$GITHUB_REPOSITORY"
+            gh release upload "$TAG" "orion-agent-v$VN.apk" --clobber -R "$GITHUB_REPOSITORY"
+            # 清理历史遗留的未重命名资产
+            gh release delete-asset "$TAG" app-release.apk -y -R "$GITHUB_REPOSITORY" || true
           else
-            gh release create "$TAG" "$APK#orion-agent-v$VN.apk" \
+            gh release create "$TAG" "orion-agent-v$VN.apk" \
               -R "$GITHUB_REPOSITORY" \
               --title "Orion Agent v$VN" \
               --notes-file RELEASE_NOTES.md
