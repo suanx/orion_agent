@@ -143,6 +143,22 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     // 外层 finally：任何未预料的异常都必须复位 _busy，
     // 否则界面永久停在「检测中…」转圈，再也点不动。
     try {
+      // 自愈：旧版本安装的环境可能残留「绝对路径符号链接」
+      // （Alpine tar 里 /bin/sh → /bin/busybox 这类，平铺解压后指向
+      // 宿主文件系统，表现为 /bin/sh 等全部 not found）。
+      // 修复成本极低（几百次 lstat），检测前统一跑一遍，老环境无需
+      // 重新安装即可恢复。
+      try {
+        final rootfs = await _terminal.rootfsDir(_distro);
+        if (Directory(rootfs).existsSync()) {
+          final fixed = _terminal.repairAbsoluteSymlinks(rootfs);
+          if (fixed > 0) {
+            _appendLog('已自动修复 $fixed 个符号链接'
+                '（绝对路径 → 相对路径，旧版安装残留）');
+          }
+        }
+      } catch (_) {}
+
       // 先确认环境本身能跑起来。rootfs 损坏 / proot 起不来时，
       // 逐个探测只会得到一屏 lost，看不出真实原因。
       try {

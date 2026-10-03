@@ -388,10 +388,78 @@ class TerminalService {
     // rootfs 内二进制需要 exec 位；dart:io 无 chmod，借用系统 toybox
     await Process.run('/system/bin/chmod', ['-R', '755', rootfs]);
 
+    report('修正符号链接…');
+    // Alpine/Debian 的 tar 里大量符号链接是**绝对目标**
+    // （如 /bin/sh → /bin/busybox，alpine-minirootfs-3.22 有 306 个）。
+    // 平铺解压后它们指向宿主文件系统，宿主没有 /bin/busybox，
+    // 于是 File.existsSync 报缺失、proot stat 报 ENOENT——
+    // 表现为「环境装好了但所有命令 not found」。
+    final fixedLinks = repairAbsoluteSymlinks(rootfs);
+    if (fixedLinks > 0) report('  已将 $fixedLinks 个绝对路径链接转为相对');
+
     report('配置 DNS 与镜像…');
     await _postConfigure(d, rootfs);
 
     report('完成');
+  }
+
+  /// 修复 rootfs 内「绝对路径符号链接」：指向 rootfs 内部的绝对目标
+  /// 改写为相对路径（bin/sh → busybox），宿主与 guest 解析都成立。
+  ///
+  /// 实测 alpine-minirootfs-3.22 的 306 个绝对链接全部指向 rootfs
+  /// 内部；指向外部（如 /proc）的链接不在 rootfs 内，检测不到即跳过、
+  /// 保留原样。返回修复的链接数（0 = 本来就健康）。
+  ///
+  /// 同步实现（listSync + lstat 总共几百次，毫秒级）；
+  /// 单个链接失败静默跳过，不中断整体修复。
+  int repairAbsoluteSymlinks(String rootfs) {
+    var repaired = 0;
+    final root = Directory(rootfs);
+    if (!root.existsSync()) return 0;
+    late final List<FileSystemEntity> all;
+    try {
+      all = root.listSync(recursive: true, followLinks: false);
+    } catch (_) {
+      return 0;
+    }
+    for (final e in all) {
+      if (e is! Link) continue;
+      String target;
+      try {
+        target = e.targetSync();
+      } catch (_) {
+        continue;
+      }
+      if (!target.startsWith('/')) continue;
+      // 目标必须存在于 rootfs 内（typeSync 不跟随链接，避免误判
+      // 尚未修复的链式链接）
+      final innerType =
+          FileSystemEntity.typeSync('$rootfs$target', followLinks: false);
+      if (innerType == FileSystemEntityType.notFound) continue;
+      // 链接在 rootfs 内的目录（parent.path 以 rootfs 为前缀）
+      final innerParent = e.parent.path.substring(rootfs.length);
+      final rel = _relativePosixPath(innerParent, target);
+      if (rel == target) continue; // 已在根目录且无需改写（防御）
+      try {
+        e.deleteSync();
+        Link(e.path).createSync(rel);
+        repaired++;
+      } catch (_) {
+        // 个别链接可能被占用/无权限，跳过即可
+      }
+    }
+    return repaired;
+  }
+
+  /// POSIX 相对路径：fromDir（rootfs 内目录，如 '/bin'）到
+  /// toAbs（绝对路径，如 '/bin/busybox'）→ 'busybox'。
+  static String _relativePosixPath(String fromDir, String toAbs) {
+    final from = fromDir.split('/').where((s) => s.isNotEmpty).toList();
+    final to = toAbs.split('/').where((s) => s.isNotEmpty).toList();
+    var i = 0;
+    while (i < from.length && i < to.length && from[i] == to[i]) i++;
+    final ups = List<String>.filled(from.length - i, '..');
+    return ups.followedBy(to.sublist(i)).join('/');
   }
 
   // ---------------- 国内镜像拉取（Debian） ----------------
