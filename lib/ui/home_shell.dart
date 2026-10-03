@@ -96,30 +96,52 @@ class _HomeShellState extends ConsumerState<HomeShell> {
 
   @override
   Widget build(BuildContext context) {
+    // 键盘弹起时把整棵子树顶上去。
+    //
+    // 之前用 Scaffold 默认的 resizeToAvoidBottomInsets，键盘弹起后
+    // Scaffold 会给body 加一段 bottom padding 把内容顶高，但
+    // bottomNavigationBar 是自定义的、不参与这套避让，于是
+    // 「被顶高的 body」与「原地不动的底栏」之间留下一条空白带
+    // —— 截图里键盘上方那块什么都没有的灰条就是它。
+    //
+    // 改成自己处理：MediaQuery.viewInsets.bottom 就是键盘高度，
+    // 用它整体位移，键盘与内容永远贴合，不留缝。
+    final kb = MediaQuery.viewInsetsOf(context).bottom;
+
     return Scaffold(
       backgroundColor: surface(context),
       drawer: const SessionDrawer(),
       extendBody: true,
-      body: IndexedStack(
-        index: _tab,
-        children: [
-          const ChatScreen(),
-          const TasksScreen(),
-          SkillsScreen(onUseSkill: (text) {
-            if (text.isNotEmpty) {
-              ref.read(prefillProvider.notifier).state = text;
-            }
-            _goChat();
-          }),
-          const ProfileScreen(),
-        ],
+      // 自己避让，关掉 Scaffold 内置的（否则会与位移叠加成双倍间距）
+      resizeToAvoidBottomInsets: false,
+      body: Padding(
+        padding: EdgeInsets.only(bottom: kb),
+        child: IndexedStack(
+          index: _tab,
+          children: [
+            const ChatScreen(),
+            const TasksScreen(),
+            SkillsScreen(onUseSkill: (text) {
+              if (text.isNotEmpty) {
+                ref.read(prefillProvider.notifier).state = text;
+              }
+              _goChat();
+            }),
+            const ProfileScreen(),
+          ],
+        ),
       ),
-      bottomNavigationBar: _FrostedNavBar(
-        index: _tab,
-        height: _navHeight,
-        // 与 HomeTab 常量保持一致：HomeShell 的 children 顺序即 Tab 顺序，
-        // 两处都用常量，任一处调整顺序都会立刻暴露不一致。
-        onTap: (i) => setState(() => _tab = i),
+      bottomNavigationBar: Padding(
+        // 键盘弹起时把底栏一起抬到键盘上方。
+        // 用 AnimatedPadding 让它跟随动画过渡，而不是瞬间跳。
+        padding: EdgeInsets.only(bottom: kb),
+        child: _FrostedNavBar(
+          index: _tab,
+          height: _navHeight,
+          // 与 HomeTab 常量保持一致：HomeShell 的 children 顺序即 Tab 顺序，
+          // 两处都用常量，任一处调整顺序都会立刻暴露不一致。
+          onTap: (i) => setState(() => _tab = i),
+        ),
       ),
     );
   }

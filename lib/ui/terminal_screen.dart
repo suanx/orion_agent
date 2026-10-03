@@ -9,19 +9,31 @@ class _ToolCheck {
   final String name;
   final String description;
   final String probe;
-  const _ToolCheck(this.name, this.description, this.probe);
+
+  /// 该组件对应的主二进制名。用于区分「没装」与「装了但探测命令失败」。
+  final String binary;
+  const _ToolCheck(this.name, this.description, this.probe,
+      {required this.binary});
 }
 
+/// 探测命令一律**不带管道**（`| head`）。
+///
+/// 之前用 `'<probe> 2>&1 | head -1'`：如果guest 里没有 `head`
+/// （Alpine 精简 rootfs 在极端情况下会缺），整条管道直接失败，
+/// exitCode != 0 → 所有组件都显示 lost，而实际原因是「探测方式有问题」
+/// 而不是「组件没装」。改成不依赖外部工具，再用 `command -v` 二次确认。
 const _toolChecks = <_ToolCheck>[
-  _ToolCheck('nodejs', 'Node.js 运行时', 'node --version'),
-  _ToolCheck('npm', 'Node.js 包管理器', 'npm --version'),
-  _ToolCheck('git', 'Git 版本控制', 'git --version'),
-  _ToolCheck('python', 'Python 解释器', 'python3 --version'),
-  _ToolCheck('uv', 'Python 项目与包工具', 'uv --version'),
-  _ToolCheck('pip', 'Python 包安装器', 'pip3 --version'),
-  _ToolCheck('opencode', 'OpenCode CLI（内置 ACP 支持）', 'opencode --version'),
-  _ToolCheck('ssh', 'SSH 客户端', 'ssh -V'),
-  _ToolCheck('sshd', 'OpenSSH 服务器', 'test -x /usr/sbin/sshd && echo ready'),
+  _ToolCheck('nodejs', 'Node.js 运行时', 'node --version', binary: 'node'),
+  _ToolCheck('npm', 'Node.js 包管理器', 'npm --version', binary: 'npm'),
+  _ToolCheck('git', 'Git 版本控制', 'git --version', binary: 'git'),
+  _ToolCheck('python', 'Python 解释器', 'python3 --version', binary: 'python3'),
+  _ToolCheck('uv', 'Python 项目与包工具', 'uv --version', binary: 'uv'),
+  _ToolCheck('pip', 'Python 包安装器', 'pip3 --version', binary: 'pip3'),
+  _ToolCheck('opencode', 'OpenCode CLI（内置 ACP 支持）', 'opencode --version',
+      binary: 'opencode'),
+  // ssh -V 把版本写进 stderr，退出码仍为 0。
+  _ToolCheck('ssh', 'SSH 客户端', 'ssh -V', binary: 'ssh'),
+  _ToolCheck('sshd', 'OpenSSH 服务器', 'sshd -V', binary: 'sshd'),
 ];
 
 /// 终端环境页：Alpine/Debian 双发行版，安装、组件检测、命令控制台。
@@ -36,6 +48,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   bool _busy = false;
   bool _installed = false;
   bool _checked = false;
+
+  /// 环境本身无法启动（rootfs 损坏 / proot 起不来）。
+  /// 与「环境正常但组件没装」区分开，避免用户白费力气反复安装。
+  bool _envBroken = false;
   final _log = StringBuffer();
   final _checks = <String, (bool, String?)>{}; // name -> (ready, version)
   final _cmdCtrl = TextEditingController();
@@ -93,7 +109,17 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       await _terminal.install(_distro, onProgress: _appendLog);
       await _refreshInstalled();
     } catch (e) {
-      _appendLog('安装失败：$e');
+      // 终端依赖 proot 才能跑。proot 起不来时 rootfs 下载完成但环境不可用，
+      // 这里把proot 相关的原因单独拎出来，否则用户只会看到
+      // 「安装失败」而不知道是运行库的问题。
+      _appendLog('安装失败：${_clip(e.toString())}');
+      final msg = e.toString();
+      if (msg.contains('proot') || msg.contains('运行库')) {
+        _appendLog('原因：终端运行库（proot）不可用。');
+        _appendLog('当前安装包可能不是 arm64，或构建时未注入 proot。');
+      } else if (msg.contains('No such file')) {
+        _appendLog('原因：缺少可执行文件，可能是 proot 未正确打包。');
+      }
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -106,32 +132,112 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   }
 
   Future<void> _checkTools() async {
+    // 安装过程长达20 分钟，用户中途退出页面时这里会崩
+    // （setState after dispose）。
+    if (!mounted) return;
     setState(() => _busy = true);
+    _envBroken = false;
+    _checks.clear();
     _appendLog('检测 ${_distro.name} 环境组件…');
+
+    // 先确认环境本身能跑起来。rootfs 损坏 / proot 起不来时，
+    // 逐个探测只会得到一屏 lost，看不出真实原因。
+    try {
+      final probe = await _terminal.runOn(
+          _distro, 'echo __ok__ && uname -m');
+      final out = probe.output.trim();
+      if (!out.contains('__ok__')) {
+        _envBroken = true;
+        _appendLog('环境无法运行：echo 没有返回预期结果。');
+        _appendLog('exitCode=${probe.exitCode} 输出=${_clip(out)}');
+        _appendLog('请尝试「删除环境」后重新安装。');
+        _checked = true;
+        if (mounted) setState(() => _busy = false);
+        return;
+      }
+      _appendLog('环境可用（${out.split('\n').last.trim()}）');
+    } catch (e) {
+      _envBroken = true;
+      _appendLog('环境无法启动：${_clip(e.toString())}');
+      _appendLog('请尝试「删除环境」后重新安装。');
+      _checked = true;
+      if (mounted) setState(() => _busy = false);
+      return;
+    }
+
     for (final t in _toolChecks) {
       try {
-        final r = await _terminal.runOn(_distro, '${t.probe} 2>&1 | head -1');
-        _checks[t.name] = (r.ok && r.output.trim().isNotEmpty, r.versionLine);
-      } catch (_) {
+        // 不用管道。command -v 判断二进制是否存在，
+        // 存在时再跑probe 取版本号。
+        final r = await _terminal.runOn(_distro,
+            'if command -v ${t.binary} >/dev/null 2>&1; '
+            'then ${t.probe} 2>&1; '
+            'else echo __missing__; fi');
+        final text = r.output.trim();
+        if (text.contains('__missing__') || text.isEmpty) {
+          _checks[t.name] = (false, null);
+        } else {
+          _checks[t.name] = (true, _firstLine(text));
+        }
+      } catch (e) {
+        // 保留原因：某个组件探测异常不该中断整轮检测
         _checks[t.name] = (false, null);
+        _appendLog('${t.name} 探测异常：${_clip(e.toString())}');
       }
     }
     _checked = true;
+    final okCount = _checks.values.where((v) => v.$1).length;
+    _appendLog('检测完成：$okCount/${_checks.length} 个组件可用');
     if (mounted) setState(() => _busy = false);
   }
+
+  /// 取首个非空行并限长，避免整段输出撑爆日志区。
+  static String _firstLine(String s) {
+    for (final line in s.split('\n')) {
+      final l = line.trim();
+      if (l.isNotEmpty) return l.length > 60 ? '${l.substring(0, 60)}…' : l;
+    }
+    return '';
+  }
+
+  static String _clip(String s) =>
+      s.length > 120 ? '${s.substring(0, 120)}…' : s;
 
   Future<void> _installMissing() async {
     setState(() => _busy = true);
     final cmd = TerminalService.installScriptFor(_distro);
-    _appendLog(cmd);
+    _appendLog('执行：$cmd');
     try {
-      final r = await _terminal.runOn(_distro, '$cmd 2>&1 | tail -8',
+      // 不用 `| tail -8`：guest 里缺 tail 时整条管道失败，
+      // 真正的报错（往往是 apk/apt 的错误行）反而被丢掉，
+      // 用户只看到一句「安装失败」。这里保留完整输出，UI 侧限长显示。
+      final r = await _terminal.runOn(_distro, cmd,
           timeout: const Duration(minutes: 20));
-      _appendLog(r.output.trim().isEmpty ? '完成' : r.output.trim());
-      _appendLog('安装结束，重新检测…');
+      final out = r.output.trim();
+      if (out.isEmpty) {
+        _appendLog('没有输出，退出码 ${r.exitCode}');
+      } else {
+        // 只展示尾部若干行，但取自完整输出，不依赖 guest 的 tail
+        final lines = out.split('\n');
+        final tail =
+            lines.length > 12 ? lines.sublist(lines.length - 12) : lines;
+        _appendLog(tail.join('\n'));
+      }
+      if (r.ok) {
+        _appendLog('安装命令执行成功，重新检测…');
+      } else {
+        _appendLog('安装命令返回退出码 ${r.exitCode}（上方为错误信息）');
+        // Alpine/Debian 的包管理器在网络不通时会以非 0 退出，
+        // 这里明确提示，避免用户以为是 App 的问题。
+        if (out.contains('Temporary failure') ||
+            out.contains('Could not resolve') ||
+            out.contains('Network is unreachable')) {
+          _appendLog('看起来是网络问题：检查设备是否能访问镜像源。');
+        }
+      }
       await _checkTools();
     } catch (e) {
-      _appendLog('安装失败：$e');
+      _appendLog('安装失败：${_clip(e.toString())}');
       if (mounted) setState(() => _busy = false);
     }
   }
@@ -531,22 +637,37 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
 
   Widget _statusChip((bool, String?)? state, bool checked) {
     final (ready, _) = state ?? (false, null);
+    // 环境本身起不来时，所有组件都会被标成「未安装」，
+    // 但真实原因是环境坏了 —— 用 [envBroken] 区分这两种情况，
+    // 否则用户会去反复「安装全部组件」而问题始终存在。
+    final envBroken = checked && _envBroken;
+    final label = !checked
+        ? '未检测'
+        : ready
+            ? '已安装'
+            : (envBroken ? '环境异常' : '未安装');
+    final bg = !checked
+        ? onSurface(context, 0.05)
+        : ready
+            ? const Color(0xFFE6F4EA)
+            : const Color(0xFFFCE8E6);
+    final fg = !checked
+        ? onSurface(context, 0.45)
+        : ready
+            ? const Color(0xFF137333)
+            : const Color(0xFFC5221F);
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
-        color: !checked
-            ? onSurface(context, 0.05)
-            : (ready ? const Color(0xFFE6F4EA) : const Color(0xFFFCE8E6)),
+        color: bg,
         borderRadius: BorderRadius.circular(8),
       ),
       child: Text(
-        !checked ? '未检测' : (ready ? 'ready' : 'lost'),
+        label,
         style: TextStyle(
           fontSize: 12,
           fontWeight: FontWeight.w500,
-          color: !checked
-              ? onSurface(context, 0.45)
-              : (ready ? const Color(0xFF137333) : const Color(0xFFC5221F)),
+          color: fg,
         ),
       ),
     );

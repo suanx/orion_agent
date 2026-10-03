@@ -1,6 +1,7 @@
 import '../theme.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -114,6 +115,26 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void _send() {
     var text = _inputController.text.trim();
     if (text.isEmpty && _pendingImages.isEmpty) return;
+
+    // 没有可用模型时直接拦下并说明原因。ChatNotifier.send() 里也有
+    // 同样的守卫，但那时用户已经按下发送、看到按钮无反应，
+    // 提示出现在这里更及时。
+    final cfg = ref.read(configProvider).activeConfig;
+    if (cfg == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先在「我的 → 模型设置」添加模型服务')),
+      );
+      return;
+    }
+    // 向量模型走的是 /embeddings，用它打 /chat/completions 必然失败。
+    // 用户可能只配了向量模型，这时要明确提示而不是让他对着报错发呆。
+    if (cfg.kind != ModelKind.chat) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('当前启用的是向量模型，无法用于对话。\n'
+            '请在「我的 → 模型设置」里把默认模型切换为聊天模型。')),
+      );
+      return;
+    }
 
     // 「/技能名 参数」展开为技能提示词模板
     if (text.startsWith('/')) {
@@ -254,11 +275,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Column(
       children: [
         // ------- 顶栏：汉堡 + 标题 -------
-        SafeArea(
-          bottom: false,
-          child: SizedBox(
-            height: 56,
-            child: Row(
+        // SafeArea 只给子节点加padding，自身不涂背景；edge-to-edge 下
+        // 状态栏那条区域会透出窗口底色（黑边）。所以用 Container 包一层
+        // 把状态栏 + 顶栏一起涂成页面底色。
+        Container(
+          color: scaffoldBg(context),
+          child: SafeArea(
+            bottom: false,
+            child: SizedBox(
+              height: 56,
+              child: Row(
               children: [
                 IconButton(
                   icon: const Icon(Icons.menu_rounded, size: 26),
@@ -296,6 +322,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   onPressed: () => Scaffold.of(context).openDrawer(),
                 ),
               ],
+              ),
             ),
           ),
         ),
@@ -383,6 +410,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
         // ------- 输入栏 -------
+        const _ComposerStatusBar(),
         _InputBar(
           controller: _inputController,
           hasText: _hasText,
@@ -454,20 +482,58 @@ class _MessageImage extends StatelessWidget {
   }
 }
 
-class _EmptyGreeting extends StatelessWidget {
+class _EmptyGreeting extends StatefulWidget {
   const _EmptyGreeting({required this.onSuggestion});
 
   final ValueChanged<String> onSuggestion;
 
-  static const _suggestions = [
+  @override
+  State<_EmptyGreeting> createState() => _EmptyGreetingState();
+}
+
+class _EmptyGreetingState extends State<_EmptyGreeting> {
+
+  /// 空态展示的条数（从候选池随机抽取）。
+  static const _suggestionCount = 6;
+
+  // 候选建议语。每次进入空态随机抽 4 条，避免每次看到同一组。
+  static const _allSuggestions = <(String, String)>[
     ('🔍', '联网搜索今天的科技新闻'),
     ('🧮', '帮我算一笔账'),
     ('🌐', '读取一个网页并总结'),
     ('💡', '记住我的偏好设置'),
+    ('📰', '汇总今天的重要国际新闻'),
+    ('🌤️', '查一下我所在城市的天气'),
+    ('🧠', '用一句话解释量子纠缠'),
+    ('🍜', '推荐一道十分钟能做完的晚饭'),
+    ('✈️', '帮我规划三天的短途旅行'),
+    ('📝', '把这段话改得更简洁一些'),
+    ('🔢', '计算 1234乘 5678 的结果'),
+    ('💰', '算一算每月存三千块一年能存多少'),
+    ('🎯', '帮我制定一份本周学习计划'),
+    ('📖', '总结一下《活着》讲了什么'),
+    ('🛠️', '写一段Python 快速排序代码'),
+    ('🌏', '把这段中文翻译成英文'),
+    ('🩺', '头痛需要注意些什么'),
+    ('🏠', '小户型客厅怎么布置好看'),
   ];
+
+  /// 抽一次存起来。
+  ///
+  /// 放在 build 里每次重抽会让卡片在用户点按的过程中换掉内容——
+  /// 流式输出时每个 delta 都触发 rebuild，用户会点错行。
+  late final List<(String, String)> _suggestions;
+
+  @override
+  void initState() {
+    super.initState();
+    _suggestions = _pickSuggestions();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final suggestions = _suggestions;
+
     return ListView(
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
       children: [
@@ -485,7 +551,7 @@ class _EmptyGreeting extends StatelessWidget {
             )),
         const SizedBox(height: 18),
         // 与效果图一致：左对齐、按内容宽度收缩的胶囊卡片
-        for (final (emoji, text) in _suggestions)
+        for (final (emoji, text) in suggestions)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Align(
@@ -520,6 +586,24 @@ class _EmptyGreeting extends StatelessWidget {
           ),
       ],
     );
+  }
+
+  /// 从候选池里随机抽 [_suggestionCount] 条（Fisher-Yates 部分洗牌）。
+  ///
+  /// 每次 build 都会重抽：`_EmptyGreeting` 本身就是空态专用组件，
+  /// 只有在真的没有消息时才会被构建，重抽成本可以忽略；而这样
+  /// 每次进入对话页都能看到不同的一组建议。
+  List<(String, String)> _pickSuggestions() {
+    final pool = List<(String, String)>.of(_allSuggestions);
+    final rnd = math.Random();
+    final n = _suggestionCount.clamp(0, pool.length);
+    for (var i = 0; i < n; i++) {
+      final j = i + rnd.nextInt(pool.length - i);
+      final tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    return pool.sublist(0, n);
   }
 }
 
@@ -658,6 +742,184 @@ class _StreamingBubble extends StatelessWidget {
               MarkdownBody(data: content),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 输入栏上方的状态条：思考开关 + 模型选择 + 上下文长度。
+///
+/// 没有可用模型时整条置灰并提示，发送按钮同时禁用——避免用户
+/// 在未配置的情况下反复点发送却只看到「请先配置模型」。
+class _ComposerStatusBar extends ConsumerWidget {
+  const _ComposerStatusBar();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final config = ref.watch(configProvider);
+    final active = config.activeConfig;
+    final thinking = ref.watch(thinkingProvider);
+    final hasModel = active != null;
+
+    // 只列聊天模型；向量模型不能用来对话
+    final chatModels = config.configs
+        .where((c) => c.kind == ModelKind.chat)
+        .toList(growable: false);
+
+    final textColor = hasModel
+        ? onSurface(context, 0.6)
+        : onSurface(context, 0.28);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
+      child: Row(
+        children: [
+          // 思考开关
+          _MiniChip(
+            icon: Icons.psychology_outlined,
+            label: thinking ? '思考中' : '快速',
+            enabled: hasModel,
+            onTap: hasModel
+                ? () {
+                    final next = !thinking;
+                    ref.read(thinkingProvider.notifier).state = next;
+                    // 必须落盘：provider 初值是从 prefs 读的，
+                    // 不写回的话杀掉进程重启后开关会弹回「快速」。
+                    unawaited(ref
+                        .read(sharedPreferencesProvider)
+                        .setBool('thinking_enabled', next));
+                  }
+                : null,
+          ),
+          const SizedBox(width: 8),
+
+          // 模型选择
+          if (hasModel)
+            Expanded(
+              child: _ModelPicker(
+                models: chatModels,
+                activeId: active!.id,
+                onChanged: (id) =>
+                    ref.read(configProvider.notifier).setActive(id),
+              ),
+            )
+          else
+            Expanded(
+              child: Text(
+                '请先在「我的 → 模型设置」配置模型服务',
+                style: TextStyle(fontSize: 12, color: textColor),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          const SizedBox(width: 8),
+
+          // 上下文长度
+          if (active != null)
+            Text(
+              active.contextWindow <= 0
+                  ? '上下文 不限制'
+                  : '上下文 ${_compactTokens(active.contextWindow)}',
+              style: TextStyle(fontSize: 11, color: textColor),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// 128000 → "128K"，1048576 → "1M"，避免长文本把状态条挤爆。
+  static String _compactTokens(int n) {
+    if (n >= 1000000) {
+      final v = n / 1000000;
+      return '${v.toStringAsFixed(v % 1 == 0 ? 0 : 1)}M';
+    }
+    if (n >= 1000) return '${(n / 1000).round()}K';
+    return '$n';
+  }
+}
+
+/// 状态条上的小圆角标签。
+class _MiniChip extends StatelessWidget {
+  const _MiniChip({
+    required this.icon,
+    required this.label,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool enabled;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = enabled ? Theme.of(context).colorScheme.primary : onSurface(context, 0.28);
+    return InkWell(
+      borderRadius: BorderRadius.circular(14),
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: surface(context),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withValues(alpha: 0.25)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 14, color: color),
+            const SizedBox(width: 4),
+            Text(label,
+                style: TextStyle(fontSize: 12, color: color, height: 1.2)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 模型选择下拉。仅列出聊天模型。
+class _ModelPicker extends StatelessWidget {
+  const _ModelPicker({
+    required this.models,
+    required this.activeId,
+    required this.onChanged,
+  });
+
+  final List<LlmConfig> models;
+  final String activeId;
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    if (models.length <= 1) {
+      final only = models.isEmpty ? null : models.first;
+      return Text(
+        only == null ? '' : only.name.isEmpty ? only.model : only.name,
+        style: TextStyle(fontSize: 12, color: onSurface(context, 0.6)),
+        overflow: TextOverflow.ellipsis,
+      );
+    }
+    return DropdownButtonHideUnderline(
+      child: DropdownButton<String>(
+        value: models.any((m) => m.id == activeId) ? activeId : models.first.id,
+        isDense: true,
+        isExpanded: true,
+        icon: Icon(Icons.expand_more, size: 16, color: onSurface(context, 0.4)),
+        style: TextStyle(fontSize: 12, color: onSurface(context, 0.7)),
+        items: [
+          for (final m in models)
+            DropdownMenuItem(
+              value: m.id,
+              child: Text(
+                m.name.isEmpty ? m.model : m.name,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        ],
+        onChanged: (v) {
+          if (v != null) onChanged(v);
+        },
       ),
     );
   }

@@ -57,6 +57,15 @@ Color surface(BuildContext context) => Theme.of(context).colorScheme.surface;
 Color onSurface(BuildContext context, double opacity) =>
     Theme.of(context).colorScheme.onSurface.withValues(alpha: opacity);
 
+/// 页面底色（= Scaffold 的背景色）。
+///
+/// edge-to-edge 下需要自己给状态栏区域涂背景时用它——它与
+/// `scaffoldBackgroundColor` 一致，所以涂上去看不出接缝。
+/// 不要用 [surface]：那是卡片色，比页面底色略深，涂在状态栏上
+/// 会出现一条色差。
+Color scaffoldBg(BuildContext context) =>
+    Theme.of(context).scaffoldBackgroundColor;
+
 /// 吉祥物素材：深色模式用深底版本，浅色模式用白底版本。
 String mascotAsset(BuildContext context) =>
     Theme.of(context).brightness == Brightness.dark
@@ -115,7 +124,11 @@ ThemeData buildAppTheme(AppTheme t, {bool dark = false}) {
       surface: dark ? const Color(0xFF1B1C1E) : Colors.white,
     ),
     appBarTheme: AppBarTheme(
-      backgroundColor: Colors.transparent,
+      // 不能用transparent：edge-to-edge 下状态栏区域会透出窗口底色
+      // （Android 上是黑边）。各页面都用 SafeArea 把 AppBar 下移了，
+      // 状态栏那条区域本身没有 widget 去涂背景，所以必须由 AppBar 自己填。
+      backgroundColor: dark ? const Color(0xFF101112) : const Color(0xFFF6F6F6),
+      surfaceTintColor: Colors.transparent,
       elevation: 0,
       scrolledUnderElevation: 0,
       foregroundColor: dark ? Colors.white : Colors.black,

@@ -1,15 +1,61 @@
 import '../theme.dart';
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 /// 任务 Tab（M3 功能的占位页，风格与设计稿一致）。
-class TasksScreen extends StatelessWidget {
+class TasksScreen extends StatefulWidget {
   const TasksScreen({super.key});
 
-  static const _samples = [
+  @override
+  State<TasksScreen> createState() => _TasksScreenState();
+}
+
+class _TasksScreenState extends State<TasksScreen> {
+
+  /// 示例任务候选池。每次进入随机抽 [_sampleCount] 条，
+  /// 避免每次进来都是同一组。
+  static const _allSamples = <(String, String)>[
     ('💻', '今日科技要闻速览'),
     ('📚', '快速学一个商务英语词汇'),
     ('🔍', '冷知识盲盒'),
+    ('🌤️', '每天早晨天气播报'),
+    ('💰', '记账提醒与月度汇总'),
+    ('🏃', '每日运动打卡提醒'),
+    ('📈', '关注的股票行情速览'),
+    ('🎧', '每日一首爵士乐推荐'),
+    ('🧘', '冥想计时与呼吸练习'),
+    ('🍳', '今晚吃什么：随机菜谱'),
+    ('📷', '城市街拍灵感收集'),
+    ('🌱', '阳台种菜注意事项'),
   ];
+
+  /// 示例卡片展示条数。
+  static const _sampleCount = 4;
+
+  /// 从候选池随机抽 [_sampleCount] 条（Fisher-Yates 部分洗牌）。
+  List<(String, String)> _pickSamples() {
+    final pool = List<(String, String)>.of(_allSamples);
+    final rnd = math.Random();
+    final n = _sampleCount.clamp(0, pool.length);
+    for (var i = 0; i < n; i++) {
+      final j = i + rnd.nextInt(pool.length - i);
+      final tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    return pool.sublist(0, n);
+  }
+
+  /// 抽一次存起来。放build 里每次重抽会让卡片在
+  /// 键盘弹起等 rebuild 场景下突然重排。
+  late final List<(String, String)> _samples;
+
+  @override
+  void initState() {
+    super.initState();
+    _samples = _pickSamples();
+  }
 
   @override
   Widget build(BuildContext context) {

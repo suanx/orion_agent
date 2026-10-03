@@ -282,11 +282,7 @@ class SettingsScreen extends ConsumerWidget {
                 child: Text(
                   '还没有配置模型服务。\n\n'
                   '支持任何 OpenAI 兼容接口：\n'
-                  '填入 Base URL、API Key 和模型名即可。\n\n'
-                  '例如：\n'
-                  'https://api.openai.com/v1\n'
-                  'https://open.bigmodel.cn/api/paas/v4\n'
-                  'https://api.deepseek.com/v1',
+                  '填入 Base URL、API Key 和模型名即可。',
                   textAlign: TextAlign.center,
                 ),
               ),
@@ -327,18 +323,28 @@ class SettingsScreen extends ConsumerWidget {
   Future<void> _editConfig(
       BuildContext context, WidgetRef ref, LlmConfig? existing) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    final urlCtrl =
-        TextEditingController(text: existing?.baseUrl ?? 'https://api.openai.com/v1');
+    // 不预填任何 Base URL：预填会让输入法弹出时自动带上「清除」按钮，
+    // 用户第一眼看到的是一段可删的示例文本而不是输入框。
+    final urlCtrl = TextEditingController(text: existing?.baseUrl ?? '');
     final keyCtrl = TextEditingController(text: existing?.apiKey ?? '');
     final modelCtrl = TextEditingController(text: existing?.model ?? '');
-    final embCtrl = TextEditingController(text: existing?.embeddingModel ?? '');
     double temperature = existing?.temperature ?? 0.7;
+    var kind = existing?.kind ?? ModelKind.chat;
+    final ctxCtrl = TextEditingController(
+        text: (existing?.contextWindow ?? 0) <= 0 ? '' : '${existing!.contextWindow}');
+    final outCtrl = TextEditingController(
+        text: (existing?.maxOutputTokens ?? 0) <= 0 ? '' : '${existing!.maxOutputTokens}');
 
     final saved = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
+      // 表单会随类型切换增减字段，给一个最大高度并允许滚动，
+      // 否则在键盘弹起 + 选了「向量模型」时底部字段会被裁掉。
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.9,
+      ),
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => Padding(
+        builder: (ctx, setSheetState) => SingleChildScrollView(
           padding: EdgeInsets.only(
             left: 16,
             right: 16,
@@ -352,6 +358,31 @@ class SettingsScreen extends ConsumerWidget {
               Text(existing == null ? '添加模型服务' : '编辑模型服务',
                   style: Theme.of(ctx).textTheme.titleLarge),
               const SizedBox(height: 12),
+
+              // 模型用途：聊天 / 向量。二者是不同的模型、不同的 API 路径，
+              // 混在一个表单里会让用户不知道该填哪个字段。
+              SegmentedButton<ModelKind>(
+                segments: [
+                  for (final k in ModelKind.values)
+                    ButtonSegment(
+                      value: k,
+                      label: Text(k.label),
+                      icon: Icon(k == ModelKind.chat
+                          ? Icons.chat_bubble_outline
+                          : Icons.gradient),
+                    ),
+                ],
+                selected: {kind},
+                onSelectionChanged: (s) => setSheetState(() => kind = s.first),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                kind.hint,
+                style: TextStyle(
+                    fontSize: 12, color: Theme.of(ctx).colorScheme.outline),
+              ),
+              const SizedBox(height: 12),
+
               TextField(
                 controller: nameCtrl,
                 decoration: const InputDecoration(
@@ -369,31 +400,59 @@ class SettingsScreen extends ConsumerWidget {
               ),
               TextField(
                 controller: modelCtrl,
-                decoration: const InputDecoration(
-                    labelText: '模型名（如 gpt-4o-mini、glm-4-flash）'),
-              ),
-              TextField(
-                controller: embCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Embedding 模型名（可选，用于知识库检索）',
-                  hintText: '如 text-embedding-3-small、embedding-3',
+                decoration: InputDecoration(
+                  labelText: kind == ModelKind.chat
+                      ? '对话模型名（如 gpt-4o-mini、glm-4-flash）'
+                      : '向量模型名（如 text-embedding-3-small、embedding-3）',
                 ),
               ),
-              Row(
-                children: [
-                  const Text('温度'),
-                  Expanded(
-                    child: Slider(
-                      value: temperature,
-                      min: 0,
-                      max: 1.5,
-                      divisions: 15,
-                      label: temperature.toStringAsFixed(1),
-                      onChanged: (v) => setSheetState(() => temperature = v),
+
+              // 上下文与输出长度：仅聊天模型有意义（向量模型没有上下文概念）
+              if (kind == ModelKind.chat) ...[
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: ctxCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: '上下文长度（token）',
+                          hintText: '如 128000，留空不限制',
+                        ),
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: outCtrl,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: '最大输出（token）',
+                          hintText: '如 4096，留空不限制',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                Row(
+                  children: [
+                    const Text('温度'),
+                    Expanded(
+                      child: Slider(
+                        value: temperature,
+                        min: 0,
+                        max: 1.5,
+                        divisions: 15,
+                        label: temperature.toStringAsFixed(1),
+                        onChanged: (v) =>
+                            setSheetState(() => temperature = v),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+
               const SizedBox(height: 8),
               FilledButton(
                 onPressed: () => Navigator.of(ctx).pop(true),
@@ -413,6 +472,9 @@ class SettingsScreen extends ConsumerWidget {
       }
       return;
     }
+    // token 数解析：留空或非法都按「不限制」处理，不弹错误打断配置流程。
+    int parseTokens(String raw) => int.tryParse(raw.trim()) ?? 0;
+
     ref.read(configProvider.notifier).upsert(LlmConfig(
           id: existing?.id ?? 'cfg_${DateTime.now().millisecondsSinceEpoch}',
           name: nameCtrl.text.trim(),
@@ -420,7 +482,13 @@ class SettingsScreen extends ConsumerWidget {
           apiKey: keyCtrl.text.trim(),
           model: modelCtrl.text.trim(),
           temperature: temperature,
-          embeddingModel: embCtrl.text.trim(),
+          kind: kind,
+          // 向量模型没有「上下文」概念，聊天模型沿用旧字段承载 embedding 名
+          embeddingModel:
+              kind == ModelKind.chat ? existing?.embeddingModel ?? '' : '',
+          contextWindow: kind == ModelKind.chat ? parseTokens(ctxCtrl.text) : 0,
+          maxOutputTokens:
+              kind == ModelKind.chat ? parseTokens(outCtrl.text) : 0,
         ));
   }
 }
