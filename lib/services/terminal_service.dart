@@ -170,7 +170,7 @@ class TerminalService {
 
   /// proot 可执行文件的**实际可执行路径**。
   ///
-  /// ⚠️ 两个坑（都踩过）：
+  /// ⚠️ 三个坑（都踩过）：
   ///
   /// 1. **不能从 nativeLibraryDir 取**。
   ///    把 proot 改名成 libproot.so 放进 jniLibs 是行不通的：Android 会
@@ -182,8 +182,27 @@ class TerminalService {
   /// 2. **不能直接 exec APK 内的 asset**。
   ///    Asset 随包只读，没有执行位。
   ///
-  /// 正确做法：从 asset 读出字节 → 写到 appSupport 下的可执行目录 →
+  /// 3. **proot 不是单文件可执行**，必须连依赖一起部署（2026-10-03 用
+  ///    python 解析 ELF 的 DT_NEEDED 逐一确认）。此前只带了 proot 和
+  ///    一个被改错名字的库，proot 在设备上根本无法通过动态链接：
+  ///      - libtalloc.so.2      —— DT_NEEDED 按 libtalloc.so.2 精确查找，
+  ///                              复制成 libtalloc.so 等于没带
+  ///      - libandroid-shmem.so —— Termux 构建的 proot 链接了它
+  ///      - proot-loader        —— proot 启动 ptrace 的辅助二进制，
+  ///                              运行时要设 PROOT_LOADER 指向它，
+  ///                              否则按编译进去的 Termux 路径找必然失败
+  ///    另需在 startOn 里设 LD_LIBRARY_PATH 指向本目录（bionic 不会搜
+  ///    app 的数据目录）。
+  ///
+  /// 正确做法：四个文件都从 asset 读出 → 写到 appSupport 下的可执行目录 →
   /// chmod +x。复制按「asset 字节数」判断是否需要重做。
+  static const _prootAssets = <String, String>{
+    'proot': 'assets/proot',
+    'proot-loader': 'assets/proot-loader',
+    'libtalloc.so.2': 'assets/libtalloc.so.2',
+    'libandroid-shmem.so': 'assets/libandroid-shmem.so',
+  };
+
   Future<String> prootPath() async {
     if (_prootPath != null) return _prootPath!;
     final support = await getApplicationSupportDirectory();
@@ -192,14 +211,7 @@ class TerminalService {
       binDir.createSync(recursive: true);
     }
 
-    // proot 依赖 libtalloc，必须一起搬，否则启动时报
-    // libtalloc.so.2: cannot open shared object file
-    const libs = <String, String>{
-      'proot': 'assets/proot',
-      'libtalloc.so': 'assets/libtalloc.so',
-    };
-
-    for (final entry in libs.entries) {
+    for (final entry in _prootAssets.entries) {
       final name = entry.key;
       final assetPath = entry.value;
       final target = File('${binDir.path}/$name');
@@ -208,22 +220,18 @@ class TerminalService {
       try {
         data = await rootBundle.load(assetPath);
       } catch (_) {
-        if (name == 'proot') {
-          throw Exception(
-              '安装包内缺少终端运行库（$assetPath）。'
-              '当前设备可能不是 arm64，或该APK 构建时未注入 proot。');
-        }
-        continue; // libtalloc 缺失不阻断，由运行时错误暴露
+        // 四件套都是硬依赖：缺 proot 无法启动，缺 loader/任一库
+        // 会被动态链接器当场拒绝，晚暴露不如这里给出可读错误。
+        throw Exception(
+            '安装包内缺少终端运行库（$assetPath）。'
+            '当前设备可能不是 arm64，或该APK 构建时未注入 proot 依赖。');
       }
       final bytes = data.buffer.asUint8List(
         data.offsetInBytes,
         data.lengthInBytes,
       );
       if (bytes.isEmpty) {
-        if (name == 'proot') {
-          throw Exception('终端运行库（$assetPath）为空，构建产物不完整。');
-        }
-        continue;
+        throw Exception('终端运行库（$assetPath）为空，构建产物不完整。');
       }
 
       // 大小一致则跳过重写（asset 是只读的，内容不会变）
@@ -244,7 +252,7 @@ class TerminalService {
 
     // ⚠️ 必须在循环【外】赋值。
     // 循环里每轮都写 _prootPath 的话，最终值是字典里最后一个键
-    // （libtalloc.so）的路径，startOn 拿它去 exec 会失败——
+    // （libandroid-shmem.so）的路径，startOn 拿它去 exec 会失败——
     // 共享库不是可执行文件。
     return _prootPath = '${binDir.path}/proot';
   }
@@ -493,6 +501,8 @@ class TerminalService {
   Future<Process> startOn(TerminalDistro d, String command) async {
     final rootfs = await rootfsDir(d);
     final proot = await prootPath();
+    // proot 与它的库/loader 都部署在同目录（见 prootPath）。
+    final binDir = proot.substring(0, proot.lastIndexOf('/'));
     final tmp = await getTemporaryDirectory();
     final shell = d == TerminalDistro.alpine ? '/bin/sh' : '/bin/bash';
     final binds = <String>[
@@ -517,6 +527,15 @@ class TerminalService {
       environment: {
         'PROOT_TMP_DIR': tmp.path,
         'PROOT_NO_SECCOMP': '1',
+        // proot 是动态链接的：libtalloc.so.2 / libandroid-shmem.so 都在
+        // binDir，而 bionic 链接器默认只搜 /system 等系统路径，
+        // **不会**搜 app 的数据目录——不设这个，proot 在 exec 的那一刻
+        // 就被链接器拒绝（CANNOT LINK EXECUTABLE ... not found）。
+        'LD_LIBRARY_PATH': binDir,
+        // Termux 构建的 proot 启动 ptrace 需要辅助二进制 loader；
+        // 不设 PROOT_LOADER 时它按编译进去的 Termux 路径找，必然失败
+        // （报「the loader was not found or doesn't work」）。
+        'PROOT_LOADER': '$binDir/proot-loader',
         'HOME': '/root',
         'TMPDIR': '/tmp',
         'PATH':

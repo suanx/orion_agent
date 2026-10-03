@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:characters/characters.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -61,14 +62,17 @@ class VoiceService {
 
   bool _sttReady = false;
   bool _listening = false;
-  /// 当前播放进程，用于打断播报。
-  Process? _player;
+  /// MP3 播放器（audioplayers，底层 ExoPlayer/MediaPlayer）。
+  final AudioPlayer _audio = AudioPlayer();
   bool _speaking = false;
+  /// 最近一次播报失败的错误（合成/播放/系统 TTS 任一层），供 UI 展示。
+  /// 每次 speak 开头清空；成功播完保持 null。
+  String? lastError;
   /// 播报世代号：每次 stopSpeaking 自增，用来作废所有在途的播报流程。
   /// 原实现用共享bool _cancelled，新一次 speak 会把它重置为 false，
   /// 于是上一段仍在合成/播放的流程"复活"，两段声音重叠；
-  /// 且 _player 在 Process.start 的 await 之后才赋值，用户在那个窗口点停止
-  /// 会杀不掉进程。现在每个流程携带自己的世代号，过期即自杀。
+  /// 且播放器在异步启动完成后才登记，用户在那个窗口点停止
+  /// 会停不掉。现在每个流程携带自己的世代号，过期即自杀。
   int _generation = 0;
 
   bool get isListening => _listening;
@@ -165,6 +169,7 @@ class VoiceService {
     await stopSpeaking();
     if (plain.isEmpty) return;
     final gen = _generation;
+    lastError = null;
 
     if (engine == TtsEngine.edge) {
       try {
@@ -173,21 +178,21 @@ class VoiceService {
       } catch (e) {
         // 被新的一次 speak/stop 作废时不算失败，静默退出避免误回退系统 TTS
         if (gen != _generation) return;
+        lastError = e.toString();
         debugPrint('Edge TTS 失败，回退系统 TTS：$e');
       }
     }
     await _speakSystem(plain, rate, volume);
   }
 
-  /// 停止播报（Edge 播放进程与系统 TTS 都停）。
+  /// 停止播报（MP3 播放器与系统 TTS 都停）。
   ///
   /// 自增世代号，作废所有在途的合成/播放流程。
   Future<void> stopSpeaking() async {
     _generation++;
     try {
-      _player?.kill();
+      await _audio.stop();
     } catch (_) {}
-    _player = null;
     _speaking = false;
     try {
       await _tts.stop();
@@ -416,46 +421,44 @@ class VoiceService {
     return out;
   }
 
-  /// 播放 MP3。Android 侧优先用系统 stagefright 播放器，
-  /// 该路径无需额外依赖；不可用时抛出，由调用方回退系统 TTS。
+  /// 用 audioplayers 播放 MP3（底层 ExoPlayer/MediaPlayer）。
   ///
-  /// [gen] 是本次播报的世代号：`Process.start` 是异步的，用户点「停止」可能
-  /// 落在 await 与 `_player = p` 之间的窗口，此时 stopSpeaking() 杀不到进程，
-  /// 音频会完整播完。启动后立刻校验世代号，过期就立即 kill 并放弃。
+  /// 之前的实现是依次尝试 `/system/bin/stagefright`、`toybox play`、
+  /// `ffplay` 三个命令行播放器——在现代 Android 上**全部不可用**：
+  ///   - stagefright：Android 10 起已从系统镜像移除；
+  ///   - toybox：没有 play 子命令（秒退、非 0 退出码）；
+  ///   - ffplay：装在 proot 环境里，app 进程的 PATH 根本看不到。
+  /// 结果是 Edge 合成成功也一字节都放不出来，回退系统 TTS 又因
+  /// 引擎缺失可能无声，UI 永远停在「播放中…」。
+  ///
+  /// [gen] 是本次播报的世代号：`play()` 是异步的，用户点「停止」可能
+  /// 落在 await 的窗口里；播放期间轮询世代号，被作废立即停下。
   Future<void> _playAudio(String path, int gen) async {
-    const playTimeout = Duration(seconds: 120);
-    for (final cmd in _playerCandidates(path)) {
-      try {
-        final exe = File(cmd.first);
-        // 非绝对路径时交给 PATH 解析（ffplay 走终端环境）
-        if (cmd.first.startsWith('/') && !exe.existsSync()) continue;
-        final p = await Process.start(cmd.first, cmd.sublist(1));
-        if (gen != _generation) {
-          p.kill(ProcessSignal.sigkill);
-          return;
-        }
-        _player = p;
-        // 加超时：进程挂住时 await p.exitCode 永不返回，
-        // 会导致 isSpeaking 永久为 true、临时 mp3 永不删除。
-        final code = await p.exitCode.timeout(playTimeout, onTimeout: () {
-          p.kill(ProcessSignal.sigkill);
-          return -1;
-        });
-        if (gen != _generation) return;
-        if (code == 0) return;
-      } catch (_) {
-        continue;
-      }
-    }
-    throw Exception('无可用的音频播放器');
-  }
+    try {
+      await _audio.stop();
+    } catch (_) {}
+    await _audio.play(DeviceFileSource(path));
 
-  /// 播放器候选命令（抽成方法便于测试与复用）。
-  static List<List<String>> _playerCandidates(String path) => [
-        ['/system/bin/stagefright', path],
-        ['/system/bin/toybox', 'play', path],
-        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', path],
-      ];
+    // 自然播完时 onPlayerComplete 触发；被 stopSpeaking 中断时
+    // complete 不会触发，靠 150ms 一次的世代号轮询退出。
+    final completed = Completer<void>();
+    final sub = _audio.onPlayerComplete.listen((_) {
+      if (!completed.isCompleted) completed.complete();
+    });
+    try {
+      while (!completed.isCompleted && gen == _generation) {
+        await Future.any<void>([
+          completed.future,
+          Future<void>.delayed(const Duration(milliseconds: 150)),
+        ]);
+      }
+    } finally {
+      await sub.cancel();
+      try {
+        await _audio.stop();
+      } catch (_) {}
+    }
+  }
 
   Future<void> _speakSystem(String plain, double rate, double volume) async {
     try {
@@ -465,8 +468,15 @@ class VoiceService {
       await _tts.setSpeechRate((0.5 * rate).clamp(0.05, 1.0).toDouble());
       await _tts.setVolume(volume.clamp(0.0, 1.0).toDouble());
       await _tts.stop();
-      await _tts.speak(plain);
-    } catch (_) {}
+      // 超时兜底：设备缺 TTS 引擎 / 语言数据损坏时，完成回调永远不来，
+      // speak 的 await 不返回，UI 就永远停在「播放中…」。
+      await _tts
+          .speak(plain)
+          .timeout(const Duration(seconds: 60), onTimeout: () {});
+    } catch (e) {
+      debugPrint('系统 TTS 播放失败：$e');
+      lastError ??= '系统 TTS 不可用：$e';
+    }
   }
 }
 
@@ -736,15 +746,21 @@ Future<Socket> _edgeHandshake(
 
 /// 计算 Sec-MS-GEC 签名。
 ///
-/// 算法：把当前时间转成 Windows FILETIME（100ns 间隔，1601 起算），
-/// 向下圆整到 5 分钟（3,000,000,000 × 100ns），再取
+/// 算法（与官方 edge-tts 的 `generate_sec_ms_gec` 逐位一致）：
+/// 把当前时间转成 Windows FILETIME **秒**（1601 起算）→ 向下圆整到
+/// 5 分钟窗口（300 秒）→ 乘 10^7 换成 100ns 刻度 → 取
 /// `SHA256(ticks + TrustedClientToken)` 的大写十六进制。
 /// 签名有效期约 5 分钟。
+///
+/// ⚠️ 顺序不能颠倒：必须「先对秒取整窗口、再乘 10^7」。
+/// 之前的实现是先乘 10^7 再对 3×10^9 取模——当秒的余数恰为 299 且
+/// 亚秒部分 ≥ 0.1s 时，结果会比官方多整整一个窗口（300 秒），
+/// 服务端直接 403。属于低概率但必现于固定时段的签名错位。
 String edgeSecMsGec({DateTime? now}) {
   final t = (now ?? DateTime.now()).toUtc();
-  final seconds = t.millisecondsSinceEpoch / 1000 + VoiceService._winEpochSeconds;
-  var ticks = (seconds * 10000000).floor();
-  ticks -= ticks % 3000000000;
+  var sec = (t.millisecondsSinceEpoch / 1000).floor() + _winEpochSeconds;
+  sec -= sec % 300;
+  final ticks = sec * 10000000; // 64 位 int 容得下（约 7.3e16）
   final raw = '$ticks${VoiceService.trustedClientToken}';
   return sha256.convert(utf8.encode(raw)).toString().toUpperCase();
 }

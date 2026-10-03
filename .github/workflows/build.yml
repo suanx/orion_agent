@@ -216,30 +216,52 @@ jobs:
           ls $RES/mipmap-xxxhdpi/
 
       - name: Bundle proot into assets
-        # 终端环境：打包 Termux 构建的 proot（aarch64）及其依赖 libtalloc。
+        # 终端环境：打包 Termux 构建的 proot（aarch64）及其全部运行时依赖。
         #
-        # ⚠️ 关键约束（踩过坑）：**不要**把可执行文件命名成 lib*.so 放进
-        # jniLibs。Android 会把它当共享库处理，而且从 Android 15 起
-        # native 库直接由 APK 映射加载、**不再解压到nativeLibraryDir**——
-        # 运行时去 $nativeLibraryDir/libproot.so exec 会得到
-        # 「No such file or directory」。
+        # ⚠️ 关键约束（踩过坑）：
         #
-        # 正确做法：把 proot 作为普通 asset 打进 APK，
-        # 首次运行时由 Dart 侧复制到 appSupport 并 chmod +x
-        # （见 terminal_service.dart 的 prootPath()）。
+        # 1. **不要**把可执行文件命名成 lib*.so 放进 jniLibs。
+        #    Android 会把它当共享库处理，而且从 Android 15 起
+        #    native 库直接由 APK 映射加载、**不再解压到 nativeLibraryDir**——
+        #    运行时去 $nativeLibraryDir/libproot.so exec 会得到
+        #    「No such file or directory」。
+        #
+        # 2. **proot 的动态依赖必须四件套齐全**（2026-10-03 用 python 解析
+        #    ELF 的 DT_NEEDED 逐一确认，此前漏了三个导致 proot 必挂）：
+        #      - libtalloc.so.2   —— DT_NEEDED 明确要 libtalloc.so.2，
+        #                            复制改名成 libtalloc.so 链接器找不到
+        #      - libandroid-shmem.so —— Termux 构建的 proot 链接了它，
+        #                            单独的包（libandroid-shmem）
+        #      - proot-loader     —— proot 启动 ptrace 用的辅助二进制，
+        #                            位于包内 libexec/proot/loader；运行时
+        #                            必须设置 PROOT_LOADER 指向它，否则
+        #                            proot 按编译进二进制的 Termux 路径找，
+        #                            报「the loader was not found or doesn't work」
+        #
+        # 3. **运行时还需要 LD_LIBRARY_PATH 指向这几个文件的目录**，
+        #    bionic 链接器不会搜索 app 的数据目录（见 terminal_service.dart
+        #    的 startOn）。
+        #
+        # 正确做法：四件套作为普通 asset 打进 APK，首次运行时由 Dart 侧
+        # 复制到 appSupport 并 chmod +x（见 terminal_service.dart 的 prootPath()）。
         run: |
           set -e
           mkdir -p /tmp/proot-pkg android/app/src/main/assets
           curl -fsSL -o /tmp/proot-pkg/proot.deb https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.96_aarch64.deb
           curl -fsSL -o /tmp/proot-pkg/talloc.deb https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.5.0_aarch64.deb
+          curl -fsSL -o /tmp/proot-pkg/shmem.deb https://packages.termux.dev/apt/termux-main/pool/main/liba/libandroid-shmem/libandroid-shmem_0.7_aarch64.deb
           dpkg-deb -x /tmp/proot-pkg/proot.deb /tmp/proot-pkg/x1
           dpkg-deb -x /tmp/proot-pkg/talloc.deb /tmp/proot-pkg/x2
+          dpkg-deb -x /tmp/proot-pkg/shmem.deb /tmp/proot-pkg/x3
           cp "$(find /tmp/proot-pkg/x1 -type f -name proot | head -1)" android/app/src/main/assets/proot
-          cp "$(find /tmp/proot-pkg/x2 -type f -name 'libtalloc.so*' | head -1)" android/app/src/main/assets/libtalloc.so
-          chmod +x android/app/src/main/assets/proot
+          cp "$(find /tmp/proot-pkg/x1 -type f -path '*libexec/proot/loader' | head -1)" android/app/src/main/assets/proot-loader
+          # 必须保留 .2 后缀：DT_NEEDED 按 libtalloc.so.2 精确查找
+          cp "$(find /tmp/proot-pkg/x2 -type f -name 'libtalloc.so*' | head -1)" android/app/src/main/assets/libtalloc.so.2
+          cp "$(find /tmp/proot-pkg/x3 -type f -name 'libandroid-shmem.so' | head -1)" android/app/src/main/assets/libandroid-shmem.so
+          chmod +x android/app/src/main/assets/proot android/app/src/main/assets/proot-loader
           # 必须校验：find 没匹配到时 cp 会失败，但 -x 的目标也可能不是
           # 期望的架构，静默通过会让运行时才暴露问题。
-          for f in proot libtalloc.so; do
+          for f in proot proot-loader libtalloc.so.2 libandroid-shmem.so; do
             if [ ! -s "android/app/src/main/assets/$f" ]; then
               echo "asset 缺失或为空: $f"
               ls -la android/app/src/main/assets/ || true
@@ -247,8 +269,15 @@ jobs:
             fi
             echo "OK $f: $(stat -c%s "android/app/src/main/assets/$f") 字节"
           done
-          # 确认是 aarch64 ELF（Termux 官方源应为 aarch64）
-          file android/app/src/main/assets/proot || true
+          # 逐一确认是 aarch64 ELF（占位文本/空文件/架构不对都在这里拦下）
+          for f in proot proot-loader libtalloc.so.2 libandroid-shmem.so; do
+            magic=$(head -c 4 "android/app/src/main/assets/$f" | od -An -tx1 | tr -d ' \n')
+            if [ "$magic" != "7f454c46" ]; then
+              echo "asset 不是 ELF（magic=$magic）: $f"
+              exit 1
+            fi
+          done
+          echo "四件套全部为合法 ELF"
 
       - name: Add permissions and notification receivers
         run: |

@@ -38,10 +38,17 @@ class TtsSettingsCard extends ConsumerStatefulWidget {
 
 class _TtsSettingsCardState extends ConsumerState<TtsSettingsCard> {
   bool _playing = false;
+  /// 试听后从 VoiceService.lastError 读出的失败原因。
+  /// Edge 失败会回退系统 TTS，若系统 TTS 也不可用，之前界面毫无反馈，
+  /// 用户只能看到「播放中…」卡住，完全无从排查。
+  String? _error;
 
   Future<void> _preview() async {
     if (_playing) return;
-    setState(() => _playing = true);
+    setState(() {
+      _playing = true;
+      _error = null;
+    });
     try {
       await ref.read(voiceProvider).speak(
             '你好，我是 Orion Agent，这是当前的播报音色。',
@@ -51,7 +58,12 @@ class _TtsSettingsCardState extends ConsumerState<TtsSettingsCard> {
             volume: ref.read(ttsVolumeProvider),
           );
     } finally {
-      if (mounted) setState(() => _playing = false);
+      if (mounted) {
+        setState(() {
+          _playing = false;
+          _error = ref.read(voiceProvider).lastError;
+        });
+      }
     }
   }
 
@@ -193,6 +205,15 @@ class _TtsSettingsCardState extends ConsumerState<TtsSettingsCard> {
                   ),
                 ),
                 const SizedBox(height: 6),
+                if (_error != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      _error!,
+                      style: TextStyle(
+                          fontSize: 12, color: Colors.red.shade400),
+                    ),
+                  ),
                 Text(
                   'Edge 语音由微软在线合成，无需 API Key；失败时自动回退系统语音。',
                   style: TextStyle(

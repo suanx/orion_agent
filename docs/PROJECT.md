@@ -522,10 +522,14 @@ $nativeLibraryDir/libproot.so \
 >    的混血形式，会回关闭帧 `code=1007 Unsupported voice`。
 >    统一由 `edgeVoiceName()` 转换。
 
-**播放**：依次尝试 `/system/bin/stagefright` → `/system/bin/toybox play` → `ffplay`，
-120 秒超时。
+**播放**：`audioplayers`（底层 ExoPlayer/MediaPlayer）播放合成的 MP3 文件，
+播放期间轮询世代号响应「停止」。原先依次尝试 `/system/bin/stagefright` →
+`/system/bin/toybox play` → `ffplay`，现代 Android 上三者全部不可用
+（stagefright 已从系统移除、toybox 无 play 子命令、ffplay 在 proot 环境里
+app 进程的 PATH 看不到），导致合成成功也无声（详见 §11.16）。
 
 **引擎**：`edge`（默认）/ `system`（flutter_tts）。Edge 失败**自动回退**系统 TTS。
+失败原因记录在 `VoiceService.lastError`，语音设置页试听后展示，便于排查。
 
 **播报竞态**：用**世代号** `_generation` 机制 (`:72`)：
 `stopSpeaking()` 自增世代号作废所有在途流程。
@@ -811,7 +815,8 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 6. **校验** Kotlin jvmTarget（不注入任何 DSL，见下）
 7. 注入 edge-to-edge 到 `styles.xml`
 8. ImageMagick 从 `assets/images/mascot.webp` 生成全套图标
-9. 下载 Termux 的 proot + libtalloc → `jniLibs/arm64-v8a/lib*.so`
+9. 下载 Termux 的 proot 四件套（proot / proot-loader / libtalloc.so.2 /
+   libandroid-shmem.so）→ `assets/`，逐一校验 ELF magic
 10. 注入权限与通知 receiver
 11. 构建 Debian rootfs 并发布到 Release（tag `terminal-env`，已存在则跳过）
 12. `flutter pub get`
@@ -1397,6 +1402,36 @@ annotation 验证。以后遇到「`!` 之后又在别处用该变量」，先�
 
 **顺带修正**：附录 A 中 `schemaVersion` 记为 6，实际已是 7
 （Token 用量统计表 `TokenUsageRows` 加入时升版）。
+
+### 11.16 终端 proot 无法启动（依赖三缺一错）与 TTS 播放层重构（2026-10-03）
+
+两个「修了还坏」的顽疾，这次拿到了**二进制级证据**。
+
+**终端**：rootfs 安装成功，但「检测组件」时 proot 必挂。用 python 直接下载
+CI 同款的 Termux deb 包、解析 `proot` 二进制的 ELF 动态段，实锤：
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 82 | **libtalloc 名字错误** | proot 的 `DT_NEEDED` 是 `libtalloc.so.2`（精确匹配），CI 却把 `libtalloc.so.2.5.0` 复制改名成 `libtalloc.so`——设备上链接器按 `.so.2` 查找必然失败 | asset 改名 `libtalloc.so.2`，部署保持该名字 |
+| 83 | **缺 `libandroid-shmem.so`** | Termux 构建的 proot 链接了它（`DT_NEEDED` 第二项），此前从未打包 | CI 追加下载 `libandroid-shmem_0.7` 包并注入 |
+| 84 | **缺 `proot-loader`** | Termux 的 proot 是「loader + ptrace」双进程架构，二进制里有字符串 `the loader was not found or doesn't work`；不设 `PROOT_LOADER` 时它按编译进去的 `/data/data/com.termux/.../libexec/proot/loader` 找，必败 | CI 额外提取 deb 内 `libexec/proot/loader`，运行时设 `PROOT_LOADER` |
+| 85 | **`LD_LIBRARY_PATH` 未设置** | bionic 链接器不搜索 app 数据目录，库就算在也不被找到 | `startOn` 的 environment 加 `LD_LIBRARY_PATH=<binDir>` |
+
+排查方法值得留档：**错误文本不在 proot 二进制里**（字符串搜索无命中），
+说明它来自链接器或更底层；而 `DT_NEEDED` 是确定性证据，不依赖对
+错误消息的 OCR 猜测。CI 端新增 ELF magic 校验（`od` 读前 4 字节），
+占位文本/空文件/架构不对当场拦下。
+
+**TTS**：「试听」永久停在「播放中…」且无声。两层问题：
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 86 | **播放层全废** | 依次尝试 `/system/bin/stagefright`（Android 10 起已移除）→ `toybox play`（toybox 无此子命令）→ `ffplay`（在 proot 环境里，app 进程 PATH 看不到）——合成成功也一字节放不出 | 改用 `audioplayers`（ExoPlayer/MediaPlayer），`onPlayerComplete` + 世代号轮询实现可打断的等待 |
+| 87 | **Sec-MS-GEC 低概率错位** | 官方算法是「FILETIME 秒 → mod 300 → ×10^7」；原实现先乘 10^7 再对 3×10^9 取模，当秒余数恰为 299 且亚秒部分 ≥0.1s 时结果比官方多一个窗口（300s），服务端 403。约 0.3% 的时间段必现 | 按官方顺序重写，注释说明为什么顺序不能颠倒 |
+| 88 | **失败静默** | `_speakSystem` 的 `catch (_) {}` 吞掉一切（设备缺 TTS 引擎也无声无息），UI 永远「播放中…」 | `lastError` 字段记录失败原因；试听后展示；系统 TTS 的 `speak` 加 60s 超时兜底 |
+
+定位「播放层全废」的关键：UI 卡死 ≠ 合成失败。合成层有 15s/30s 超时会
+抛错回退，真正挂住的是 `await speak()` 之后的播放层与被吞错误的系统 TTS。
 
 ---
 
