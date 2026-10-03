@@ -103,13 +103,16 @@ class ProfileScreen extends ConsumerWidget {
           title: '记忆与知识',
           children: [
             _Row(
-              icon: Icons.lightbulb_outline_rounded,
+              // 「记忆」用芯片图标（Material 的 memory），是 AI 记忆功能的
+              // 通用视觉符号；原来的灯泡容易和「提示/想法」混淆。
+              icon: Icons.memory_outlined,
               label: '长期记忆',
               value: '${memory.notes.length} 条',
               onTap: () => _push(context, const MemoryScreen()),
             ),
             _Row(
-              icon: Icons.menu_book_outlined,
+              // 知识库用图书馆/阅读图标，与「书」相关但和记忆区分开。
+              icon: Icons.local_library_outlined,
               label: '知识库',
               onTap: () => _push(context, const KnowledgeScreen()),
             ),

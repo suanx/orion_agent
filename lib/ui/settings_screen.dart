@@ -542,13 +542,6 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
               value: config.fullUrl,
               onChanged: (v) => _patch((c) => c.copyWith(fullUrl: v)),
             ),
-            const _SwitchRow(
-              label: 'Response API（新版）',
-              subtitle: '暂未支持：需要独立的 Responses 协议栈',
-              value: false,
-              onChanged: null,
-              unsupported: true,
-            ),
             _SwitchRow(
               label: 'OpenAI 兼容缓存键',
               subtitle: '为请求携带 prompt_cache_key 缓存键',
@@ -566,20 +559,6 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
               label: '网络代理',
               value: config.proxy.trim().isEmpty ? '未启用' : config.proxy,
               onTap: () => _editProxy(context, config),
-            ),
-          ],
-        ),
-
-        // ---------------- 自定义面板 ----------------
-        const _SectionTitle('自定义面板（DIY）'),
-        _Card(
-          children: [
-            _NavRow(
-              label: '面板脚本',
-              value: '暂未支持',
-              icon: Icons.folder_outlined,
-              enabled: false,
-              onTap: null,
             ),
             _NavRow(
               label: '测试连接',

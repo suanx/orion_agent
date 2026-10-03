@@ -143,7 +143,8 @@ class _QuickActions extends StatelessWidget {
           Expanded(
             child: IconButton(
               tooltip: '长期记忆',
-              icon: Icon(Icons.lightbulb_outline_rounded, size: 24, color: tint),
+              // 与「我的」页长期记忆图标保持一致（芯片 = 记忆）。
+              icon: Icon(Icons.memory_outlined, size: 24, color: tint),
               onPressed: () => Navigator.of(context)
                 ..pop()
                 ..push(MaterialPageRoute(builder: (_) => const MemoryScreen())),

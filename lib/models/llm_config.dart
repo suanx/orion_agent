@@ -144,7 +144,8 @@ class LlmConfig {
   /// 用于把请求打到自定义路径的网关（如自建的转发端点）。
   final bool fullUrl;
 
-  /// 使用 Response API（新版）。目前未实现协议栈，保留字段以便后续接入。
+  /// 使用 Response API（新版）。协议栈未实现，界面入口已移除（2026-10-04），
+  /// 字段保留以兼容旧配置数据，实现后恢复界面。
   final bool responsesApi;
 
   /// 请求体携带 `prompt_cache_key`，让服务端命中提示词缓存。
