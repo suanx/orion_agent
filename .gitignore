@@ -27,3 +27,7 @@ lib/services/database.g.dart
 # Python：CI 里用 python 做 gradle 文本校验，会留下 __pycache__
 __pycache__/
 *.pyc
+
+# proot 运行库的**真实二进制**不入库（几 MB 且平台相关），
+# 由 CI 从 Termux 源下载后注入 android/app/src/main/assets/。
+# 仓库里只保留占位文件，让本地 flutter test/analyze 不因 asset 缺失而失败。

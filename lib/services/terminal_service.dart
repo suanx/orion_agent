@@ -29,6 +29,16 @@ class DistroSpec {
 class TerminalService {
   TerminalService({Dio? dio}) : _dio = dio ?? Dio();
 
+  /// 与原生层的通道。
+  ///
+  /// 目前**没有调用方**了：原先用它取 `nativeLibraryDir` 来执行 proot，
+  /// 但那条路走不通（Android 15+ 不再把 native 库解压到磁盘，
+  /// 详见 [prootPath] 的注释），改成从 asset 复制到 appSupport。
+  ///
+  /// 保留通道与 MainActivity.kt 是有意的：后续要拿设备信息
+  /// （型号、Android 版本、abi）或做原生能力时可以直接用，
+  /// 省得再改 CI 的注入。真的不再需要时，删掉本常量与
+  /// ci/MainActivity.kt 里的 MethodChannel 即可。
   static const _channel = MethodChannel('orion_agent/system');
 
   /// 自启动任务在 shared_preferences 中的存储键。
@@ -98,7 +108,7 @@ class TerminalService {
           : debianInstallScript();
 
   final Dio _dio;
-  String? _nativeLibDir;
+  String? _prootPath;
   final _rootfsCache = <TerminalDistro, String>{};
   String? _workspaceDir;
   final _runningTasks = <String, Process>{};
@@ -157,13 +167,95 @@ class TerminalService {
     }
   }
 
-  Future<String> get nativeLibDir async {
-    if (_nativeLibDir != null) return _nativeLibDir!;
-    final dir = await _channel.invokeMethod<String>('nativeLibDir');
-    if (dir == null || dir.isEmpty) {
-      throw Exception('无法获取 nativeLibraryDir（仅 Android 可用终端环境）');
+  /// proot 可执行文件的**实际可执行路径**。
+  ///
+  /// ⚠️ 两个坑（都踩过）：
+  ///
+  /// 1. **不能从 nativeLibraryDir 取**。
+  ///    把 proot 改名成 libproot.so 放进 jniLibs 是行不通的：Android 会
+  ///    把它当共享库处理，而且从 Android 15 起native 库直接由 APK 映射
+  ///    加载、**不再解压到磁盘**。运行时 exec /libproot.so
+  ///    会得到 （表现为「环境装好了但所有组件
+  ///    都 lost」，而 rootfs 本身没问题）。
+  ///
+  /// 2. **不能直接 exec APK 内的 asset**。
+  ///    Asset 随包只读，没有执行位。
+  ///
+  /// 正确做法：从 asset 读出字节 → 写到 appSupport 下的可执行目录 →
+  /// chmod +x。复制按「asset 字节数」判断是否需要重做。
+  Future<String> prootPath() async {
+    if (_prootPath != null) return _prootPath!;
+    final support = await getApplicationSupportDirectory();
+    final binDir = Directory('${support.path}/bin');
+    if (!binDir.existsSync()) {
+      binDir.createSync(recursive: true);
     }
-    return _nativeLibDir = dir;
+
+    // proot 依赖 libtalloc，必须一起搬，否则启动时报
+    // libtalloc.so.2: cannot open shared object file
+    const libs = <String, String>{
+      'proot': 'assets/proot',
+      'libtalloc.so': 'assets/libtalloc.so',
+    };
+
+    for (final entry in libs.entries) {
+      final name = entry.key;
+      final assetPath = entry.value;
+      final target = File('${binDir.path}/$name');
+
+      ByteData? data;
+      try {
+        data = await rootBundle.load(assetPath);
+      } catch (_) {
+        if (name == 'proot') {
+          throw Exception(
+              '安装包内缺少终端运行库（$assetPath）。'
+              '当前设备可能不是 arm64，或该APK 构建时未注入 proot。');
+        }
+        continue; // libtalloc 缺失不阻断，由运行时错误暴露
+      }
+      final bytes = data.buffer.asUint8List(
+        data.offsetInBytes,
+        data.lengthInBytes,
+      );
+      if (bytes.isEmpty) {
+        if (name == 'proot') {
+          throw Exception('终端运行库（$assetPath）为空，构建产物不完整。');
+        }
+        continue;
+      }
+
+      // 大小一致则跳过重写（asset 是只读的，内容不会变）
+      if (!await _sameSize(target, bytes.length)) {
+        await target.writeAsBytes(bytes, flush: true);
+      }
+      // chmod 必须在写入之后：新文件继承 umask，不一定有执行位。
+      //
+      // 用 /system/bin/chmod 绝对路径：Android 上 app 进程的 PATH 通常
+      // 不含 /system/bin，`Process.run('chmod', ...)` 会抛 ProcessException
+      // 而不是返回非 0退出码。
+      final res = await Process.run(
+          '/system/bin/chmod', ['755', target.path]);
+      if (res.exitCode != 0) {
+        throw Exception('无法为 $name 设置执行权限：${res.stderr}');
+      }
+    }
+
+    // ⚠️ 必须在循环【外】赋值。
+    // 循环里每轮都写 _prootPath 的话，最终值是字典里最后一个键
+    // （libtalloc.so）的路径，startOn 拿它去 exec 会失败——
+    // 共享库不是可执行文件。
+    return _prootPath = '${binDir.path}/proot';
+  }
+
+  /// 目标文件是否已是期望大小（避免每次启动都重写几十 MB）。
+  Future<bool> _sameSize(File f, int expected) async {
+    if (!f.existsSync()) return false;
+    try {
+      return (await f.stat()).size == expected;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<String> rootfsDir(TerminalDistro d) async {
@@ -388,7 +480,7 @@ class TerminalService {
   /// 启动一个 proot 会话进程（供流式读取）。
   Future<Process> startOn(TerminalDistro d, String command) async {
     final rootfs = await rootfsDir(d);
-    final libDir = await nativeLibDir;
+    final proot = await prootPath();
     final tmp = await getTemporaryDirectory();
     final shell = d == TerminalDistro.alpine ? '/bin/sh' : '/bin/bash';
     final binds = <String>[
@@ -401,7 +493,7 @@ class TerminalService {
       if (ws.isNotEmpty) binds.addAll(['-b', '$ws:/workspace']);
     } catch (_) {}
     return Process.start(
-      '$libDir/libproot.so',
+      proot,
       [
         '-r', rootfs,
         '-0',

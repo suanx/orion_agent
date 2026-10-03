@@ -41,3 +41,9 @@ flutter:
   assets:
     - assets/images/mascot.webp
     - assets/images/mascot_dark.webp
+    - assets/images/user_img.webp
+    # proot 与其依赖的 libtalloc：CI 从 Termux 官方源取出后放到这里。
+    # 运行时由 TerminalService.prootPath() 复制到 appSupport 并 chmod +x
+    # （不能直接 exec —— APK 内的 asset 不可执行）。
+    - assets/proot
+    - assets/libtalloc.so
