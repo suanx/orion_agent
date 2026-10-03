@@ -986,7 +986,7 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
       context: context,
       builder: (_) => Dialog(
         backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
+        // 表单内容无自带限宽，交给 Dialog 默认 inset 撑出安全宽度
         child: _ModelEditorSheet(
           configId: config.id,
           existing: existing,

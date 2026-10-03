@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/llm_config.dart';
+import 'glass.dart';
 import '../providers/providers.dart';
 
 /// 「我的 → 默认模型」页：专项模型设置。

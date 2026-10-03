@@ -226,7 +226,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     title: Text(m.name,
                         style: const TextStyle(fontSize: 14.5)),
                     subtitle: m.contextWindow > 0
-                        ? Text('上下文 ${_compactTokens(m.contextWindow)}',
+                        ? Text(
+                            // _compactTokens 定义在 _ComposerStatusBar 里
+                            //（同类私有静态，同文件可直接引用）
+                            '上下文 ${_ComposerStatusBar._compactTokens(m.contextWindow)}',
                             style: const TextStyle(fontSize: 11.5))
                         : null,
                     trailing: m.name == current
@@ -243,7 +246,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ),
     );
     if (sel == null || sel == current) return;
-    await ref
+    // ConfigNotifier.upsert 是 void（同步更新内存并落库），不能 await
+    ref
         .read(configProvider.notifier)
         .upsert(active.copyWith(defaultChatModel: sel));
   }
