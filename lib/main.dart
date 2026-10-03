@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'providers/providers.dart';
 import 'services/database.dart';
 import 'services/memory_service.dart';
+import 'services/navigation_service.dart';
 import 'services/role_service.dart';
 import 'services/skill_service.dart';
 import 'services/storage_service.dart';
@@ -83,7 +84,17 @@ Future<void> main() async {
   unawaited(container.read(mcpServiceProvider).connectAll());
 
   // 本地通知：初始化渠道（不请求权限，权限由设置页显式触发）
-  unawaited(container.read(notificationServiceProvider).init());
+  //
+  // 必须在这里就传入 onTap：通知回调只注册一次，若用无参 init() 占位，
+  // 之后再补的回调永远不会生效（init 内部对 _ready 短路）。
+  // 用户点通知 → 写入导航意图；冷启动时 runApp 还没跑，
+  // 意图会先记在 provider 里，HomeShell 首帧后再执行。
+  unawaited(container.read(notificationServiceProvider).init(
+        onTap: (payload) {
+          debugPrint('notification tapped: $payload');
+          container.read(navigationServiceProvider).handlePayload(payload);
+        },
+      ));
 
   // 自启动任务：环境就绪的在后台拉起（不阻塞启动）
   unawaited(container

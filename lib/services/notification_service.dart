@@ -4,6 +4,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 
+import 'navigation_service.dart';
+
 /// 本地通知服务：回答完成、任务结束等场景的提醒。
 ///
 /// 全部为**本地通知**（不经推送服务器），不联网、不需要任何 Key。
@@ -202,7 +204,9 @@ class NotificationService {
       id: 1001,
       title: '「$sessionTitle」已生成回答',
       body: body,
-      payload: 'chat',
+      // 用常量而非字面量：payload 由 NavigationService.handlePayload 解析，
+      // 两边必须用同一份契约，否则改了这边那边就匹配不上。
+      payload: NavPayload.chat,
       silent: silent,
     );
   }
