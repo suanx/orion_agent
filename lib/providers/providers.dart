@@ -598,9 +598,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
         createdAt: s2.createdAt,
         updatedAt: DateTime.now(),
       );
+      // 显式提取成非空局部变量。
+      // `answer` 是 ChatMessage? 且在 await for 中被赋值，Flutter analyzer
+      // 不保证在闭包捕获场景下完成类型提升，直接传 answer 会报
+      // "The argument type 'ChatMessage?' can't be assigned to 'ChatMessage'"。
+      final msg = answer;
       _touch(withAnswer);
       await _persistOp(
-          () => _storage.insertMessage(withAnswer.id, answer), 'AI 回答');
+          () => _storage.insertMessage(withAnswer.id, msg), 'AI 回答');
 
       // 语音播报（引擎/音色/语速/音量都来自设置）
       if (_ttsEnabled()) {

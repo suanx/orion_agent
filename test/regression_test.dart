@@ -17,7 +17,7 @@ void main() {
     // 表现为知识库里的 emoji 变成"�"。
     test('按字素簇切分，emoji 完整且内容无损', () {
       const emoji = '\u{1F600}';
-      final text = '${emoji}文${emoji}文${emoji}文${emoji}';
+      final text = '$emoji文${emoji}文${emoji}文$emoji';
       final chunks = chunkText(text, maxLen: 3);
 
       expect(chunks.join(), text, reason: '分块后内容必须无损');

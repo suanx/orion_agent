@@ -77,22 +77,38 @@ class VoiceService {
   // ---------------- ASR ----------------
 
   /// 初始化 ASR（首次调用触发麦克风权限请求）。不可用时返回 false。
+  ///
+  /// `onError` / `onStatus` 必须在这里传：`listen()` **不接受**这两个参数
+  /// （只有 onResult / listenOptions 等）。且插件文档明确说明这两个回调
+  /// 在首次 initialize 后**无法重置**，所以必须在此处一次性注册好。
+  ///
+  /// 不注册的话，配了 `cancelOnError: true` 后任何识别错误（静音超时、
+  /// 权限被回收、音频通道被抢占）都会让底层自动停止，而 `_listening`
+  /// 不会复位 —— UI 仍显示红色麦克风，用户得点两次才能恢复。
   Future<bool> ensureSpeech() async {
     if (_sttReady) return true;
     try {
-      _sttReady = await _stt.initialize();
-    } catch (_) {
+      _sttReady = await _stt.initialize(
+        onError: (e) {
+          debugPrint('语音识别错误：${e.errorMsg}');
+          _listening = false;
+        },
+        onStatus: (status) {
+          // 识别自然结束 / 被取消时同步状态，否则 UI 与实际状态脱节
+          if (status == SpeechToText.doneStatus ||
+              status == SpeechToText.notListeningStatus) {
+            _listening = false;
+          }
+        },
+      );
+    } catch (e) {
+      debugPrint('语音识别初始化失败：$e');
       _sttReady = false;
     }
     return _sttReady;
   }
 
   /// 开始聆听，识别结果（含中间结果）通过 onText 回调整段返回。
-  ///
-  /// 必须注册 [SpeechToText.onError] / [SpeechToText.onDone]：配了
-  /// `cancelOnError: true` 后，任何识别错误（静音超时、权限被回收、音频通道被抢占）
-  /// 都会让底层自动停止监听，但 `_listening` 若不同步复位，UI 仍显示红色麦克风，
-  /// 用户必须点两次才能恢复——观感是"麦克风坏了"。
   Future<bool> startListening({
     required void Function(String text) onText,
     String locale = 'zh_CN',
@@ -101,19 +117,13 @@ class VoiceService {
     // 幂等：重复调用先停掉上一次，避免回调重复注册。
     if (_listening) await stopListening();
     _listening = true;
+    // onError / onStatus 已在 ensureSpeech() → initialize() 时注册，
+    // listen() 不接受这两个参数，且插件不允许 initialize 之后再重置。
     try {
       await _stt.listen(
         onResult: (r) {
           if (r.finalResult) _listening = false;
           onText(r.recognizedWords);
-        },
-        onError: (e) {
-          debugPrint('语音识别错误：$e');
-          _listening = false;
-        },
-        onDone: () {
-          // 底层结束（静音超时/被取消）时同步状态，否则 UI 与实际状态脱节。
-          _listening = false;
         },
         listenOptions: SpeechListenOptions(
           partialResults: true,

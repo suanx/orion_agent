@@ -496,9 +496,15 @@ $nativeLibraryDir/libproot.so \
 晓晓（女·温柔，默认）、晓伊（女·活泼）、云希（男·阳光）、
 云扬（男·播报）、云健（男·沉稳）、晓北（女·东北口音）、晓妮（女·陕西口音）
 
-**STT**：`speech_to_text`，系统 ASR。必须注册 `onError`/`onDone`
-同步复位 `_listening`（`:92-117`），否则底层自动停止后 UI 仍显示红色麦克风，
-用户要点两次才能恢复。
+**STT**：`speech_to_text`，系统 ASR。
+
+> ⚠️ `onError` / `onStatus` 必须传给 **`initialize()`**，不是 `listen()`——
+> `listen()` 只有 `onResult` / `listenOptions` 等参数。插件文档还明确说明
+> 这两个回调在首次 `initialize` 后**无法重置**，所以必须在 `ensureSpeech()`
+> 里一次性注册（`voice_service.dart:89-101`）。
+>
+> 不注册的话，`cancelOnError: true` 让底层自动停止后 `_listening` 不复位，
+> UI 仍显示红色麦克风，用户得点两次才能恢复。
 
 **文本预处理** `stripMarkdownForSpeech` (`:477-494`)：
 代码块 → 「（代码略）」、去标记符号、按**字素簇**截断 400 字。
@@ -933,7 +939,7 @@ class ToolCall {
 | 7 | 技能永久失效（`/技能名` 无效） | 同上 | `skill_service.dart:300-318` |
 | 8 | 角色永久失效 | 同上 | `role_service.dart:29-49` |
 | 9 | 数据库写入错误被吞 | 裸 Future，磁盘满时静默丢消息 | `providers.dart:637-645` `_persistOp` |
-| 10 | 麦克风永久卡死 | `cancelOnError: true` 下底层自动停止，但 `_listening` 未复位 | `voice_service.dart:92-117` 补 `onError`/`onDone` |
+| 10 | 麦克风永久卡死 | `cancelOnError: true` 下底层自动停止，但 `_listening` 未复位 | `voice_service.dart:89-101` 在 `initialize()` 注册 `onError`/`onStatus` |
 | 11 | 配置保存失败无提示 | 异常被吞，UI 显示保存成功 | `settings_screen.dart` 错误卡片 |
 
 ### 11.3 协议层正确性

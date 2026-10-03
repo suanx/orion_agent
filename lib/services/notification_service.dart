@@ -134,10 +134,13 @@ class NotificationService {
       if (Platform.isIOS) {
         // 原来 iOS 直接返回 true：用户可能已拒绝授权，设置页却显示
         // "通知权限已开启"，"授权"按钮也不出现，用户无从知道通知被静音了。
+        //
+        // 注意字段名是 `isEnabled`（NotificationsEnabledOptions），
+        // 没有 isAuthorized —— 写错会编译失败。
         final ios = _plugin.resolvePlatformSpecificImplementation<
             IOSFlutterLocalNotificationsPlugin>();
         final granted = await ios?.checkPermissions();
-        return granted?.isAuthorized ?? false;
+        return granted?.isEnabled ?? false;
       }
       return true;
     } catch (_) {
