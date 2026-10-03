@@ -265,7 +265,9 @@ class LlmClient {
     );
     yield FinalMessage(finalMsg);
     // usage 放在最后：Agent 循环先处理消息再记账，顺序稳定。
-    if (usage != null && !usage!.isEmpty) yield usage!;
+    // Dart 3 的类型提升：`usage != null` 之后 usage 已是TokenUsage，
+    // 再写 ! 会被判为 unnecessary_non_null_assertion。
+    if (usage != null && !usage.isEmpty) yield usage;
   }
 
   /// 批量调用 OpenAI 兼容的 /embeddings 接口，返回与输入顺序一致的向量列表。

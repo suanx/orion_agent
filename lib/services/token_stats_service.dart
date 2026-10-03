@@ -128,15 +128,19 @@ class TokenStatsService {
     final ts = at ?? DateTime.now();
     try {
       await _db.into(_db.tokenUsageRows).insert(
+            // ⚠️ drift 的 Companion.insert：必需字段收**裸值**，
+            // 只有带 default 的可选字段才包 Value。给全部字段包 Value
+            // 会报「argument type 'Value<int>' can't be assigned to 'int'」。
             TokenUsageRowsCompanion.insert(
               id: uniqueId('usage'),
               createdAt: ts.millisecondsSinceEpoch,
-              provider: Value(provider),
-              model: Value(model),
-              inputTokens: Value(inputTokens),
-              outputTokens: Value(outputTokens),
-              cachedTokens: Value(cachedTokens),
-              requests: const Value(1),
+              provider: provider,
+              model: model,
+              inputTokens: inputTokens,
+              outputTokens: outputTokens,
+              cachedTokens: cachedTokens,
+              requests: 1,
+              // costCents 有 default，仍需 Value 包装（insert 里是可选参数）
               costCents: Value(costCents),
             ),
           );
@@ -172,7 +176,7 @@ class TokenStatsService {
     // 键用 Record 而非拼接字符串：服务名/模型名本身可能含空格或分隔符，
     // 拼接后再 split 会把维度算错。
     final providerBuckets =
-        <(String, String), ({int req, int in, int out, int cached})>{};
+        <(String, String), ({int req, int inTok, int out, int cached})>{};
 
     for (final r in rows) {
       requests += r.requests;
@@ -193,7 +197,7 @@ class TokenStatsService {
       final prev = providerBuckets[key];
       providerBuckets[key] = (
         req: (prev?.req ?? 0) + r.requests,
-        in: (prev?.in ?? 0) + r.inputTokens,
+        inTok: (prev?.inTok ?? 0) + r.inputTokens,
         out: (prev?.out ?? 0) + r.outputTokens,
         cached: (prev?.cached ?? 0) + r.cachedTokens,
       );
@@ -215,7 +219,7 @@ class TokenStatsService {
           provider: e.key.$1,
           model: e.key.$2,
           requests: e.value.req,
-          inputTokens: e.value.in,
+          inputTokens: e.value.inTok,
           outputTokens: e.value.out,
           cachedTokens: e.value.cached,
         ),

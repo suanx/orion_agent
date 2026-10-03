@@ -39,6 +39,7 @@ class TerminalService {
   /// （型号、Android 版本、abi）或做原生能力时可以直接用，
   /// 省得再改 CI 的注入。真的不再需要时，删掉本常量与
   /// ci/MainActivity.kt 里的 MethodChannel 即可。
+  // ignore: unused_field
   static const _channel = MethodChannel('orion_agent/system');
 
   /// 自启动任务在 shared_preferences 中的存储键。
