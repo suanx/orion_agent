@@ -32,14 +32,14 @@ class MessageRows extends Table {
   TextColumn get imagesJson => text().withDefault(const Constant('[]'))();
   IntColumn get createdAt => integer()();
 
-  /// sessionId 没有索引时，按会话查消息是全表扫描。
-  /// 启动加载全部会话消息曾因此产生 N+1 次全表扫描（已改为一次查询 + 内存分组），
-  /// 这里补上复合索引让「按会话取消息并排序」也能走索引。
-  @override
-  List<String> get customConstraints => [
-        'CREATE INDEX IF NOT EXISTS idx_message_rows_session '
-        'ON message_rows (session_id, id)',
-      ];
+  // ⚠️ 不要把 CREATE INDEX 写在这里。
+  // drift 会把 customConstraints 的内容拼进 CREATE TABLE 的括号内
+  // （当作列约束，见 migration.dart：
+  //   final constraints = dslTable.customConstraints;
+  //   for (...) { context.buffer..write(', ')..write(constraints[i]); }
+  // ），写成 CREATE INDEX 会得到非法 SQL 导致建表失败，
+  // 表现为所有涉及数据库的测试全部报错。
+  // 索引统一在 AppDatabase 的 onCreate / onUpgrade 里建，见 _createIndexes。
 }
 
 /// 长期记忆表。
@@ -124,8 +124,30 @@ class AppDatabase extends _$AppDatabase {
   @override
   int get schemaVersion => 6;
 
+  /// 全部索引。单独抽出以便 onCreate 与 onUpgrade 共用，避免漏建。
+  ///
+  /// 不能写在 Table 的 customConstraints 里——drift 会把它们拼进
+  /// CREATE TABLE 的括号内（当作列约束），写成 CREATE INDEX 会让建表失败。
+  static const _indexStatements = <String>[
+    // sessionId 没有索引时，按会话查消息是全表扫描。
+    // 复合索引让「按会话取消息并按 id 排序」走索引。
+    'CREATE INDEX IF NOT EXISTS idx_message_rows_session '
+        'ON message_rows (session_id, id)',
+  ];
+
+  Future<void> _createIndexes() async {
+    for (final sql in _indexStatements) {
+      await customStatement(sql);
+    }
+  }
+
   @override
   MigrationStrategy get migration => MigrationStrategy(
+        onCreate: (m) async {
+          await m.createAll();
+          // createAll 只建表，索引要自己建
+          await _createIndexes();
+        },
         onUpgrade: (m, from, to) async {
           if (from < 2) {
             await m.createTable(knowledgeDocs);
@@ -141,14 +163,9 @@ class AppDatabase extends _$AppDatabase {
           if (from < 5) {
             await m.createTable(mcpServers);
           }
-          if (from < 6) {
-            // MessageRows 的 customConstraints 只在建表时生效，
-            // 已有安装必须在这里补建索引，否则升级后依然全表扫描。
-            await customStatement(
-              'CREATE INDEX IF NOT EXISTS idx_message_rows_session '
-              'ON message_rows (session_id, id)',
-            );
-          }
+          // 索引对所有旧版本都要补建（不只是 from < 6）：
+          // 之前把它错放在 customConstraints 里，等于从未真正建过索引。
+          await _createIndexes();
         },
       );
 }

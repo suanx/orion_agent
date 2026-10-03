@@ -224,8 +224,16 @@ orion_agent/
 | 5 | 新增 `mcp_servers` |
 | 6 | 新增 `idx_message_rows_session` 索引 |
 
-> ⚠️ `customConstraints` 只在建表时生效，已有安装必须靠 `onUpgrade` 补索引
-> （`database.dart:145-150`）。加索引时**两处都要改**。
+> ⚠️ **索引绝对不能写在 `Table.customConstraints` 里**。
+> drift 会把customConstraints 的内容拼进 `CREATE TABLE` 的括号内（当作列约束，
+> 见 drift 源码 `migration.dart`），写成 `CREATE INDEX` 会得到非法 SQL：
+> ```sql
+> CREATE TABLE message_rows (..., CREATE INDEX IF NOT EXISTS ... ON message_rows (...))
+> -- SqliteException: near "CREATE": syntax error
+> ```
+> 这会让**建表直接失败**，表现为所有涉及数据库的测试全部报错。
+> 正确做法：在 `onCreate`（`m.createAll()` 之后）与 `onUpgrade` 里用
+> `customStatement` 建索引——见 `AppDatabase._indexStatements` / `_createIndexes`。
 
 ### 4.2 唯一 ID 生成（`database.dart:141-145`）
 
@@ -1136,7 +1144,8 @@ expect(s.contains('#'), isFalse);
 ### 必须遵守
 
 1. **不要在 CI 里注入 Gradle 代码**。见 §8，这是本项目最大的坑源。
-2. **新增 drift 索引要改两处**：`customConstraints` + `onUpgrade`。
+2. **新增 drift 索引要在 `onCreate` 和 `onUpgrade` 两处建**
+   （用 `_createIndexes()`，**不要**写进 `customConstraints`——会让建表 SQL 非法）。
 3. **列表必须不可变替换**。`[...list, item]` 而非 `list.add()`，
    否则 `copyWith` 检测不到变化，UI 不刷新。
 4. **异步间隙后检查 `mounted`**。任何 `await` 之后碰 State/Context 前。
