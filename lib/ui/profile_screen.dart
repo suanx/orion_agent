@@ -12,6 +12,7 @@ import 'notification_settings_screen.dart';
 import 'roles_screen.dart';
 import 'settings_screen.dart';
 import 'skills_screen.dart';
+import 'tts_settings_screen.dart';
 import 'storage_settings_screen.dart';
 import 'terminal_screen.dart';
 import 'token_stats_screen.dart';
@@ -60,8 +61,25 @@ class ProfileScreen extends ConsumerWidget {
             _Row(
               icon: Icons.smart_toy_outlined,
               label: '默认模型',
-              value: config.activeConfig?.model ?? '未配置',
+              // 一个提供商下可以有多个模型，所以要把提供商名也显示出来，
+              // 否则「gpt-4o-mini」这种名字看不出是哪家配的。
+              value: config.activeConfig?.chatModel == null
+                  ? '未配置'
+                  : (config.configs.length > 1
+                      ? '${config.activeConfig!.displayName} · '
+                          '${config.activeConfig!.model}'
+                      : config.activeConfig!.model),
               onTap: () => _push(context, const SettingsScreen()),
+            ),
+            _Row(
+              icon: Icons.record_voice_over_outlined,
+              label: '语音播报',
+              value: (ref.watch(sharedPreferencesProvider)
+                          .getBool('tts_enabled') ??
+                      false)
+                  ? '已开启'
+                  : '已关闭',
+              onTap: () => _push(context, const TtsSettingsScreen()),
             ),
             _Row(
               icon: Icons.dns_outlined,

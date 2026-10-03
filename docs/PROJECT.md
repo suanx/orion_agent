@@ -133,7 +133,7 @@ orion_agent/
 │   ├── models/                        纯数据模型（无逻辑）
 │   │   ├── chat_message.dart          ChatMessage / ToolCall
 │   │   ├── chat_session.dart          ChatSession
-│   │   ├── llm_config.dart            LlmConfig（含 JSON 序列化）
+│   │   ├── llm_config.dart            LlmConfig / ProviderModel（含 JSON 序列化与旧数据迁移）
 │   │   └── memory_note.dart           MemoryNote
 │   │
 │   ├── providers/
@@ -950,10 +950,46 @@ class ToolCall {
 
 ### LlmConfig (`models/llm_config.dart`)
 
-`id` / `name` / `baseUrl` / `apiKey` / `model` / `temperature` / `embeddingModel`
+> ⚠️ **2026-10-03 结构调整：一条配置 = 一个提供商 = 一组模型。**
+> 原先「一条配置 = 一个模型」，同一家的多个模型要建多条配置、API Key
+> 重复填。现在改为两级：`LlmConfig`（提供商）持有 `List<ProviderModel>`。
+> 模型级参数（上下文、输出上限、温度）从提供商挪到了模型上。
 
-温度范围 **0–1.5**（`settings_screen.dart:388`），默认 **0.7**（`:335`）。
-注意 `llm_client` 恒定下发 `temperature`，即使值为 0 也会带该字段。
+**`LlmConfig`（提供商）字段**
+
+| 分组 | 字段 |
+|---|---|
+| 基本信息 | `id` / `name` / `baseUrl` / `apiKey` / `userAgent` / `type` |
+| 选项 | `enabled` / `fullUrl` / `responsesApi` / `promptCacheKey` / `multiKey` / `proxy` |
+| 多 Key | `extraKeys` |
+| 模型 | `models` / `defaultChatModel` / `defaultEmbeddingModel` |
+
+**`ProviderModel`（模型）字段**：`name` / `kind` / `contextWindow` /
+`maxOutputTokens` / `temperature`。温度范围 **0–1.5**，默认 **0.7**。
+
+**关键派生属性**
+
+| 属性 | 语义 |
+|---|---|
+| `chatModel` | 取 `defaultChatModel` 指定的；被删掉则回退列表第一个 |
+| `model` | `chatModel?.name ?? ''`（兼容旧调用方） |
+| `embeddingModelName` | 同上，供 RAG 使用 |
+| `ready` | 有 Base URL 且有聊天模型 |
+| `effectiveKeys` | 主 Key + （多 Key 开启时的）备用 Key |
+| `displayName` | name → host → 兜底文案 |
+
+**旧数据迁移**：`fromJson` 里，若没有 `models` 字段，就把根上的
+`model` / `embeddingModel` / `kind` / `contextWindow` / `maxOutputTokens` /
+`temperature` 折成模型条目。已验证三种旧形态（纯聊天、聊天+向量、
+纯向量）都能无损迁移——丢了 embedding 名会导致「AI 不认识导入的资料」。
+
+**`enabled` 取代了旧的单选 `activeId`**：多个提供商可同时启用
+（列表页会显示多个「已启用」徽标），对话使用**列表中第一个已启用的**。
+`ConfigState.activeConfig` 逐级降级（已启用且可用 → 已启用 → 任意一条），
+保证老数据不会因为没人勾选 enabled 而彻底用不了。
+
+**请求地址推导**（`LlmClient.chatUrl` / `embeddingUrl` / `modelsUrl`）
+见 §11.14 —— 完整 URL 模式下有个「端点后缀是两段」的坑。
 
 ---
 
@@ -1301,6 +1337,32 @@ zh-CN-liaoning-XiaobeiNeural  → (zh-CN-liaoning, XiaobeiNeural)
 （UA 污染、帧类型、时间戳格式），但都没有真正打通端到端。
 真正的突破口不是继续读代码，而是**拿官方实现做对照实验**并在失败时
 **把服务端的错误原样解出来**——而不是只看自己的代码哪里可能有问题。
+
+### 11.14 提供商 / 模型两级重构
+
+把「一条配置 = 一个模型」改成「一个提供商 = 一组模型」，
+并落地截图里的三个页面（提供商列表 / 配置 tab / 模型 tab）。
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 71 | **完整 URL 模式推出错误路径** | `_rootOf` 最初只砍最后一段路径，`https://host/v1/chat/completions` → `https://host/v1/chat` → 拼出 `https://host/v1/chat/embeddings`（实测确认） | 端点后缀 `chat/completions` 是**两段**，按已知后缀整体剥离 |
+| 72 | 换模型会导致默认模型漂移 | 原先靠「列表第一个」当默认值，增删模型会让选中项改变 | 新增 `defaultChatModel` / `defaultEmbeddingModel` 显式记录 |
+| 73 | 老数据升级后可能一条都不能用 | 新增 `enabled` 字段，老数据没有该字段 | `fromJson` 默认 `enabled=true`；`activeConfig` 逐级降级兜底 |
+| 74 | 点错「+」会留下空提供商 | 新建即落库，用户直接返回就留一条空记录 | 详情页记录 `_touched`，未填写任何内容时 `dispose` 里删除 |
+| 75 | 模型编辑器输入被键盘遮挡 | 底部表单未随键盘上移 | `viewInsets.bottom` 计入 padding |
+
+**新增/变更文件**：`settings_screen.dart`（三个页面）、
+`tts_settings_screen.dart`（语音设置从模型设置里拆出）、
+`llm_config.dart`（结构重写 + 迁移）、`llm_client.dart`（多 Key 失败切换、
+代理、自定义 UA、缓存键、拉取模型、测试连接）、`providers.dart`（enabled 语义）。
+
+**多 Key 故障切换的边界**：只在「产出任何内容**之前**失败」时切换。
+已吐过字再重试会导致内容重复，那种情况直接抛错。只对 401/402/403/429
+切换——5xx 换 Key 没意义，超时换 Key 也一样超时。
+
+**`Response API（新版）` 与`面板脚本`暂未实现**：前者需要独立的
+Responses 协议栈，后者需要脚本运行时 + 面板渲染，都是独立子系统。
+界面上保留了行但明确标注「暂未支持」，不做成点了没反应的假开关。
 
 ---
 

@@ -1,494 +1,1588 @@
+import 'dart:async';
+
 import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/llm_config.dart';
 import '../providers/providers.dart';
-import '../services/voice_service.dart';
 
-/// 语音播报设置：开关 + 引擎 + 音色 + 语速 + 音量。
-///
-/// 全部写在 shared_preferences，聊天完成后由 ChatNotifier 读取生效。
-class _TtsSettingsCard extends ConsumerStatefulWidget {
-  const _TtsSettingsCard();
-
-  @override
-  ConsumerState<_TtsSettingsCard> createState() => _TtsSettingsCardState();
-}
-
-class _TtsSettingsCardState extends ConsumerState<_TtsSettingsCard> {
-  bool _playing = false;
-
-  Future<void> _preview() async {
-    if (_playing) return;
-    setState(() => _playing = true);
-    try {
-      await ref.read(voiceProvider).speak(
-            '你好，我是 Orion Agent，这是当前的播报音色。',
-            engine: ref.read(ttsEngineProvider),
-            edgeVoice: ref.read(ttsVoiceProvider),
-            rate: ref.read(ttsRateProvider),
-            volume: ref.read(ttsVolumeProvider),
-          );
-    } finally {
-      if (mounted) setState(() => _playing = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final prefs = ref.watch(sharedPreferencesProvider);
-    final on = prefs.getBool('tts_enabled') ?? false;
-    final engine = ref.watch(ttsEngineProvider);
-    final voice = ref.watch(ttsVoiceProvider);
-    final rate = ref.watch(ttsRateProvider);
-    final volume = ref.watch(ttsVolumeProvider);
-    final isEdge = engine == TtsEngine.edge;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Container(
-          margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-          decoration: BoxDecoration(
-            color: surface(context),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: SwitchListTile(
-            title: const Text('语音播报回答',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-            subtitle: Text(
-                isEdge ? '回答完成后用 Edge 在线语音朗读' : '回答完成后用系统语音朗读',
-                style:
-                    TextStyle(fontSize: 12, color: onSurface(context, 0.4))),
-            value: on,
-            onChanged: (v) {
-              prefs.setBool('tts_enabled', v);
-              setState(() {});
-            },
-          ),
-        ),
-        if (on)
-          Container(
-            margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-            decoration: BoxDecoration(
-              color: surface(context),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('语音引擎',
-                    style:
-                        TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                const SizedBox(height: 10),
-                SegmentedButton<TtsEngine>(
-                  segments: const [
-                    ButtonSegment(
-                      value: TtsEngine.edge,
-                      label: Text('Edge 语音'),
-                      icon: Icon(Icons.cloud_outlined, size: 18),
-                    ),
-                    ButtonSegment(
-                      value: TtsEngine.system,
-                      label: Text('系统语音'),
-                      icon: Icon(Icons.phone_android_rounded, size: 18),
-                    ),
-                  ],
-                  selected: {engine},
-                  showSelectedIcon: false,
-                  // SegmentedButton 在某些交互下会给出空集合，直接 s.first 会抛
-                  // StateError；空集合时忽略本次变更，保留原选择。
-                  onSelectionChanged: (s) {
-                    if (s.isEmpty) return;
-                    prefs.setString('tts_engine', s.first.name);
-                    ref.read(ttsEngineProvider.notifier).state = s.first;
-                  },
-                ),
-                if (isEdge) ...[
-                  const SizedBox(height: 16),
-                  const Text('音色',
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: edgeVoices
-                        .map((v) => ChoiceChip(
-                              label: Text(v.label),
-                              selected: v.id == voice,
-                              onSelected: (_) {
-                                prefs.setString('tts_voice', v.id);
-                                ref.read(ttsVoiceProvider.notifier).state = v.id;
-                              },
-                            ))
-                        .toList(),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    voiceLabelOf(voice),
-                    style: TextStyle(
-                        fontSize: 12, color: onSurface(context, 0.4)),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                _slider(
-                  context,
-                  label: '语速',
-                  value: rate,
-                  min: 0.5,
-                  max: 2.0,
-                  divisions: 15,
-                  display: '${rate.toStringAsFixed(1)}x',
-                  onChanged: (v) {
-                    prefs.setDouble('tts_rate', v);
-                    ref.read(ttsRateProvider.notifier).state = v;
-                  },
-                ),
-                _slider(
-                  context,
-                  label: '音量',
-                  value: volume,
-                  min: 0.1,
-                  max: 1.0,
-                  divisions: 9,
-                  display: '${(volume * 100).round()}%',
-                  onChanged: (v) {
-                    prefs.setDouble('tts_volume', v);
-                    ref.read(ttsVolumeProvider.notifier).state = v;
-                  },
-                ),
-                const SizedBox(height: 6),
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: OutlinedButton.icon(
-                    onPressed: _playing ? null : _preview,
-                    icon: Icon(_playing
-                        ? Icons.hourglass_top_rounded
-                        : Icons.play_arrow_rounded,
-                        size: 18),
-                    label: Text(_playing ? '播放中…' : '试听'),
-                  ),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Edge 语音由微软在线合成，无需 API Key；失败时自动回退系统语音。',
-                  style: TextStyle(
-                      fontSize: 12, color: onSurface(context, 0.35)),
-                ),
-              ],
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _slider(
-    BuildContext context, {
-    required String label,
-    required double value,
-    required double min,
-    required double max,
-    required int divisions,
-    required String display,
-    required ValueChanged<double> onChanged,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            Text(label,
-                style:
-                    const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-            const Spacer(),
-            Text(display,
-                style: TextStyle(fontSize: 12, color: onSurface(context, 0.45))),
-          ],
-        ),
-        Slider(
-          // clamp 在 double 上返回 num，需显式转回 double（Slider.value 要求 double）
-          value: value.clamp(min, max).toDouble(),
-          min: min,
-          max: max,
-          divisions: divisions,
-          onChanged: onChanged,
-        ),
-      ],
-    );
-  }
-}
-
+/// 「AI 提供商」列表页：一条卡片一个提供商，点进详情。
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final config = ref.watch(configProvider);
+    final state = ref.watch(configProvider);
+
     return Scaffold(
       appBar: AppBar(
-        title: const Text('模型设置'),
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _editConfig(context, ref, null),
-        icon: const Icon(Icons.add),
-        label: const Text('添加模型服务'),
+        title: const Text('AI 提供商'),
+        actions: [
+          IconButton(
+            tooltip: '添加提供商',
+            icon: const Icon(Icons.add),
+            onPressed: () => _addProvider(context, ref),
+          ),
+        ],
       ),
       body: ListView(
-        padding: const EdgeInsets.only(bottom: 80),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 40),
         children: [
           // 配置持久化失败（Keystore 损坏 / 加密存储初始化失败）时，
           // 不提示的话用户会以为保存成功，重启后才发现配置全丢了。
-          if (config.error != null)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: Card(
-                color: Theme.of(context).colorScheme.errorContainer,
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Row(
-                    children: [
-                      Icon(Icons.warning_amber_rounded,
-                          color: Theme.of(context).colorScheme.onErrorContainer),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          config.error!,
-                          style: TextStyle(
-                              color: Theme.of(context).colorScheme.onErrorContainer),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
+          if (state.error != null) _ErrorBanner(message: state.error!),
+          if (state.configs.isEmpty)
+            const _EmptyProviders()
+          else ...[
+            ...state.configs.map((c) => _ProviderCard(
+                  config: c,
+                  // 「使用中」= activeConfig 选中的那条（第一个已启用且可用）。
+                  // 多选启用是允许的，但一次对话只能用一个提供商。
+                  inUse: c.id == state.usingId,
+                  onTap: () => _openProvider(context, c.id),
+                )),
+            const SizedBox(height: 12),
+            Text(
+              '多个提供商可同时「已启用」，对话使用列表中第一个已启用的那个。',
+              style: TextStyle(fontSize: 12, color: onSurface(context, 0.4)),
             ),
-          const _TtsSettingsCard(),
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
-            child: Text('模型服务',
-                style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w500,
-                    color: onSurface(context, 0.5))),
-          ),
-          if (config.configs.isEmpty)
-            const Center(
-              child: Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  '还没有配置模型服务。\n\n'
-                  '支持任何 OpenAI 兼容接口：\n'
-                  '填入 Base URL、API Key 和模型名即可。',
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            )
-          else
-            ...config.configs.map((c) {
-              final active = c.id == config.activeConfig?.id;
-              return ListTile(
-                leading: Icon(
-                  active ? Icons.radio_button_checked : Icons.radio_button_off,
-                  color: active ? Theme.of(context).colorScheme.primary : null,
-                ),
-                title: Text(c.name.isEmpty ? c.model : c.name),
-                subtitle: Text('${c.model}\n${c.baseUrl}'),
-                isThreeLine: true,
-                onTap: () => ref.read(configProvider.notifier).setActive(c.id),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      icon: const Icon(Icons.edit_outlined),
-                      onPressed: () => _editConfig(context, ref, c),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () =>
-                          ref.read(configProvider.notifier).remove(c.id),
-                    ),
-                  ],
-                ),
-              );
-            }),
+          ],
         ],
       ),
     );
   }
 
-  Future<void> _editConfig(
-      BuildContext context, WidgetRef ref, LlmConfig? existing) async {
-    final nameCtrl = TextEditingController(text: existing?.name ?? '');
-    // 不预填任何 Base URL：预填会让输入法弹出时自动带上「清除」按钮，
-    // 用户第一眼看到的是一段可删的示例文本而不是输入框。
-    final urlCtrl = TextEditingController(text: existing?.baseUrl ?? '');
-    final keyCtrl = TextEditingController(text: existing?.apiKey ?? '');
-    final modelCtrl = TextEditingController(text: existing?.model ?? '');
-    double temperature = existing?.temperature ?? 0.7;
-    var kind = existing?.kind ?? ModelKind.chat;
-    final ctxCtrl = TextEditingController(
-        text: (existing?.contextWindow ?? 0) <= 0 ? '' : '${existing!.contextWindow}');
-    final outCtrl = TextEditingController(
-        text: (existing?.maxOutputTokens ?? 0) <= 0 ? '' : '${existing!.maxOutputTokens}');
+  /// 新建提供商：先落一条空记录再进详情页，让详情页可以「边改边存」。
+  ///
+  /// 用户直接返回、什么都没填时，详情页会把它删掉（见 ProviderScreen）。
+  static Future<void> _addProvider(BuildContext context, WidgetRef ref) async {
+    final c = LlmConfig(
+      id: 'cfg_${DateTime.now().millisecondsSinceEpoch}',
+      name: '',
+      baseUrl: '',
+      apiKey: '',
+    );
+    ref.read(configProvider.notifier).upsert(c);
+    await _openProvider(context, c.id);
+  }
 
-    final saved = await showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      // 表单会随类型切换增减字段，给一个最大高度并允许滚动，
-      // 否则在键盘弹起 + 选了「向量模型」时底部字段会被裁掉。
-      constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.9,
+  static Future<void> _openProvider(BuildContext context, String id) {
+    return Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => ProviderScreen(configId: id)),
+    );
+  }
+}
+
+class _ErrorBanner extends StatelessWidget {
+  const _ErrorBanner({required this.message});
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      color: Theme.of(context).colorScheme.errorContainer,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Icon(Icons.warning_amber_rounded,
+                color: Theme.of(context).colorScheme.onErrorContainer),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(message,
+                  style: TextStyle(
+                      color: Theme.of(context).colorScheme.onErrorContainer)),
+            ),
+          ],
+        ),
       ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => SingleChildScrollView(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 16,
-            bottom: MediaQuery.of(ctx).viewInsets.bottom + 16,
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(existing == null ? '添加模型服务' : '编辑模型服务',
-                  style: Theme.of(ctx).textTheme.titleLarge),
-              const SizedBox(height: 12),
+    );
+  }
+}
 
-              // 模型用途：聊天 / 向量。二者是不同的模型、不同的 API 路径，
-              // 混在一个表单里会让用户不知道该填哪个字段。
-              SegmentedButton<ModelKind>(
-                segments: [
-                  for (final k in ModelKind.values)
-                    ButtonSegment(
-                      value: k,
-                      label: Text(k.label),
-                      icon: Icon(k == ModelKind.chat
-                          ? Icons.chat_bubble_outline
-                          : Icons.gradient),
-                    ),
+class _EmptyProviders extends StatelessWidget {
+  const _EmptyProviders();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 120),
+      child: Column(
+        children: [
+          Icon(Icons.dns_outlined, size: 56, color: onSurface(context, 0.2)),
+          const SizedBox(height: 16),
+          Text('暂无提供商',
+              style: TextStyle(fontSize: 15, color: onSurface(context, 0.6))),
+          const SizedBox(height: 8),
+          Text('点击右上角「+」添加',
+              style: TextStyle(fontSize: 13, color: onSurface(context, 0.4))),
+        ],
+      ),
+    );
+  }
+}
+
+/// 提供商卡片：图标 + 名称 + 类型/模型数徽标 + 已启用徽标 + 箭头。
+class _ProviderCard extends StatelessWidget {
+  const _ProviderCard({
+    required this.config,
+    required this.inUse,
+    required this.onTap,
+  });
+
+  final LlmConfig config;
+  final bool inUse;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Material(
+        color: surface(context),
+        borderRadius: BorderRadius.circular(16),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 14, 8, 14),
+            child: Row(
+              children: [
+                // 提供商图标
+                Container(
+                  width: 46,
+                  height: 46,
+                  decoration: BoxDecoration(
+                    color: primary.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.smart_toy_outlined,
+                      size: 24, color: primary),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        config.displayName,
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          _Badge(text: config.type.label),
+                          const SizedBox(width: 6),
+                          if (config.models.isNotEmpty)
+                            _Badge(text: config.modelCountLabel),
+                          if (!config.ready) ...[
+                            const SizedBox(width: 6),
+                            _Badge(text: '未配置完整', warn: true),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (config.enabled) ...[
+                  const _Badge(text: '已启用', ok: true),
+                  const SizedBox(width: 4),
                 ],
-                selected: {kind},
-                onSelectionChanged: (s) => setSheetState(() => kind = s.first),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                kind.hint,
-                style: TextStyle(
-                    fontSize: 12, color: Theme.of(ctx).colorScheme.outline),
-              ),
-              const SizedBox(height: 12),
+                Icon(Icons.chevron_right,
+                    size: 20, color: onSurface(context, 0.3)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
 
-              TextField(
-                controller: nameCtrl,
-                decoration: const InputDecoration(
-                    labelText: '名称（如 OpenAI、GLM、DeepSeek）'),
-              ),
-              TextField(
-                controller: urlCtrl,
-                decoration: const InputDecoration(
-                    labelText: 'Base URL（OpenAI 兼容，以 /v1 结尾）'),
-              ),
-              TextField(
-                controller: keyCtrl,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: 'API Key'),
-              ),
-              TextField(
-                controller: modelCtrl,
-                decoration: InputDecoration(
-                  labelText: kind == ModelKind.chat
-                      ? '对话模型名（如 gpt-4o-mini、glm-4-flash）'
-                      : '向量模型名（如 text-embedding-3-small、embedding-3）',
-                ),
-              ),
+/// 小徽标（类型 / 模型数 / 已启用 / 未配置完整）。
+class _Badge extends StatelessWidget {
+  const _Badge({required this.text, this.ok = false, this.warn = false});
 
-              // 上下文与输出长度：仅聊天模型有意义（向量模型没有上下文概念）
-              if (kind == ModelKind.chat) ...[
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Expanded(
-                      child: TextField(
-                        controller: ctxCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: '上下文长度（token）',
-                          hintText: '如 128000，留空不限制',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: TextField(
-                        controller: outCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration: const InputDecoration(
-                          labelText: '最大输出（token）',
-                          hintText: '如 4096，留空不限制',
-                        ),
-                      ),
-                    ),
-                  ],
+  final String text;
+  final bool ok;
+  final bool warn;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final Color bg;
+    final Color fg;
+    if (ok) {
+      bg = const Color(0xFFE6F4EA);
+      fg = const Color(0xFF137333);
+    } else if (warn) {
+      bg = const Color(0xFFFEF7E0);
+      fg = const Color(0xFFB06000);
+    } else {
+      bg = onSurface(context, 0.06);
+      fg = onSurface(context, 0.55);
+    }
+    // 深色模式下固定浅底会刺眼，整体压暗一档
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: dark && ok
+            ? scheme.primary.withValues(alpha: 0.18)
+            : (dark && warn
+                ? scheme.tertiary.withValues(alpha: 0.18)
+                : bg),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+            color: dark && ok
+                ? scheme.primary
+                : (dark && warn ? scheme.tertiary : fg)),
+      ),
+    );
+  }
+}
+
+// ============================================================ 提供商详情
+
+/// 提供商详情页：底部「配置 / 模型」两个 tab。
+class ProviderScreen extends ConsumerStatefulWidget {
+  const ProviderScreen({super.key, required this.configId});
+
+  final String configId;
+
+  @override
+  ConsumerState<ProviderScreen> createState() => _ProviderScreenState();
+}
+
+class _ProviderScreenState extends ConsumerState<ProviderScreen>
+    with SingleTickerProviderStateMixin {
+  late final TabController _tabs = TabController(length: 2, vsync: this)
+    ..addListener(() => setState(() {}));
+
+  /// 本页是否真的写入过内容。用于「新建后什么都没填就返回」时清理空记录，
+  /// 否则列表里会慢慢堆积一堆点错产生的空提供商。
+  bool _touched = false;
+
+  @override
+  void dispose() {
+    _cleanupIfEmpty();
+    _tabs.dispose();
+    super.dispose();
+  }
+
+  void _cleanupIfEmpty() {
+    final c = ref.read(configProvider.notifier).byId(widget.configId);
+    if (c == null) return;
+    if (!_touched &&
+        c.name.trim().isEmpty &&
+        c.baseUrl.trim().isEmpty &&
+        c.apiKey.trim().isEmpty &&
+        c.models.isEmpty) {
+      ref.read(configProvider.notifier).remove(widget.configId);
+    }
+  }
+
+  void _markTouched() => _touched = true;
+
+  /// 从 state 里取当前配置；被删掉时返回一条占位，避免各处判空。
+  LlmConfig _findConfig(ConfigState state) {
+    for (final c in state.configs) {
+      if (c.id == widget.configId) return c;
+    }
+    return LlmConfig(
+        id: widget.configId, name: '', baseUrl: '', apiKey: '');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // watch 的是 state 而不是 notifier —— notifier 实例不变，
+    // 只 watch 它不会在配置变化时重建，表单会看起来「点了没反应」。
+    final config = _findConfig(ref.watch(configProvider));
+
+    final isNew = config.name.trim().isEmpty &&
+        config.baseUrl.trim().isEmpty &&
+        config.models.isEmpty;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(isNew ? '添加提供商' : config.displayName),
+        actions: [
+          // tab 0 的「+」＝再建一个提供商（与列表页一致）；
+          // tab 1 的「+」＝给当前提供商添加模型（截图里那句
+          // 「点击右上方按钮添加模型」指的就是它）。
+          IconButton(
+            tooltip: _tabs.index == 0 ? '添加提供商' : '添加模型',
+            icon: const Icon(Icons.add),
+            onPressed: _tabs.index == 0
+                ? () {
+                    _markTouched();
+                    SettingsScreen._addProvider(context, ref);
+                  }
+                : () => _ModelsTabState._addModel(context, ref, config),
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          Expanded(
+            child: TabBarView(
+              controller: _tabs,
+              // 禁止左右滑动切 tab：表单里有横向手势（文本框选词），
+              // 会频繁误触切走。
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                _ConfigTab(
+                  configId: widget.configId,
+                  onChanged: _markTouched,
                 ),
-                Row(
-                  children: [
-                    const Text('温度'),
-                    Expanded(
-                      child: Slider(
-                        value: temperature,
-                        min: 0,
-                        max: 1.5,
-                        divisions: 15,
-                        label: temperature.toStringAsFixed(1),
-                        onChanged: (v) =>
-                            setSheetState(() => temperature = v),
-                      ),
-                    ),
-                  ],
+                _ModelsTab(
+                  configId: widget.configId,
+                  onChanged: _markTouched,
                 ),
               ],
+            ),
+          ),
+          _BottomTabs(controller: _tabs),
+        ],
+      ),
+    );
+  }
+}
 
-              const SizedBox(height: 8),
-              FilledButton(
-                onPressed: () => Navigator.of(ctx).pop(true),
-                child: const Text('保存'),
-              ),
+/// 底部胶囊 tab（配置 / 模型）。
+class _BottomTabs extends StatelessWidget {
+  const _BottomTabs({required this.controller});
+  final TabController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 6, 16, 10),
+        child: Container(
+          height: 58,
+          decoration: BoxDecoration(
+            color: onSurface(context, 0.05),
+            borderRadius: BorderRadius.circular(29),
+          ),
+          child: TabBar(
+            controller: controller,
+            dividerColor: Colors.transparent,
+            indicatorSize: TabBarIndicatorSize.tab,
+            indicator: BoxDecoration(
+              color: scheme.primary.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(24),
+            ),
+            labelColor: scheme.primary,
+            unselectedLabelColor: onSurface(context, 0.6),
+            labelStyle:
+                const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            tabs: const [
+              Tab(icon: Icon(Icons.tune, size: 20), text: '配置'),
+              Tab(icon: Icon(Icons.memory, size: 20), text: '模型'),
             ],
           ),
         ),
       ),
     );
+  }
+}
 
-    if (saved != true) return;
-    if (urlCtrl.text.trim().isEmpty || modelCtrl.text.trim().isEmpty) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Base URL 和模型名不能为空')));
-      }
+// ================================================================ 配置 tab
+
+class _ConfigTab extends ConsumerStatefulWidget {
+  const _ConfigTab({required this.configId, required this.onChanged});
+
+  final String configId;
+  final VoidCallback onChanged;
+
+  @override
+  ConsumerState<_ConfigTab> createState() => _ConfigTabState();
+}
+
+class _ConfigTabState extends ConsumerState<_ConfigTab> {
+  /// 取当前配置；不存在时返回占位，避免各处判空。
+  LlmConfig _find(ConfigState state) {
+    for (final c in state.configs) {
+      if (c.id == widget.configId) return c;
+    }
+    return LlmConfig(
+        id: widget.configId, name: '', baseUrl: '', apiKey: '');
+  }
+
+  late final TextEditingController _name;
+  late final TextEditingController _key;
+  late final TextEditingController _url;
+  late final TextEditingController _ua;
+  bool _obscureKey = true;
+
+  /// 文本输入的防抖：每敲一个字就写一次加密存储太浪费
+  /// （Keystore 写入是平台通道调用），400ms 足够跟手。
+  Timer? _debounce;
+
+  @override
+  void initState() {
+    super.initState();
+    // 不强解包：极端情况下（进页面前配置被删）这里会是 null，
+    // 用空字符串兜底比直接崩掉好。
+    final c = ref.read(configProvider.notifier).byId(widget.configId);
+    _name = TextEditingController(text: c?.name ?? '')
+      ..addListener(_scheduleCommit);
+    _key = TextEditingController(text: c?.apiKey ?? '')
+      ..addListener(_scheduleCommit);
+    _url = TextEditingController(text: c?.baseUrl ?? '')
+      ..addListener(_scheduleCommit);
+    _ua = TextEditingController(text: c?.userAgent ?? '')
+      ..addListener(_scheduleCommit);
+  }
+
+  @override
+  void dispose() {
+    // 防抖未触发就退出时，最后一次输入会丢，这里补一次
+    _debounce?.cancel();
+    _commit();
+    _name.dispose();
+    _key.dispose();
+    _url.dispose();
+    _ua.dispose();
+    super.dispose();
+  }
+
+  void _scheduleCommit() {
+    widget.onChanged();
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), _commit);
+  }
+
+  /// 把当前表单写回 store。
+  ///
+  /// 全部字段一次性提交：分字段提交要各自记住其它字段的当前值，
+  /// 反而更容易漏。
+  void _commit() {
+    if (!mounted) return;
+    final notifier = ref.read(configProvider.notifier);
+    final c = notifier.byId(widget.configId);
+    if (c == null) return;
+    notifier.upsert(c.copyWith(
+      name: _name.text.trim(),
+      apiKey: _key.text.trim(),
+      baseUrl: _url.text.trim(),
+      userAgent: _ua.text.trim(),
+    ));
+  }
+
+  void _patch(LlmConfig Function(LlmConfig) f) {
+    widget.onChanged();
+    final notifier = ref.read(configProvider.notifier);
+    final c = notifier.byId(widget.configId);
+    if (c == null) return;
+    notifier.upsert(f(c));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final config = _find(ref.watch(configProvider));
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        // ---------------- 基本信息 ----------------
+        const _SectionTitle('基本信息'),
+        _Card(
+          children: [
+            _Field(controller: _name, hint: '名称'),
+            _Field(
+              controller: _key,
+              hint: 'API Key',
+              obscure: _obscureKey,
+              suffix: IconButton(
+                icon: Icon(
+                  _obscureKey
+                      ? Icons.visibility_off_outlined
+                      : Icons.visibility_outlined,
+                  size: 20,
+                ),
+                onPressed: () => setState(() => _obscureKey = !_obscureKey),
+              ),
+            ),
+            _Field(controller: _url, hint: 'Base URL'),
+            _Field(controller: _ua, hint: 'User-Agent'),
+            _NavRow(
+              label: '供应商类型',
+              value: config.type.label,
+              onTap: () => _pickType(context, config),
+            ),
+          ],
+        ),
+
+        // ---------------- 选项 ----------------
+        const _SectionTitle('选项'),
+        _Card(
+          children: [
+            _SwitchRow(
+              label: '已启用',
+              value: config.enabled,
+              onChanged: (v) => _patch((c) => c.copyWith(enabled: v)),
+            ),
+            _SwitchRow(
+              label: '完整 URL',
+              subtitle: 'Base URL 即完整请求地址，不自动拼接默认路径',
+              value: config.fullUrl,
+              onChanged: (v) => _patch((c) => c.copyWith(fullUrl: v)),
+            ),
+            const _SwitchRow(
+              label: 'Response API（新版）',
+              subtitle: '暂未支持：需要独立的 Responses 协议栈',
+              value: false,
+              onChanged: null,
+              unsupported: true,
+            ),
+            _SwitchRow(
+              label: 'OpenAI 兼容缓存键',
+              subtitle: '为请求携带 prompt_cache_key 缓存键',
+              value: config.promptCacheKey,
+              onChanged: (v) => _patch((c) => c.copyWith(promptCacheKey: v)),
+            ),
+            _SwitchRow(
+              label: '多 Key 模式',
+              subtitle: '同一提供商下配多个 Key，密钥不可用时自动切换并重发',
+              value: config.multiKey,
+              onChanged: (v) => _patch((c) => c.copyWith(multiKey: v)),
+            ),
+            if (config.multiKey) _KeyList(config: config, onPatch: _patch),
+            _NavRow(
+              label: '网络代理',
+              value: config.proxy.trim().isEmpty ? '未启用' : config.proxy,
+              onTap: () => _editProxy(context, config),
+            ),
+          ],
+        ),
+
+        // ---------------- 自定义面板 ----------------
+        const _SectionTitle('自定义面板（DIY）'),
+        _Card(
+          children: [
+            _NavRow(
+              label: '面板脚本',
+              value: '暂未支持',
+              icon: Icons.folder_outlined,
+              enabled: false,
+              onTap: null,
+            ),
+            _NavRow(
+              label: '测试连接',
+              subtitle: '请求 /models 接口，验证这套配置是否可用',
+              icon: Icons.play_arrow_outlined,
+              onTap: () => _testConnection(context, config),
+            ),
+          ],
+        ),
+
+        if (config.baseUrl.trim().isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(
+              '⚠️ Base URL 为空，无法发起请求。',
+              style: TextStyle(
+                  fontSize: 12, color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        if (config.chatModel == null && config.models.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 12),
+            child: Text(
+              '⚠️ 还没有聊天模型，去「模型」页添加后才能对话。',
+              style: TextStyle(
+                  fontSize: 12, color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Future<void> _pickType(BuildContext context, LlmConfig config) async {
+    final picked = await showModalBottomSheet<ProviderType>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final t in ProviderType.values)
+              ListTile(
+                title: Text(t.label),
+                subtitle: Text(t.hint),
+                trailing: t == config.type
+                    ? Icon(Icons.check,
+                        color: Theme.of(ctx).colorScheme.primary)
+                    : null,
+                onTap: () => Navigator.of(ctx).pop(t),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) _patch((c) => c.copyWith(type: picked));
+  }
+
+  Future<void> _editProxy(BuildContext context, LlmConfig config) async {
+    final ctrl = TextEditingController(text: config.proxy);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('网络代理'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '代理地址',
+                hintText: 'http://127.0.0.1:7890',
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              '留空表示直连。仅对本提供商生效。',
+              style: TextStyle(
+                  fontSize: 12, color: onSurface(ctx, 0.45)),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('取消'),
+          ),
+          if (config.proxy.trim().isNotEmpty)
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('清除'),
+            ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('保存'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    // 「清除」与「保存」都返回 true；靠输入框是否为空区分意图
+    _patch((c) => c.copyWith(proxy: ctrl.text.trim()));
+  }
+
+  Future<void> _testConnection(BuildContext context, LlmConfig config) async {
+    final messenger = ScaffoldMessenger.of(context);
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(child: CircularProgressIndicator()),
+    );
+    String result;
+    try {
+      // 先把表单里的最新值提交，否则用户刚改完 Base URL 就点测试会用到旧值
+      _commit();
+      final fresh =
+          ref.read(configProvider.notifier).byId(widget.configId) ?? config;
+      result = await ref.read(llmClientProvider).testConnection(config: fresh);
+    } catch (e) {
+      result = '连接失败：$e';
+    }
+    if (!context.mounted) return;
+    Navigator.of(context).pop(); // 关掉 loading
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('测试连接'),
+        content: SingleChildScrollView(child: Text(result)),
+        actions: [
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('知道了'),
+          ),
+        ],
+      ),
+    );
+    messenger.hideCurrentSnackBar();
+  }
+}
+
+/// 多 Key 列表：显示备用 Key，可增删。
+class _KeyList extends StatelessWidget {
+  const _KeyList({required this.config, required this.onPatch});
+
+  final LlmConfig config;
+  final void Function(LlmConfig Function(LlmConfig)) onPatch;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (config.extraKeys.isEmpty)
+            Text('还没有备用 Key。第一个 Key 用上面的「API Key」字段填。',
+                style: TextStyle(fontSize: 12, color: onSurface(context, 0.45))),
+          for (var i = 0; i < config.extraKeys.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      // 不完整展示密钥，只露头 6 位 + 尾 4 位
+                      _mask(config.extraKeys[i]),
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: const Icon(Icons.close, size: 18),
+                    onPressed: () => onPatch((c) => c.copyWith(
+                          extraKeys: [
+                            for (var k = 0; k < c.extraKeys.length; k++)
+                              if (k != i) c.extraKeys[k],
+                          ],
+                        )),
+                  ),
+                ],
+              ),
+            ),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('添加备用 Key'),
+              onPressed: () => _add(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _mask(String key) {
+    if (key.length <= 10) return key;
+    return '${key.substring(0, 6)}****${key.substring(key.length - 4)}';
+  }
+
+  Future<void> _add(BuildContext context) async {
+    final ctrl = TextEditingController();
+    final v = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('添加备用 Key'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: 'API Key'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+            child: const Text('添加'),
+          ),
+        ],
+      ),
+    );
+    if (v == null || v.isEmpty) return;
+    if (config.extraKeys.contains(v)) return;
+    onPatch((c) => c.copyWith(extraKeys: [...c.extraKeys, v]));
+  }
+}
+
+// ================================================================ 模型 tab
+
+class _ModelsTab extends ConsumerStatefulWidget {
+  const _ModelsTab({required this.configId, required this.onChanged});
+
+  final String configId;
+  final VoidCallback onChanged;
+
+  @override
+  ConsumerState<_ModelsTab> createState() => _ModelsTabState();
+}
+
+class _ModelsTabState extends ConsumerState<_ModelsTab> {
+  bool _fetching = false;
+
+  LlmConfig _find(ConfigState state) {
+    for (final c in state.configs) {
+      if (c.id == widget.configId) return c;
+    }
+    return LlmConfig(
+        id: widget.configId, name: '', baseUrl: '', apiKey: '');
+  }
+
+  LlmConfig _read() => _find(ref.read(configProvider));
+
+  @override
+  Widget build(BuildContext context) {
+    final config = _find(ref.watch(configProvider));
+    final models = config.models;
+
+    return Column(
+      children: [
+        // 顶部一行：模型 (N) + 拉取模型
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 8, 6),
+          child: Row(
+            children: [
+              Text('模型（${models.length}）',
+                  style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: onSurface(context, 0.75))),
+              const Spacer(),
+              TextButton.icon(
+                onPressed: _fetching ? null : _fetchModels,
+                icon: _fetching
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.cloud_download_outlined, size: 18),
+                label: Text(_fetching ? '拉取中…' : '拉取模型'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: models.isEmpty
+              ? _empty(context)
+              : ListView.builder(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                  itemCount: models.length,
+                  itemBuilder: (ctx, i) => _ModelCard(
+                    model: models[i],
+                    isDefaultChat: models[i].kind == ModelKind.chat &&
+                        models[i].name == config.chatModel?.name,
+                    isDefaultEmbed:
+                        models[i].kind == ModelKind.embedding &&
+                            models[i].name == config.embeddingModel?.name,
+                    onSetDefault: () => _setDefault(models[i]),
+                    onEdit: () => _addModel(context, ref, config,
+                        existing: models[i]),
+                    onDelete: () => _delete(models[i]),
+                  ),
+                ),
+        ),
+      ],
+    );
+  }
+
+  Widget _empty(BuildContext context) => Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 60),
+            Text('暂无模型',
+                style: TextStyle(fontSize: 15, color: onSurface(context, 0.55))),
+            const SizedBox(height: 8),
+            Text('点击右上方按钮添加模型',
+                style: TextStyle(fontSize: 13, color: onSurface(context, 0.4))),
+          ],
+        ),
+      );
+
+  void _setDefault(ProviderModel m) {
+    widget.onChanged();
+    final notifier = ref.read(configProvider.notifier);
+    final c = notifier.byId(widget.configId);
+    if (c == null) return;
+    notifier.upsert(m.kind == ModelKind.chat
+        ? c.copyWith(defaultChatModel: m.name)
+        : c.copyWith(defaultEmbeddingModel: m.name));
+  }
+
+  Future<void> _delete(ProviderModel m) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('删除模型'),
+        content: Text('确定删除「${m.name}」？'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    widget.onChanged();
+    ref.read(configProvider.notifier).removeModel(widget.configId, m.name);
+  }
+
+  /// 拉取模型：请求 /models，让用户勾选要导入的模型。
+  Future<void> _fetchModels() async {
+    final config = _read();
+    if (config.baseUrl.trim().isEmpty) {
+      _toast('请先填写 Base URL');
       return;
     }
-    // token 数解析：留空或非法都按「不限制」处理，不弹错误打断配置流程。
-    int parseTokens(String raw) => int.tryParse(raw.trim()) ?? 0;
+    if (config.effectiveKeys.isEmpty) {
+      _toast('请先填写 API Key');
+      return;
+    }
+    setState(() => _fetching = true);
+    List<String> names;
+    try {
+      names = await ref.read(llmClientProvider).listModels(config: config);
+    } catch (e) {
+      if (mounted) setState(() => _fetching = false);
+      _toast('拉取失败：$e');
+      return;
+    }
+    if (!mounted) return;
+    setState(() => _fetching = false);
 
-    ref.read(configProvider.notifier).upsert(LlmConfig(
-          id: existing?.id ?? 'cfg_${DateTime.now().millisecondsSinceEpoch}',
-          name: nameCtrl.text.trim(),
-          baseUrl: urlCtrl.text.trim(),
-          apiKey: keyCtrl.text.trim(),
-          model: modelCtrl.text.trim(),
-          temperature: temperature,
-          kind: kind,
-          // 向量模型没有「上下文」概念，聊天模型沿用旧字段承载 embedding 名
-          embeddingModel:
-              kind == ModelKind.chat ? existing?.embeddingModel ?? '' : '',
-          contextWindow: kind == ModelKind.chat ? parseTokens(ctxCtrl.text) : 0,
-          maxOutputTokens:
-              kind == ModelKind.chat ? parseTokens(outCtrl.text) : 0,
-        ));
+    // 已存在的模型默认不勾选，避免重复导入
+    final existing = {for (final m in config.models) m.name};
+    final picked = await showDialog<Set<String>>(
+      context: context,
+      builder: (ctx) => _FetchResultDialog(
+        names: names,
+        existing: existing,
+      ),
+    );
+    if (picked == null || picked.isEmpty) return;
+    widget.onChanged();
+    final notifier = ref.read(configProvider.notifier);
+    for (final n in picked) {
+      notifier.addModel(
+        widget.configId,
+        ProviderModel(name: n, kind: _guessKind(n)),
+      );
+    }
+    _toast('已导入 ${picked.length} 个模型');
+  }
+
+  /// 从模型名猜用途。名字里带 embed / bge / rerank 的基本都是向量模型，
+  /// 猜错用户可以在模型详情里改，比一律当成聊天模型好。
+  static ModelKind _guessKind(String name) {
+    final n = name.toLowerCase();
+    if (n.contains('embed') || n.contains('bge') || n.contains('rerank')) {
+      return ModelKind.embedding;
+    }
+    return ModelKind.chat;
+  }
+
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+  /// 拉取结果选择弹窗。
+  static Future<void> _addModel(
+      BuildContext context, WidgetRef ref, LlmConfig config,
+      {ProviderModel? existing}) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _ModelEditorSheet(
+        configId: config.id,
+        existing: existing,
+      ),
+    );
+  }
+}
+
+class _FetchResultDialog extends StatefulWidget {
+  const _FetchResultDialog({required this.names, required this.existing});
+
+  final List<String> names;
+  final Set<String> existing;
+
+  @override
+  State<_FetchResultDialog> createState() => _FetchResultDialogState();
+}
+
+class _FetchResultDialogState extends State<_FetchResultDialog> {
+  late final Set<String> _checked = {
+    // 默认只勾选还没导入过的；已存在的默认不勾，避免重复添加
+    for (final n in widget.names)
+      if (!widget.existing.contains(n)) n,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final all = widget.names;
+    final allChecked = _checked.length == all.length;
+    return AlertDialog(
+      title: Text('发现 ${all.length} 个模型'),
+      content: SizedBox(
+        width: double.maxFinite,
+        height: MediaQuery.of(context).size.height * 0.5,
+        child: Column(
+          children: [
+            Row(
+              children: [
+                TextButton(
+                  onPressed: () => setState(() {
+                    if (allChecked) {
+                      _checked.clear();
+                    } else {
+                      _checked
+                        ..clear()
+                        ..addAll(all);
+                    }
+                  }),
+                  child: Text(allChecked ? '全不选' : '全选'),
+                ),
+                const Spacer(),
+                Text('已选 ${_checked.length}',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.outline)),
+              ],
+            ),
+            Expanded(
+              child: ListView.builder(
+                itemCount: all.length,
+                itemBuilder: (ctx, i) {
+                  final n = all[i];
+                  final exists = widget.existing.contains(n);
+                  return CheckboxListTile(
+                    dense: true,
+                    value: _checked.contains(n),
+                    title: Text(n, style: const TextStyle(fontSize: 14)),
+                    subtitle: exists
+                        ? Text('已添加',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: Theme.of(ctx).colorScheme.outline))
+                        : null,
+                    onChanged: (v) => setState(() {
+                      if (v == true) {
+                        _checked.add(n);
+                      } else {
+                        _checked.remove(n);
+                      }
+                    }),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(_checked),
+          child: const Text('导入'),
+        ),
+      ],
+    );
+  }
+}
+
+class _ModelCard extends StatelessWidget {
+  const _ModelCard({
+    required this.model,
+    required this.isDefaultChat,
+    required this.isDefaultEmbed,
+    required this.onSetDefault,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final ProviderModel model;
+  final bool isDefaultChat;
+  final bool isDefaultEmbed;
+  final VoidCallback onSetDefault;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDefault = isDefaultChat || isDefaultEmbed;
+    final primary = Theme.of(context).colorScheme.primary;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Material(
+        color: surface(context),
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onEdit,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
+            child: Row(
+              children: [
+                Icon(
+                  model.kind == ModelKind.chat
+                      ? Icons.chat_bubble_outline
+                      : Icons.gradient,
+                  size: 20,
+                  color: onSurface(context, 0.5),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(model.name,
+                          style: const TextStyle(
+                              fontSize: 15, fontWeight: FontWeight.w500),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis),
+                      const SizedBox(height: 4),
+                      Text(
+                        '${model.kind.fullLabel} · 上下文 ${model.contextLabel}'
+                        ' · 输出 ${model.maxOutputLabel}',
+                        style: TextStyle(
+                            fontSize: 12, color: onSurface(context, 0.45)),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                if (isDefault)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 4),
+                    child: Text('使用中',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: primary)),
+                  ),
+                PopupMenuButton<String>(
+                  icon: Icon(Icons.more_vert,
+                      size: 20, color: onSurface(context, 0.5)),
+                  onSelected: (v) {
+                    if (v == 'default') onSetDefault();
+                    if (v == 'edit') onEdit();
+                    if (v == 'delete') onDelete();
+                  },
+                  itemBuilder: (_) => [
+                    if (!isDefault)
+                      PopupMenuItem(
+                          value: 'default', child: Text('设为默认模型')),
+                    const PopupMenuItem(value: 'edit', child: Text('编辑')),
+                    const PopupMenuItem(value: 'delete', child: Text('删除')),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 添加 / 编辑模型的底部表单。
+class _ModelEditorSheet extends ConsumerStatefulWidget {
+  const _ModelEditorSheet({required this.configId, this.existing});
+
+  final String configId;
+  final ProviderModel? existing;
+
+  @override
+  ConsumerState<_ModelEditorSheet> createState() => _ModelEditorSheetState();
+}
+
+class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
+  late final TextEditingController _name =
+      TextEditingController(text: widget.existing?.name ?? '');
+  late final TextEditingController _ctx = TextEditingController(
+      text: (widget.existing?.contextWindow ?? 0) <= 0
+          ? ''
+          : '${widget.existing!.contextWindow}');
+  late final TextEditingController _out = TextEditingController(
+      text: (widget.existing?.maxOutputTokens ?? 0) <= 0
+          ? ''
+          : '${widget.existing!.maxOutputTokens}');
+  late ModelKind _kind = widget.existing?.kind ?? ModelKind.chat;
+  late double _temp = widget.existing?.temperature ?? 0.7;
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _ctx.dispose();
+    _out.dispose();
+    super.dispose();
+  }
+
+  void _save() {
+    final name = _name.text.trim();
+    if (name.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('模型名不能为空')));
+      return;
+    }
+    int tok(String s) => int.tryParse(s.trim()) ?? 0;
+    ref.read(configProvider.notifier).addModel(
+          widget.configId,
+          ProviderModel(
+            name: name,
+            kind: _kind,
+            contextWindow: tok(_ctx.text),
+            maxOutputTokens: tok(_out.text),
+            temperature: _temp,
+          ),
+        );
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final editing = widget.existing != null;
+    return Padding(
+      padding: EdgeInsets.only(
+        left: 16,
+        right: 16,
+        top: 16,
+        bottom: MediaQuery.of(context).viewInsets.bottom + 16,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(editing ? '编辑模型' : '添加模型',
+                style: Theme.of(context).textTheme.titleLarge),
+            const SizedBox(height: 14),
+            SegmentedButton<ModelKind>(
+              segments: [
+                for (final k in ModelKind.values)
+                  ButtonSegment(
+                    value: k,
+                    label: Text(k.fullLabel),
+                    icon: Icon(k == ModelKind.chat
+                        ? Icons.chat_bubble_outline
+                        : Icons.gradient),
+                  ),
+              ],
+              selected: {_kind},
+              onSelectionChanged: (s) => setState(() => _kind = s.first),
+            ),
+            const SizedBox(height: 4),
+            Text(_kind.hint,
+                style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.outline)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _name,
+              decoration: const InputDecoration(
+                labelText: '模型名',
+                hintText: '如 gpt-4o-mini、glm-4-flash',
+              ),
+            ),
+            if (_kind == ModelKind.chat) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _ctx,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: '上下文长度',
+                        hintText: '如 128000',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextField(
+                      controller: _out,
+                      keyboardType: TextInputType.number,
+                      decoration: const InputDecoration(
+                        labelText: '最大输出',
+                        hintText: '如 4096',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  const Text('温度'),
+                  Expanded(
+                    child: Slider(
+                      value: _temp,
+                      min: 0,
+                      max: 1.5,
+                      divisions: 15,
+                      label: _temp.toStringAsFixed(1),
+                      onChanged: (v) => setState(() => _temp = v),
+                    ),
+                  ),
+                  Text(_temp.toStringAsFixed(1),
+                      style: TextStyle(
+                          fontSize: 12, color: onSurface(context, 0.6))),
+                ],
+              ),
+            ],
+            const SizedBox(height: 10),
+            FilledButton(
+              onPressed: _save,
+              child: Text(editing ? '保存' : '添加'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ================================================================ 小组件
+
+class _SectionTitle extends StatelessWidget {
+  const _SectionTitle(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 18, 4, 8),
+      child: Text(text,
+          style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+              color: onSurface(context, 0.5))),
+    );
+  }
+}
+
+/// 白色圆角卡片，子项之间用分割线（与设计稿一致：线从文字起点开始）。
+class _Card extends StatelessWidget {
+  const _Card({required this.children});
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: surface(context),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      // 必须裁剪：Container 只画背景不裁子节点，
+      // 没有它 InkWell 的水波纹会在卡片四角露出直角缺口。
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          for (var i = 0; i < children.length; i++) ...[
+            children[i],
+            if (i != children.length - 1)
+              Divider(
+                height: 1,
+                thickness: 0.5,
+                indent: 16,
+                endIndent: 16,
+                color: onSurface(context, 0.07),
+              ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// 文本输入行。用无边框样式贴合设计稿（卡片本身就是输入框的边框）。
+class _Field extends StatelessWidget {
+  const _Field({
+    required this.controller,
+    required this.hint,
+    this.obscure = false,
+    this.suffix,
+  });
+
+  final TextEditingController controller;
+  final String hint;
+  final bool obscure;
+  final Widget? suffix;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 6),
+      child: TextField(
+        controller: controller,
+        obscureText: obscure,
+        decoration: InputDecoration(
+          hintText: hint,
+          suffixIcon: suffix,
+          isDense: true,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+          border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(color: onSurface(context, 0.14)),
+          ),
+          enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(color: onSurface(context, 0.14)),
+          ),
+          focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(10),
+            borderSide: BorderSide(
+                color: Theme.of(context).colorScheme.primary, width: 1.4),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SwitchRow extends StatelessWidget {
+  const _SwitchRow({
+    required this.label,
+    this.subtitle,
+    required this.value,
+    required this.onChanged,
+    this.unsupported = false,
+  });
+
+  final String label;
+  final String? subtitle;
+  final bool value;
+
+  /// null 表示不可交互（暂未支持）。
+  final ValueChanged<bool>? onChanged;
+  final bool unsupported;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = onChanged != null;
+    return SwitchListTile(
+      value: value,
+      onChanged: enabled ? (v) => onChanged!(v) : null,
+      contentPadding: const EdgeInsets.fromLTRB(16, 0, 10, 0),
+      title: Row(
+        children: [
+          Flexible(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w500,
+                color: enabled ? null : onSurface(context, 0.35),
+              ),
+            ),
+          ),
+          if (unsupported) ...[
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: onSurface(context, 0.06),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text('暂未支持',
+                  style: TextStyle(
+                      fontSize: 11, color: onSurface(context, 0.45))),
+            ),
+          ],
+        ],
+      ),
+      subtitle: subtitle == null
+          ? null
+          : Text(subtitle!,
+              style: TextStyle(fontSize: 12, color: onSurface(context, 0.45))),
+    );
+  }
+}
+
+/// 「标签 —— 值 ›」式的可点击行。
+class _NavRow extends StatelessWidget {
+  const _NavRow({
+    required this.label,
+    this.subtitle,
+    this.value,
+    this.icon,
+    required this.onTap,
+    this.enabled = true,
+  });
+
+  final String label;
+  final String? subtitle;
+  final String? value;
+  final IconData? icon;
+  final VoidCallback? onTap;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: enabled ? onTap : null,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+        child: Row(
+          children: [
+            if (icon != null) ...[
+              Icon(icon,
+                  size: 20,
+                  color: enabled
+                      ? onSurface(context, 0.55)
+                      : onSurface(context, 0.25)),
+              const SizedBox(width: 12),
+            ],
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(label,
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        color: enabled ? null : onSurface(context, 0.35),
+                      )),
+                  if (subtitle != null) ...[
+                    const SizedBox(height: 3),
+                    Text(subtitle!,
+                        style: TextStyle(
+                            fontSize: 12, color: onSurface(context, 0.45))),
+                  ],
+                ],
+              ),
+            ),
+            if (value != null)
+              Text(value!,
+                  style: TextStyle(
+                      fontSize: 13,
+                      color: enabled
+                          ? onSurface(context, 0.55)
+                          : onSurface(context, 0.3))),
+            const SizedBox(width: 4),
+            Icon(Icons.chevron_right,
+                size: 20,
+                color: enabled
+                    ? onSurface(context, 0.3)
+                    : onSurface(context, 0.15)),
+          ],
+        ),
+      ),
+    );
   }
 }

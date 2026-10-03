@@ -128,12 +128,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       );
       return;
     }
-    // 向量模型走的是 /embeddings，用它打 /chat/completions 必然失败。
-    // 用户可能只配了向量模型，这时要明确提示而不是让他对着报错发呆。
-    if (cfg.kind != ModelKind.chat) {
+    // 必须有可用的聊天模型才能对话。只配了向量模型时明确提示，
+    // 而不是让用户对着 /chat/completions 的报错发呆。
+    if (cfg.chatModel == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('当前启用的是向量模型，无法用于对话。\n'
-            '请在「我的 → 模型设置」里把默认模型切换为聊天模型。')),
+        const SnackBar(content: Text('当前提供商下没有聊天模型，无法对话。\n'
+            '请到「模型设置 → 该提供商 → 模型」添加一个聊天模型。')),
       );
       return;
     }
@@ -760,12 +760,13 @@ class _ComposerStatusBar extends ConsumerWidget {
     final config = ref.watch(configProvider);
     final active = config.activeConfig;
     final thinking = ref.watch(thinkingProvider);
-    final hasModel = active != null;
+    final hasModel = active?.chatModel != null;
 
-    // 只列聊天模型；向量模型不能用来对话
-    final chatModels = config.configs
-        .where((c) => c.kind == ModelKind.chat)
-        .toList(growable: false);
+    // 模型选择器列出**同一提供商**下的聊天模型。
+    // 换模型不应要求用户去改「当前提供商」，所以这里不再按提供商过滤，
+    // 而是在当前提供商的模型列表里选。
+    final chatModels =
+        active?.chatModels ?? const <ProviderModel>[];
 
     final textColor = hasModel
         ? onSurface(context, 0.6)
@@ -799,9 +800,10 @@ class _ComposerStatusBar extends ConsumerWidget {
             Expanded(
               child: _ModelPicker(
                 models: chatModels,
-                activeId: active.id,
-                onChanged: (id) =>
-                    ref.read(configProvider.notifier).setActive(id),
+                activeName: active!.chatModel!.name,
+                onChanged: (name) => ref
+                    .read(configProvider.notifier)
+                    .upsert(active.copyWith(defaultChatModel: name)),
               ),
             )
           else
@@ -814,12 +816,12 @@ class _ComposerStatusBar extends ConsumerWidget {
             ),
           const SizedBox(width: 8),
 
-          // 上下文长度
-          if (active != null)
+          // 上下文长度（挂在模型上，所以读当前聊天模型的值）
+          if (hasModel)
             Text(
-              active.contextWindow <= 0
+              (active!.chatModel!.contextWindow) <= 0
                   ? '上下文 不限制'
-                  : '上下文 ${_compactTokens(active.contextWindow)}',
+                  : '上下文 ${_compactTokens(active.chatModel!.contextWindow)}',
               style: TextStyle(fontSize: 11, color: textColor),
             ),
         ],
@@ -883,12 +885,12 @@ class _MiniChip extends StatelessWidget {
 class _ModelPicker extends StatelessWidget {
   const _ModelPicker({
     required this.models,
-    required this.activeId,
+    required this.activeName,
     required this.onChanged,
   });
 
-  final List<LlmConfig> models;
-  final String activeId;
+  final List<ProviderModel> models;
+  final String activeName;
   final ValueChanged<String> onChanged;
 
   @override
@@ -896,14 +898,17 @@ class _ModelPicker extends StatelessWidget {
     if (models.length <= 1) {
       final only = models.isEmpty ? null : models.first;
       return Text(
-        only == null ? '' : only.name.isEmpty ? only.model : only.name,
+        only?.name ?? '',
         style: TextStyle(fontSize: 12, color: onSurface(context, 0.6)),
         overflow: TextOverflow.ellipsis,
       );
     }
     return DropdownButtonHideUnderline(
       child: DropdownButton<String>(
-        value: models.any((m) => m.id == activeId) ? activeId : models.first.id,
+        // 选中的模型若已被删除，退回列表第一个，避免 Dropdown 断言失败
+        value: models.any((m) => m.name == activeName)
+            ? activeName
+            : models.first.name,
         isDense: true,
         isExpanded: true,
         icon: Icon(Icons.expand_more, size: 16, color: onSurface(context, 0.4)),
@@ -911,11 +916,8 @@ class _ModelPicker extends StatelessWidget {
         items: [
           for (final m in models)
             DropdownMenuItem(
-              value: m.id,
-              child: Text(
-                m.name.isEmpty ? m.model : m.name,
-                overflow: TextOverflow.ellipsis,
-              ),
+              value: m.name,
+              child: Text(m.name, overflow: TextOverflow.ellipsis),
             ),
         ],
         onChanged: (v) {

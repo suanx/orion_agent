@@ -183,24 +183,42 @@ final terminalServiceProvider =
 
 class ConfigState {
   final List<LlmConfig> configs;
+
+  /// 旧版单选「当前使用的配置」。新结构改为每条配置自带 `enabled`，
+  /// 保留该字段只是为了兼容读取老的 shared_preferences，不再作为唯一依据。
   final String activeId;
+
   /// 持久化失败等一次性提示。为 null 表示无错误。
   final String? error;
 
   const ConfigState({
     required this.configs,
-    required this.activeId,
+    this.activeId = '',
     this.error,
   });
 
+  /// 实际用于对话的配置。
+  ///
+  /// 规则：**第一个「已启用且可用」的配置**。多选启用是允许的
+  /// （列表页就是多个「已启用」徽标），但一次对话只能用一个提供商，
+  /// 所以取列表顺序里的第一个。
+  ///
+  /// 逐级降级，保证老数据不会因为没人勾选 enabled 而彻底用不了：
+  /// 已启用且可用 → 已启用 → 任意一条 → null。
   LlmConfig? get activeConfig {
     for (final c in configs) {
-      if (c.id == activeId) return c;
+      if (c.enabled && c.ready) return c;
+    }
+    for (final c in configs) {
+      if (c.enabled) return c;
     }
     return configs.isEmpty ? null : configs.first;
   }
 
-  /// error 为 null 时默认保留原值；传clearError 显式清除。
+  /// 正在使用的提供商 id（列表页标「使用中」用）。无可用时为 null。
+  String? get usingId => activeConfig?.id;
+
+  /// error 为 null 时默认保留原值；传 clearError 显式清除。
   ConfigState copyWith({
     List<LlmConfig>? configs,
     String? activeId,
@@ -215,10 +233,10 @@ class ConfigState {
 }
 
 /// 配置存两处：配置 JSON（含 API Key）进 flutter_secure_storage
-/// （Keychain/Keystore 加密），activeId 进 shared_preferences。
+/// （Keychain/Keystore 加密），activeId 进 shared_preferences（仅兼容旧版）。
 class ConfigNotifier extends StateNotifier<ConfigState> {
   ConfigNotifier(this._prefs, this._secure)
-      : super(const ConfigState(configs: [], activeId: '')) {
+      : super(const ConfigState(configs: [])) {
     _load();
   }
 
@@ -261,7 +279,10 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     if (!mounted) return;
     // 用户已在加载期间改过配置 → 不能用旧数据覆盖
     if (_localTouched) return;
-    state = ConfigState(configs: list, activeId: _prefs.getString(_kActive) ?? '');
+    state = ConfigState(
+      configs: list,
+      activeId: _prefs.getString(_kActive) ?? '',
+    );
   }
 
   /// 串行化持久化，避免并发写同一 key 时旧快照覆盖新值。
@@ -311,6 +332,14 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     _schedulePersist();
   }
 
+  /// 就地替换某条配置（按 id）。
+  LlmConfig? byId(String id) {
+    for (final c in state.configs) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
   void remove(String id) {
     _localTouched = true;
     final list = state.configs.where((c) => c.id != id).toList();
@@ -321,10 +350,47 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     _schedulePersist();
   }
 
-  void setActive(String id) {
+  /// 启用 / 停用某条配置（列表页的「已启用」开关）。
+  void setEnabled(String id, bool enabled) {
     _localTouched = true;
-    state = state.copyWith(activeId: id);
+    final list = [
+      for (final c in state.configs)
+        c.id == id ? c.copyWith(enabled: enabled) : c,
+    ];
+    state = state.copyWith(configs: list);
     _schedulePersist();
+  }
+
+  /// 覆盖某条配置的模型列表（「拉取模型」用）。
+  void setModels(String id, List<ProviderModel> models) {
+    final c = byId(id);
+    if (c == null) return;
+    upsert(c.copyWith(models: models));
+  }
+
+  /// 往某条配置里追加模型（已存在同名则替换）。
+  void addModel(String id, ProviderModel model) {
+    final c = byId(id);
+    if (c == null) return;
+    final list = [...c.models];
+    final idx = list.indexWhere((m) => m.name == model.name);
+    if (idx >= 0) {
+      list[idx] = model;
+    } else {
+      list.add(model);
+    }
+    upsert(c.copyWith(models: list));
+  }
+
+  void removeModel(String id, String modelName) {
+    final c = byId(id);
+    if (c == null) return;
+    upsert(c.copyWith(
+      models: [
+        for (final m in c.models)
+          if (m.name != modelName) m,
+      ],
+    ));
   }
 }
 
@@ -558,7 +624,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     // 发送前自动检索知识库（未配置 embedding 模型或检索失败时静默跳过）
     var knowledge = const <RagHit>[];
-    if (config.embeddingModel.trim().isNotEmpty) {
+    if (config.embeddingModelName.trim().isNotEmpty) {
       try {
         knowledge = await _rag.search(
           query: content,
