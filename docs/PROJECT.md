@@ -1110,6 +1110,29 @@ class ToolCall {
 > ⚠️ 结构性改动用「按内容匹配」，不要用「按行号切片」——
 > run #8 的 4 个 error 就是这么来的。
 
+### 11.10 代码审查发现并修复的缺陷（2026-10-03）
+
+打包前对全部未提交改动做了一轮静态审查，发现 9 个问题，均已修复：
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 48 | **drift 编译不过** | `TokenUsageRows` 没注册进 `@DriftDatabase(tables: [...])`，drift 不会生成 `tokenUsageRows` getter 与 Companion | `database.dart` 补上表声明 |
+| 49 | **proot 路径指向共享库** | `_prootPath = target.path` 写在 `for` 循环内，最终值是字典最后一个键（`libtalloc.so`）的路径 | 移到循环外，显式指向 `proot` |
+| 50 | 源码含裸 NUL 字节 | 分桶键用 `'$provider\0$model'` 拼接，git 把文件当二进制、diff 与审查工具全失效 | 改用 Record 作键，彻底不用分隔符 |
+| 51 | `chmod` 找不到 | `Process.run('chmod', ...)` 依赖 PATH，Android 上会抛 `ProcessException` 而非返回非 0 退出码 | 改用绝对路径 `/system/bin/chmod`，权限降到 755 |
+| 52 | **清空统计会崩** | 确认对话框弹出期间用户返回页面，`_load()` 里的 `setState` 抛 after-dispose | `_load()` 开头加 `mounted` 守卫 |
+| 53 | **安装中退出会崩** | `_checkTools` 开头无 `mounted` 检查，而安装过程长达 20 分钟 | 同上 |
+| 54 | 向量模型被当聊天模型用 | 发送守卫只查 `activeConfig == null`，没查 `kind`，只配向量模型时会去打 `/chat/completions` | 守卫加 `kind != ModelKind.chat` 分支 |
+| 55 | 思考开关重启丢失 | provider 从 prefs 读初值，但切换时只改内存不落盘 | 切换时 `setBool` 写回 |
+| 56 | 建议语在点按时换掉 | 随机抽样写在 `build()` 里，流式输出时每个 delta 都重抽 | 改为 `StatefulWidget`，`initState` 抽一次 |
+| 57 | 卡片水波纹露角 | `Container` 只画背景不裁子节点 | 加 `clipBehavior: Clip.antiAlias` |
+| 58 | usage 统计偏小 | `if (rawUsage is Map && usage == null)` 只取第一帧，但部分网关每帧都下发累计值 | 去掉守卫，取最后一帧 |
+| 59 | 本地 `flutter test` 失败 | `pubspec.yaml` 声明的 proot asset 本地不存在 | 仓库内放占位文件，CI 构建时用真实二进制覆盖 |
+
+> 💡 #48 与 #49 是**阻断性**的：前者会让 CI 三步全红，后者让终端功能
+> 100% 不可用。这两个都是「analyze 查不出来」的问题——本地无 Flutter SDK、
+> 依赖解析不了，只能靠逐行审查发现。
+
 ---
 
 ## 12. 待修复的问题
