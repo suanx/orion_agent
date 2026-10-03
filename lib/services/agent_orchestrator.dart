@@ -42,6 +42,14 @@ class AgentToolDone extends AgentEvent {
   const AgentToolDone(this.toolName, this.result);
 }
 
+/// 一次 LLM 调用的真实 token 用量（转发自 llm_client 的 TokenUsage，
+/// 转发原因：TokenUsage 是 LlmEvent，不满足 AgentEvent 流的类型约束）。
+class AgentTokenUsage extends AgentEvent {
+  final int promptTokens;
+  final int completionTokens;
+  const AgentTokenUsage(this.promptTokens, this.completionTokens);
+}
+
 /// 最终回答（不含工具调用的 assistant 消息）。
 class AgentAnswer extends AgentEvent {
   final ChatMessage message;
@@ -134,8 +142,10 @@ class AgentOrchestrator {
               outputTokens: ev.completionTokens,
               cachedTokens: ev.cachedTokens,
             );
-            // 转发给 UI 层（对话页的用量弹窗按会话累计展示）
-            yield ev;
+            // 转发给 UI 层（对话页的用量弹窗按会话累计展示）。
+            // TokenUsage 是 LlmEvent 不是 AgentEvent，不能直接 yield，
+            // 用 AgentTokenUsage 包装（providers 侧按此类型累计）。
+            yield AgentTokenUsage(ev.promptTokens, ev.completionTokens);
           }
         }
       } on DioException catch (e) {

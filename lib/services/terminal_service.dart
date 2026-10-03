@@ -157,40 +157,6 @@ class TerminalService {
     }
   }
 
-  /// proot 所在目录与可执行文件路径。
-  ///
-  /// proot 五件套（见 [prootPath] 的部署演变说明与 vendor/proot/README.md）。
-  ///
-  /// 注意 DT_NEEDED 是 `libtalloc.so`（无 .2 后缀）——这是 vendored
-  /// proot 的构建特性，库文件名必须与之一致，改名即链接失败。
-  static const _prootLibs = [
-    'libproot.so',
-    'libproot-loader.so',
-    'libproot-loader32.so',
-    'libtalloc.so',
-    'libandroid-shmem.so',
-  ];
-
-  static const _systemChannel = MethodChannel('orion_agent/system');
-
-  String? _libDir;
-  String? _prootPath;
-
-  /// proot 全套所在的目录（nativeLibraryDir）。
-  Future<String> prootLibDir() async {
-    if (_libDir != null) return _libDir!;
-    String dir;
-    try {
-      dir = await _systemChannel.invokeMethod<String>('nativeLibDir') ?? '';
-    } catch (e) {
-      throw Exception('无法获取 nativeLibraryDir（$e）。');
-    }
-    if (dir.isEmpty) {
-      throw Exception('nativeLibraryDir 为空：APK 可能未正确打包 native 库。');
-    }
-    return _libDir = dir;
-  }
-
   /// proot 可执行文件路径（**双路解析**）。
   ///
   /// ⚠️ 部署方式的演变（四个坑都踩过）：

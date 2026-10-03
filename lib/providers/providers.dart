@@ -832,7 +832,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
               : ev.result;
           state = state.copyWith(
               steps: [...state.steps, '🔧 ${ev.toolName} → $brief']);
-        } else if (ev is TokenUsage) {
+        } else if (ev is AgentTokenUsage) {
           _bumpUsage(sessionId, 0, ev.promptTokens);
           _bumpUsage(sessionId, 1, ev.completionTokens);
         } else if (ev is AgentAnswer) {
