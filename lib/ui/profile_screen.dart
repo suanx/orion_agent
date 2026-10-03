@@ -49,6 +49,16 @@ class ProfileScreen extends ConsumerWidget {
         _Group(
           title: 'AI 配置',
           children: [
+            // 登录：为后续后端账号体系预留的入口，当前仅占位提示，
+            // 不做成点了没反应的假功能。
+            _Row(
+              icon: Icons.login_rounded,
+              label: '登录',
+              value: '暂未开放',
+              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('登录功能即将上线，敬请期待')),
+              ),
+            ),
             _Row(
               icon: Icons.cloud_outlined,
               label: 'AI 提供商',
@@ -71,11 +81,7 @@ class ProfileScreen extends ConsumerWidget {
             _Row(
               icon: Icons.record_voice_over_outlined,
               label: '语音播报',
-              value: (ref.watch(sharedPreferencesProvider)
-                          .getBool('tts_enabled') ??
-                      false)
-                  ? '已开启'
-                  : '已关闭',
+              value: ref.watch(ttsEnabledProvider) ? '已开启' : '已关闭',
               onTap: () => _push(context, const TtsSettingsScreen()),
             ),
             _Row(

@@ -427,8 +427,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           onAddImage: _addImage,
           onMic: _toggleMic,
         ),
-        const SizedBox(height: 72), // 给磨砂底导航留出空间
+        // 朗读开关：消息框最下边，控制回答完成后是否自动朗读（Edge TTS）。
+        // 与「语音播报」设置页的总开关是同一个状态（ttsEnabledProvider）。
+        const _TtsToggleBar(),
+        const SizedBox(height: 60), // 给磨砂底导航留出空间
       ],
+    );
+  }
+}
+
+/// 输入框下方的朗读开关。
+///
+/// 切换必须同时写 provider 与 prefs：provider 初值从 prefs 读，
+/// 不落盘的话重启后会弹回旧值。
+class _TtsToggleBar extends ConsumerWidget {
+  const _TtsToggleBar();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final on = ref.watch(ttsEnabledProvider);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: _MiniChip(
+          icon: on ? Icons.volume_up_rounded : Icons.volume_off_outlined,
+          label: on ? '朗读开' : '朗读关',
+          enabled: true,
+          onTap: () {
+            final next = !on;
+            ref.read(ttsEnabledProvider.notifier).state = next;
+            unawaited(ref
+                .read(sharedPreferencesProvider)
+                .setBool('tts_enabled', next));
+          },
+        ),
+      ),
     );
   }
 }

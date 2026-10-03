@@ -89,10 +89,23 @@ final notificationServiceProvider =
     Provider<NotificationService>((ref) => NotificationService());
 
 /// 当前语音合成引擎（edge = 免 Key 在线合成，system = 系统 TTS）。
+///
+/// ⚠️ 设置页已移除「系统语音」选项，朗读统一走 Edge TTS（系统 TTS 只作为
+/// Edge 失败时的自动回退，见 VoiceService.speak）。provider 保留仅为兼容
+/// 旧 prefs 数据，不再有 UI 入口写入 'system'。
 final ttsEngineProvider = StateProvider<TtsEngine>((ref) {
   return ref.watch(sharedPreferencesProvider).getString('tts_engine') == 'system'
       ? TtsEngine.system
       : TtsEngine.edge;
+});
+
+/// 语音播报总开关：回答完成后是否自动朗读。
+///
+/// 两处可切换：语音播报设置页的总开关、聊天输入框下方的朗读图标。
+/// 都必须同时写 provider 与 prefs（provider 初值从 prefs 读，
+/// 不落盘重启后会弹回）。
+final ttsEnabledProvider = StateProvider<bool>((ref) {
+  return ref.watch(sharedPreferencesProvider).getBool('tts_enabled') ?? false;
 });
 
 /// Edge TTS 音色 id。
@@ -775,8 +788,7 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     rag: ref.watch(ragServiceProvider),
     llm: ref.watch(llmClientProvider),
     voice: ref.watch(voiceProvider),
-    ttsEnabled: () =>
-        ref.read(sharedPreferencesProvider).getBool('tts_enabled') ?? false,
+    ttsEnabled: () => ref.read(ttsEnabledProvider),
     getPersona: () {
       final id = ref.read(activeRoleIdProvider);
       return ref.read(roleServiceProvider).promptOf(id) ?? '';

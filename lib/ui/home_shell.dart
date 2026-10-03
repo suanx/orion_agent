@@ -114,7 +114,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       // 状态栏那条区域也是它在画；用 surface 会出现「状态栏纯白 + 页面灰白」
       // 的色差带，看起来就像一条边。
       backgroundColor: scaffoldBg(context),
-      drawer: const SessionDrawer(),
+      drawer: SessionDrawer(
+        // 抽屉底部「设置」图标直达「我的」Tab
+        onGoTab: (t) {
+          if (t != _tab) setState(() => _tab = t);
+        },
+      ),
       extendBody: true,
       // 不设 resizeToAvoidBottomInsets：当前 Flutter stable 已移除该参数
       // （设了会编译失败）。改为整体不依赖 Scaffold 的避让——

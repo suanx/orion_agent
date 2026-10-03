@@ -50,9 +50,10 @@ class _TtsSettingsCardState extends ConsumerState<TtsSettingsCard> {
       _error = null;
     });
     try {
+      // 系统语音选项已移除，统一 Edge TTS（失败时仍自动回退系统语音）。
       await ref.read(voiceProvider).speak(
             '你好，我是 Orion Agent，这是当前的播报音色。',
-            engine: ref.read(ttsEngineProvider),
+            engine: TtsEngine.edge,
             edgeVoice: ref.read(ttsVoiceProvider),
             rate: ref.read(ttsRateProvider),
             volume: ref.read(ttsVolumeProvider),
@@ -70,12 +71,10 @@ class _TtsSettingsCardState extends ConsumerState<TtsSettingsCard> {
   @override
   Widget build(BuildContext context) {
     final prefs = ref.watch(sharedPreferencesProvider);
-    final on = prefs.getBool('tts_enabled') ?? false;
-    final engine = ref.watch(ttsEngineProvider);
+    final on = ref.watch(ttsEnabledProvider);
     final voice = ref.watch(ttsVoiceProvider);
     final rate = ref.watch(ttsRateProvider);
     final volume = ref.watch(ttsVolumeProvider);
-    final isEdge = engine == TtsEngine.edge;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -90,12 +89,14 @@ class _TtsSettingsCardState extends ConsumerState<TtsSettingsCard> {
             title: const Text('语音播报回答',
                 style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
             subtitle: Text(
-                isEdge ? '回答完成后用 Edge 在线语音朗读' : '回答完成后用系统语音朗读',
+                '回答完成后用 Edge 在线语音朗读（失败时自动回退系统语音）',
                 style:
                     TextStyle(fontSize: 12, color: onSurface(context, 0.4))),
             value: on,
             onChanged: (v) {
               prefs.setBool('tts_enabled', v);
+              // 同步 provider：聊天输入框下方的朗读开关与这里共用状态
+              ref.read(ttsEnabledProvider.notifier).state = v;
               setState(() {});
             },
           ),
@@ -111,40 +112,13 @@ class _TtsSettingsCardState extends ConsumerState<TtsSettingsCard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('语音引擎',
-                    style:
-                        TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
-                const SizedBox(height: 10),
-                SegmentedButton<TtsEngine>(
-                  segments: const [
-                    ButtonSegment(
-                      value: TtsEngine.edge,
-                      label: Text('Edge 语音'),
-                      icon: Icon(Icons.cloud_outlined, size: 18),
-                    ),
-                    ButtonSegment(
-                      value: TtsEngine.system,
-                      label: Text('系统语音'),
-                      icon: Icon(Icons.phone_android_rounded, size: 18),
-                    ),
-                  ],
-                  selected: {engine},
-                  showSelectedIcon: false,
-                  // SegmentedButton 在某些交互下会给出空集合，直接 s.first 会抛
-                  // StateError；空集合时忽略本次变更，保留原选择。
-                  onSelectionChanged: (s) {
-                    if (s.isEmpty) return;
-                    prefs.setString('tts_engine', s.first.name);
-                    ref.read(ttsEngineProvider.notifier).state = s.first;
-                  },
-                ),
-                if (isEdge) ...[
-                  const SizedBox(height: 16),
-                  const Text('音色',
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w500)),
-                  const SizedBox(height: 8),
-                  Wrap(
+                // 「系统语音」选项已移除：朗读统一走 Edge TTS，
+                // 系统 TTS 只在 Edge 失败时作为自动回退（见 VoiceService）。
+                const Text('音色',
+                    style: TextStyle(
+                        fontSize: 13, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 8),
+                Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: edgeVoices
@@ -164,7 +138,6 @@ class _TtsSettingsCardState extends ConsumerState<TtsSettingsCard> {
                     style: TextStyle(
                         fontSize: 12, color: onSurface(context, 0.4)),
                   ),
-                ],
                 const SizedBox(height: 16),
                 _slider(
                   context,

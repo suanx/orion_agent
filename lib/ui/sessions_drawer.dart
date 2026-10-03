@@ -3,10 +3,17 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import 'memory_screen.dart';
+import 'token_stats_screen.dart';
 
 /// 抽屉：会话历史（Marvis 风格：大标题 + 浅灰圆角新建按钮 + 列表）。
+///
+/// [onGoTab]：点击快捷入口需要切到主 Tab（如「设置」直达「我的」）时回调，
+/// 由 HomeShell 提供切换逻辑；为 null 时该入口隐藏。
 class SessionDrawer extends ConsumerWidget {
-  const SessionDrawer({super.key});
+  const SessionDrawer({super.key, this.onGoTab});
+
+  final ValueChanged<int>? onGoTab;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -25,7 +32,7 @@ class SessionDrawer extends ConsumerWidget {
                 padding: EdgeInsets.fromLTRB(4, 24, 0, 16),
                 child: Text(
                   'Orion Agent',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w600),
+                  style: TextStyle(fontSize: 21, fontWeight: FontWeight.w600),
                 ),
               ),
               SizedBox(
@@ -100,9 +107,59 @@ class SessionDrawer extends ConsumerWidget {
                         },
                       ),
               ),
+              // ------- 底部快捷入口：设置 / 记忆 / Token 统计 -------
+              if (onGoTab != null) _QuickActions(onGoTab: onGoTab!),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// 抽屉底部的三个快捷图标，并排一行。
+class _QuickActions extends StatelessWidget {
+  const _QuickActions({required this.onGoTab});
+
+  final ValueChanged<int> onGoTab;
+
+  @override
+  Widget build(BuildContext context) {
+    final tint = onSurface(context, 0.55);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 8, 4, 10),
+      child: Row(
+        children: [
+          Expanded(
+            child: IconButton(
+              tooltip: '设置（我的）',
+              icon: Icon(Icons.settings_outlined, size: 24, color: tint),
+              onPressed: () {
+                Navigator.of(context).pop();
+                onGoTab(3); // Tab 顺序与 HomeShell 保持一致：我的
+              },
+            ),
+          ),
+          Expanded(
+            child: IconButton(
+              tooltip: '长期记忆',
+              icon: Icon(Icons.lightbulb_outline_rounded, size: 24, color: tint),
+              onPressed: () => Navigator.of(context)
+                ..pop()
+                ..push(MaterialPageRoute(builder: (_) => const MemoryScreen())),
+            ),
+          ),
+          Expanded(
+            child: IconButton(
+              tooltip: 'Token 统计',
+              icon: Icon(Icons.insights_outlined, size: 24, color: tint),
+              onPressed: () => Navigator.of(context)
+                ..pop()
+                ..push(
+                    MaterialPageRoute(builder: (_) => const TokenStatsScreen())),
+            ),
+          ),
+        ],
       ),
     );
   }
