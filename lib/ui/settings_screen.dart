@@ -597,7 +597,6 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
         title: const Text('提供商类型'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -982,15 +981,13 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
   static Future<void> _addModel(
       BuildContext context, WidgetRef ref, LlmConfig config,
       {ProviderModel? existing}) {
+    // showGlassDialog 已做紧凑居中（inset + maxWidth 400），
+    // 模型编辑表单不再包一层 Dialog。
     return showGlassDialog<void>(
       context: context,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.transparent,
-        // 表单内容无自带限宽，交给 Dialog 默认 inset 撑出安全宽度
-        child: _ModelEditorSheet(
-          configId: config.id,
-          existing: existing,
-        ),
+      builder: (_) => _ModelEditorSheet(
+        configId: config.id,
+        existing: existing,
       ),
     );
   }

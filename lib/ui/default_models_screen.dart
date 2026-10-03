@@ -144,15 +144,11 @@ class DefaultModelsScreen extends ConsumerWidget {
 
     await showGlassDialog<void>(
       context: context,
-      builder: (ctx) => Dialog(
-        backgroundColor: Colors.transparent,
-        insetPadding: EdgeInsets.zero,
-        child: _ModelPickerSheet(
-          title: item.label,
-          prefsKey: item.keyName,
-          models: models,
-          providerName: config?.displayName ?? '',
-        ),
+      builder: (ctx) => _ModelPickerSheet(
+        title: item.label,
+        prefsKey: item.keyName,
+        models: models,
+        providerName: config?.displayName ?? '',
       ),
     );
   }

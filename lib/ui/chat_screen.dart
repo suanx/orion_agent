@@ -53,8 +53,12 @@ void _showImageViewer(BuildContext context, String dataUrl) {
         .showSnackBar(const SnackBar(content: Text('图片数据已损坏，无法显示')));
     return;
   }
-  showGlassDialog(
+  // 图片查看器保持原生全屏（黑色背景 + 双指缩放）。
+  // 不走 showGlassDialog：那是「选项/信息」弹窗的玻璃样式，
+  // 限宽 400 会把看图体验裁坏；查看器不属于「弹窗选项」范畴。
+  showDialog<void>(
     context: context,
+    barrierColor: Colors.black87,
     builder: (_) => Dialog.fullscreen(
       backgroundColor: Colors.black,
       child: InteractiveViewer(
@@ -196,11 +200,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  /// 居中弹窗选择当前聊天模型。
+  /// 弹出模型选择——锚定在输入栏调音图标上方的浮层。
   ///
   /// 模型列表来自当前提供商的 chatModels；选择写入 defaultChatModel。
   /// 未配置模型时此入口在输入栏不可点（图标置灰），这里再兜底一次。
-  Future<void> _pickModel() async {
+  Future<void> _pickModel(BuildContext anchor) async {
     final active = ref.read(configProvider).activeConfig;
     final models = active?.chatModels ?? const <ProviderModel>[];
     if (active == null || active.chatModel == null || models.isEmpty) {
@@ -209,41 +213,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
     final current = active.chatModel!.name;
-    final sel = await showGlassDialog<String>(
+    final sel = await showGlassAnchoredMenu<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.transparent,
-        title: const Text('选择模型'),
-        content: ConstrainedBox(
-          constraints: const BoxConstraints(maxHeight: 420, maxWidth: 320),
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (final m in models)
-                  ListTile(
-                    dense: true,
-                    title: Text(m.name,
-                        style: const TextStyle(fontSize: 14.5)),
-                    subtitle: m.contextWindow > 0
-                        ? Text(
-                            // _compactTokens 定义在 _ComposerStatusBar 里
-                            //（同类私有静态，同文件可直接引用）
-                            '上下文 ${_ComposerStatusBar._compactTokens(m.contextWindow)}',
-                            style: const TextStyle(fontSize: 11.5))
-                        : null,
-                    trailing: m.name == current
-                        ? Icon(Icons.check_rounded,
-                            size: 20,
-                            color: Theme.of(context).colorScheme.primary)
-                        : null,
-                    onTap: () => Navigator.pop(ctx, m.name),
-                  ),
-              ],
-            ),
+      anchor: anchor,
+      width: 300,
+      options: [
+        for (final m in models)
+          GlassMenuOption(
+            value: m.name,
+            title: m.name,
+            subtitle: m.contextWindow > 0
+                ? '上下文 ${_ComposerStatusBar._compactTokens(m.contextWindow)}'
+                : null,
+            icon: Icons.auto_awesome_outlined,
+            checked: m.name == current,
           ),
-        ),
-      ),
+      ],
     );
     if (sel == null || sel == current) return;
     // ConfigNotifier.upsert 是 void（同步更新内存并落库），不能 await
@@ -252,28 +237,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         .upsert(active.copyWith(defaultChatModel: sel));
   }
 
-  Future<void> _addImage() async {
-    final source = await showGlassDialog<ImageSource>(
+  /// 添加图片——锚定在输入栏加号图标上方的浮层。
+  Future<void> _addImage(BuildContext anchor) async {
+    final source = await showGlassAnchoredMenu<ImageSource>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.transparent,
-        title: const Text('添加图片'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_camera_outlined),
-              title: const Text('拍照'),
-              onTap: () => Navigator.pop(ctx, ImageSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_outlined),
-              title: const Text('从相册选择'),
-              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-            ),
-          ],
+      anchor: anchor,
+      options: const [
+        GlassMenuOption(
+          value: ImageSource.camera,
+          title: '拍照',
+          icon: Icons.photo_camera_outlined,
         ),
-      ),
+        GlassMenuOption(
+          value: ImageSource.gallery,
+          title: '从相册选择',
+          icon: Icons.photo_outlined,
+        ),
+      ],
     );
     if (source == null) return;
     try {
@@ -1026,7 +1006,8 @@ class _ContextGauge extends StatelessWidget {
 
 /// 上下文用量明细弹窗（居中玻璃样式）：窗口占用 + 真实 Token 统计 +
 /// 工具调度轮次（内置 / MCP）+ 自动压缩次数。
-void _showContextDialog(BuildContext context, WidgetRef ref) {
+void _showContextDialog(BuildContext context, WidgetRef ref,
+    {required BuildContext anchor}) {
   final chat = ref.read(chatProvider);
   final session = chat.activeSession;
   final active = ref.read(configProvider).activeConfig;
@@ -1040,59 +1021,47 @@ void _showContextDialog(BuildContext context, WidgetRef ref) {
   final pct = total > 0 ? (est / total).clamp(0.0, 1.0) : null;
   final tokens = chat.sessionPromptTokens + chat.sessionCompletionTokens;
 
-  Widget row(String label, String value) => Padding(
-        padding: const EdgeInsets.only(bottom: 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            SizedBox(
-              width: 96,
-              child: Text(label,
-                  style: TextStyle(
-                      fontSize: 13, color: onSurface(context, 0.5))),
-            ),
-            Expanded(
-              child: Text(value,
-                  style: const TextStyle(
-                      fontSize: 13, fontWeight: FontWeight.w500)),
-            ),
-          ],
-        ),
-      );
-
-  showGlassDialog<void>(
+  // 锚定在用量图标上方的浮层（点浮层外任意处关闭，无需关闭按钮）
+  showGlassAnchoredPanel<void>(
     context: context,
-    builder: (ctx) => AlertDialog(
-      title: const Text('上下文用量'),
-      content: Column(
+    anchor: anchor,
+    width: 296,
+    builder: (ctx) => Padding(
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 14),
+      child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text('上下文用量',
+              style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: onPanelText(ctx, 0.9))),
+          const SizedBox(height: 10),
           if (pct != null) ...[
             ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: LinearProgressIndicator(
                 value: pct,
                 minHeight: 6,
-                backgroundColor: onSurface(ctx, 0.08),
+                backgroundColor: onPanelText(ctx, 0.10),
               ),
             ),
             const SizedBox(height: 4),
           ],
-          row(
-              '上下文窗口',
+          _ctxRow(ctx, '上下文窗口',
               total > 0
                   ? '${_ComposerStatusBar._compactTokens(est)} / '
                       '${_ComposerStatusBar._compactTokens(total)} tokens'
                       '（${(pct! * 100).toStringAsFixed(1)}%，估算）'
                   : '该模型未设置窗口大小，不启用自动压缩'),
-          row('会话 Token',
+          _ctxRow(ctx, '会话 Token',
               '输入 ${chat.sessionPromptTokens} · 输出 ${chat.sessionCompletionTokens}'
               ' · 合计 $tokens（API 真实用量）'),
-          row('工具调度',
+          _ctxRow(ctx, '工具调度',
               '内置工具 ${chat.toolRoundsBuiltIn} 轮 · MCP 工具 '
               '${chat.toolRoundsMcp} 轮'),
-          row('自动压缩',
+          _ctxRow(ctx, '自动压缩',
               '已压缩 ${chat.compressionCount} 次'
               '（占用超窗口 75% 时触发，保留最近 6 条原文）'),
           Text('估算按 CJK 1 字 1 token、其他 4 字符 1 token 计算，'
@@ -1100,16 +1069,35 @@ void _showContextDialog(BuildContext context, WidgetRef ref) {
               style: TextStyle(
                   fontSize: 11.5,
                   height: 1.5,
-                  color: onSurface(ctx, 0.4))),
+                  color: onPanelText(ctx, 0.45))),
         ],
       ),
-      actions: [
-        TextButton(
-            onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
-      ],
     ),
   );
 }
+
+/// 用量明细浮层的行（锚定面板在玻璃上渲染，用面板专用文字色）。
+Widget _ctxRow(BuildContext ctx, String label, String value) => Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 84,
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 12.5, color: onPanelText(ctx, 0.5))),
+          ),
+          Expanded(
+            child: Text(value,
+                style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w500,
+                    color: onPanelText(ctx, 0.9))),
+          ),
+        ],
+      ),
+    );
 
 /// 输入栏上方的状态条：思考开关 + 模型选择 + 上下文长度。
 ///
@@ -1132,14 +1120,17 @@ class _ComposerStatusBar extends ConsumerWidget {
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 6),
       child: Row(
         children: [
-          // 思考开关 + 强度：点击弹出底部选择（快速 / 低 / 中 / 高）。
-          // 之前只有开/关两态，无法控制推理强度；reasoning_effort
-          // 参数早就支持 low/medium/high，这里把入口补上。
-          _MiniChip(
-            icon: Icons.psychology_outlined,
-            label: thinking ? '思考·${_effortLabel(effort)}' : '快速',
-            enabled: hasModel,
-            onTap: hasModel ? () => _pickThinking(context, ref) : null,
+          // 思考开关 + 强度：点击在图标上方弹出浮层（快速 / 低 / 中 / 高）。
+          // Builder 包一层拿到 chip 自身的 context，浮层据此锚定。
+          Builder(
+            builder: (bctx) => _MiniChip(
+              icon: Icons.psychology_outlined,
+              label: thinking ? '思考·${_effortLabel(effort)}' : '快速',
+              enabled: hasModel,
+              onTap: hasModel
+                  ? () => _pickThinking(context, ref, anchor: bctx)
+                  : null,
+            ),
           ),
           const SizedBox(width: 8),
 
@@ -1163,23 +1154,30 @@ class _ComposerStatusBar extends ConsumerWidget {
 
           // 权限模式：限制 Agent 可用的工具集（只读 / 工作区读写 / 完全访问）。
           // 工具暴露与执行双重过滤在 ToolRegistry，切档即时生效。
-          _MiniChip(
-            icon: Icons.shield_outlined,
-            label: permission.label,
-            enabled: true,
-            onTap: () => _pickPermission(context, ref),
+          // 浮层锚定在盾牌图标上方。
+          Builder(
+            builder: (bctx) => _MiniChip(
+              icon: Icons.shield_outlined,
+              label: permission.label,
+              enabled: true,
+              onTap: () => _pickPermission(context, ref, anchor: bctx),
+            ),
           ),
           const Spacer(),
 
           // 上下文用量动态图标：环形进度 = 估算占用 / 模型窗口，
-          // 颜色随占用率变化（正常→70% 橙→90% 红），点击弹出用量明细。
+          // 颜色随占用率变化（正常→70% 橙→90% 红），点击在图标上方
+          // 展开用量明细浮层。
           // 模型选择已移到输入框内（麦克风旁的调音图标）——
           // 状态条此前塞了五个元素，窄屏上模型选择被挤出可视区。
           if (hasModel)
-            _ContextGauge(
-              used: _estimateSessionTokens(ref.watch(chatProvider).activeSession),
-              total: active!.chatModel!.contextWindow,
-              onTap: () => _showContextDialog(context, ref),
+            Builder(
+              builder: (bctx) => _ContextGauge(
+                used:
+                    _estimateSessionTokens(ref.watch(chatProvider).activeSession),
+                total: active!.chatModel!.contextWindow,
+                onTap: () => _showContextDialog(context, ref, anchor: bctx),
+              ),
             ),
         ],
       ),
@@ -1196,39 +1194,34 @@ class _ComposerStatusBar extends ConsumerWidget {
     return est;
   }
 
-  /// 弹出思考强度选择。选择结果同时写入 provider 与 prefs：
+  /// 弹出思考强度选择——锚定在思考图标上方的浮层。
+  /// 选择结果同时写入 provider 与 prefs：
   /// provider 初值从 prefs 读，不写回的话重启后会弹回。
-  Future<void> _pickThinking(BuildContext context, WidgetRef ref) async {
+  Future<void> _pickThinking(BuildContext context, WidgetRef ref,
+      {required BuildContext anchor}) async {
     final prefs = ref.read(sharedPreferencesProvider);
     // 当前选中项：关闭时用空串表示「快速」。
     final current =
         ref.read(thinkingProvider) ? ref.read(reasoningEffortProvider) : '';
-    final sel = await showGlassDialog<String>(
+    final sel = await showGlassAnchoredMenu<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.transparent,
-        title: const Text('思考强度'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final opt in const [
-              ('', '快速回答', '不开启思考，响应更快'),
-              ('low', '思考 · 低', '简短推理，速度与深度均衡'),
-              ('medium', '思考 · 中', '常规推理强度（默认）'),
-              ('high', '思考 · 高', '最充分的推理，耗时与 token 消耗更高'),
-            ])
-              ListTile(
-                title: Text(opt.$2, style: const TextStyle(fontSize: 15)),
-                subtitle: Text(opt.$3,
-                    style: const TextStyle(fontSize: 12)),
-                trailing: current == opt.$1
-                    ? const Icon(Icons.check_rounded, size: 20)
-                    : null,
-                onTap: () => Navigator.pop(ctx, opt.$1),
-              ),
-          ],
-        ),
-      ),
+      anchor: anchor,
+      options: [
+        for (final opt in const [
+          ('', '快速回答', '不开启思考，响应更快', Icons.bolt_rounded),
+          ('low', '思考 · 低', '简短推理，速度与深度均衡', Icons.psychology_outlined),
+          ('medium', '思考 · 中', '常规推理强度（默认）', Icons.psychology_outlined),
+          ('high', '思考 · 高', '最充分的推理，耗时与 token 消耗更高',
+              Icons.psychology_rounded),
+        ])
+          GlassMenuOption(
+            value: opt.$1,
+            title: opt.$2,
+            subtitle: opt.$3,
+            icon: opt.$4,
+            checked: current == opt.$1,
+          ),
+      ],
     );
     if (sel == null) return;
     final on = sel.isNotEmpty;
@@ -1238,33 +1231,30 @@ class _ComposerStatusBar extends ConsumerWidget {
     if (on) unawaited(prefs.setString('reasoning_effort', sel));
   }
 
-  /// 弹出权限模式选择。切换同时写 provider 与 prefs，
-  /// 并由 chatProvider 的 listen 联动到 ToolRegistry。
-  Future<void> _pickPermission(BuildContext context, WidgetRef ref) async {
+  /// 弹出权限模式选择——锚定在盾牌图标上方的浮层。
+  /// 切换同时写 provider 与 prefs，并由 chatProvider 的 listen 联动到
+  /// ToolRegistry。
+  Future<void> _pickPermission(BuildContext context, WidgetRef ref,
+      {required BuildContext anchor}) async {
     final prefs = ref.read(sharedPreferencesProvider);
     final current = ref.read(agentPermissionProvider);
-    final sel = await showGlassDialog<AgentPermission>(
+    final sel = await showGlassAnchoredMenu<AgentPermission>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: Colors.transparent,
-        title: const Text('权限模式'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final p in AgentPermission.values)
-              ListTile(
-                leading: const Icon(Icons.shield_outlined, size: 20),
-                title: Text(p.label, style: const TextStyle(fontSize: 15)),
-                subtitle:
-                    Text(p.desc, style: const TextStyle(fontSize: 12)),
-                trailing: current == p
-                    ? const Icon(Icons.check_rounded, size: 20)
-                    : null,
-                onTap: () => Navigator.pop(ctx, p),
-              ),
-          ],
-        ),
-      ),
+      anchor: anchor,
+      options: [
+        for (final p in AgentPermission.values)
+          GlassMenuOption(
+            value: p,
+            title: p.label,
+            subtitle: p.desc,
+            icon: switch (p) {
+              AgentPermission.readOnly => Icons.lock_outlined,
+              AgentPermission.workspace => Icons.back_hand_outlined,
+              AgentPermission.full => Icons.gpp_maybe_outlined,
+            },
+            checked: current == p,
+          ),
+      ],
     );
     if (sel == null || sel == current) return;
     ref.read(agentPermissionProvider.notifier).state = sel;
@@ -1352,12 +1342,15 @@ class _InputBar extends StatelessWidget {
   final bool isListening;
   final VoidCallback onSend;
   final VoidCallback onStop;
-  final VoidCallback onAddImage;
   final VoidCallback onMic;
 
   /// 当前聊天模型名（null = 未配置，图标置灰）。
   final String? modelName;
-  final VoidCallback onPickModel;
+
+  /// 添加图片 / 选择模型：回调携带**按钮自身的 BuildContext**，
+  /// 供浮层锚定在图标上方展开（见 showGlassAnchoredMenu）。
+  final void Function(BuildContext anchor) onAddImage;
+  final void Function(BuildContext anchor) onPickModel;
 
   @override
   Widget build(BuildContext context) {
@@ -1378,13 +1371,17 @@ class _InputBar extends StatelessWidget {
         ),
         child: Row(
           children: [
-            SizedBox(
-              width: 40,
-              height: 40,
-              child: IconButton(
-                icon: const Icon(Icons.add_rounded,
-                    size: 24, color: Colors.black54),
-                onPressed: onAddImage,
+            // 加号按钮：Builder 包一层拿到按钮自身的 context，
+            // 浮层据此锚定在图标上方展开。
+            Builder(
+              builder: (bctx) => SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton(
+                  icon: const Icon(Icons.add_rounded,
+                      size: 24, color: Colors.black54),
+                  onPressed: () => onAddImage(bctx),
+                ),
               ),
             ),
             Expanded(
@@ -1451,20 +1448,25 @@ class _InputBar extends StatelessWidget {
             // 之前在输入栏上方的状态条里做下拉，但状态条塞了思考/朗读/
             // 权限/上下文后，窄屏上模型被挤出可视区；移到这里用居中
             // 弹窗选择（tooltip 显示当前模型名）。
-            SizedBox(
-              width: 40,
-              height: 40,
-              child: IconButton(
-                padding: EdgeInsets.zero,
-                tooltip: modelName == null ? '未配置模型' : '当前模型：$modelName',
-                icon: Icon(
-                  Icons.tune_rounded,
-                  size: 22,
-                  color: modelName == null
-                      ? onSurface(context, 0.2)
-                      : onSurface(context, 0.35),
+            // 模型选择：麦克风旁的调音图标。浮层锚定在图标上方展开。
+            Builder(
+              builder: (bctx) => SizedBox(
+                width: 40,
+                height: 40,
+                child: IconButton(
+                  padding: EdgeInsets.zero,
+                  tooltip:
+                      modelName == null ? '未配置模型' : '当前模型：$modelName',
+                  icon: Icon(
+                    Icons.tune_rounded,
+                    size: 22,
+                    color: modelName == null
+                        ? onSurface(context, 0.2)
+                        : onSurface(context, 0.35),
+                  ),
+                  onPressed:
+                      modelName == null ? null : () => onPickModel(bctx),
                 ),
-                onPressed: modelName == null ? null : onPickModel,
               ),
             ),
           ],
