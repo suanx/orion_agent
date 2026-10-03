@@ -255,6 +255,10 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     try {
       await _secure.write(key: _kConfigs, value: payload);
       await _prefs.setString(_kActive, snapshot.activeId);
+      // 成功后清掉上一次的失败提示，否则横幅会一直挂着
+      if (mounted && state.error != null) {
+        state = state.copyWith(clearError: true);
+      }
     } catch (e) {
       // Keystore 损坏 / EncryptedSharedPreferences 初始化失败时 write 会抛。
       // 原来既没 await 也没 try/catch → unhandled async error，
@@ -279,14 +283,16 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     } else {
       list.add(config);
     }
-    state = ConfigState(configs: list, activeId: state.activeId);
+    // 沿用 copyWith 而非新建 ConfigState：直接构造会把上一轮的 error 清空，
+    // 让"保存失败"的提示在用户下一次编辑时凭空消失。
+    state = state.copyWith(configs: list);
     _schedulePersist();
   }
 
   void remove(String id) {
     _localTouched = true;
     final list = state.configs.where((c) => c.id != id).toList();
-    state = ConfigState(
+    state = state.copyWith(
       configs: list,
       activeId: state.activeId == id ? '' : state.activeId,
     );
@@ -295,7 +301,7 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
 
   void setActive(String id) {
     _localTouched = true;
-    state = ConfigState(configs: state.configs, activeId: id);
+    state = state.copyWith(activeId: id);
     _schedulePersist();
   }
 }
@@ -577,7 +583,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (!mounted) return;
 
     // 最终回答写入会话历史（工具中间过程不入库，节省上下文长度）
-    //按锁定的 sessionId 定位，而不是读当前的 activeSession。
+    // 按锁定的 sessionId 定位，而不是读当前的 activeSession。
     final s2 = state.sessions.where((s) => s.id == sessionId).firstOrNull;
     if (answer != null && s2 != null) {
       // 原实现直接 s2.messages.add(...) 就地改列表，sessions 里存的是同一份

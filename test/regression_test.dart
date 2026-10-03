@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocket_agent/services/database.dart';
@@ -90,11 +91,11 @@ void main() {
     });
 
     test('load失败后可重试，不会永久失效', () async {
-      // 关闭数据库后 load 会抛；此时不得把状态标记成"已加载"，
+      // 关闭数据库后 load 会抛；此时不得把 _loaded 标记为 true，
       // 否则长期记忆会永久失效（只能重启 App）。
       await db.close();
       await expectLater(mem.load(), throwsA(anything));
-      // _loading 已复位、_loaded 未置位 → 换成可用库后仍能加载
+      // 换成可用库后必须仍能加载 —— 证明上次失败没有把状态锁死
       final db2 = AppDatabase(NativeDatabase.memory());
       addTearDown(db2.close);
       final mem2 = MemoryService(db2);
@@ -103,15 +104,24 @@ void main() {
     });
 
     test('memoryPrompt 注入有条数与长度上限', () async {
+      // 直接写库绕过写入上限，验证的是"注入 prompt"这一层的截断
       for (var i = 0; i < 80; i++) {
-        await mem.addNote('记忆$i ${'长' * 400}');
+        await db.into(db.memoryNoteRows).insert(MemoryNoteRowsCompanion(
+              id: Value('m$i'),
+              body: Value('记忆$i ${'长' * 400}'),
+              createdAt: Value(i),
+            ));
       }
-      final prompt = mem.memoryPrompt();
-      // 最多 60 条
-      final lines = prompt.split('\n').where((l) => l.trimLeft().startsWith('-')).length;
-      expect(lines, lessThanOrEqualTo(60), reason: '实际条数=$lines');
-      // 单条不超过 200 字（截断后会带省略号）
-      expect(prompt.length, lessThan(60 * (200 + 10)),
+      final mem2 = MemoryService(db);
+      await mem2.load();
+      expect(mem2.notes, hasLength(80), reason: '前置条件：应加载到 80 条');
+
+      final prompt = mem2.memoryPrompt();
+      final lines =
+          prompt.split('\n').where((l) => l.trimLeft().startsWith('-')).length;
+      expect(lines, 60, reason: '应只注入最近 60 条，实际=$lines');
+      // 每条截断到 200 字（加省略号），加上 "- " 前缀与换行
+      expect(prompt.length, lessThanOrEqualTo(60 * (200 + 10)),
           reason: 'prompt 过长：${prompt.length}');
     });
   });
@@ -170,13 +180,17 @@ void main() {
 
     test('Embedding 逐批数量不符时中止入库，避免向量错位', () async {
       var call = 0;
+      // 每段 1000 字 > maxLen(800)，才会硬切成 2 块/段 → 共 80 块 → 5 批
+      // (16/16/16/16/16)。注意若用短段落，相邻段落会被合并成一块，
+      // 根本触发不了逐批校验。
+      final longPara = '猫。' * 500;
       await expectLater(
         rag.addDocument(
           title: '错位',
-          // 造出 40 个分块 → 3 批（16/16/8），第二批只返回 15 条
-          text: List.filled(40, '猫。').join('\n\n'),
+          text: List.filled(40, longPara).join('\n\n'),
           embed: (inputs) async {
             call++;
+            // 第 2 批少返回 1 条：总数仍可能匹配，但逐批校验必须拦下
             if (call == 2) return List.filled(inputs.length - 1, [1.0]);
             return List.filled(inputs.length, [1.0]);
           },

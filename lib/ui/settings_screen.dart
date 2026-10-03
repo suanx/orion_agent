@@ -239,6 +239,32 @@ class SettingsScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.only(bottom: 80),
         children: [
+          // 配置持久化失败（Keystore 损坏 / 加密存储初始化失败）时，
+          // 不提示的话用户会以为保存成功，重启后才发现配置全丢了。
+          if (config.error != null)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+              child: Card(
+                color: Theme.of(context).colorScheme.errorContainer,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      Icon(Icons.warning_amber_rounded,
+                          color: Theme.of(context).colorScheme.onErrorContainer),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          config.error!,
+                          style: TextStyle(
+                              color: Theme.of(context).colorScheme.onErrorContainer),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           const _TtsSettingsCard(),
           const SizedBox(height: 8),
           Padding(

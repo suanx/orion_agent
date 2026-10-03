@@ -18,22 +18,28 @@ class MemoryService {
   final AppDatabase _db;
 
   final List<MemoryNote> _notes = [];
-  // 并发加载共享同一个 Future：原实现用bool _loaded 做「已开始」标记，
-  // 并发调用方会看到空列表；而 await 之前就置位意味着查询失败后 _loaded 仍为 true，
+  // _loaded 只在查询【成功后】置位。
+  // 原实现 await 之前就置位：查询失败后 _loaded 仍为 true 而 _notes 为空，
   // 长期记忆从此永久失效（只能重启 App），且异常被完全吞掉。
+  bool _loaded = false;
+  // 并发加载共享同一个 Future，避免并发调用方看到空列表。
+  // 注意不能只靠 _loaded 去重：首次加载期间并发调用必须等同一个结果，
+  // 否则 addNote 会拿到空 _notes 就开始去重/插入。
   Future<void>? _loading;
 
   List<MemoryNote> get notes => List.unmodifiable(_notes);
 
   Future<void> load() async {
+    if (_loaded) return;
     final pending = _loading;
     if (pending != null) return pending;
     final fut = _doLoad();
     _loading = fut;
     try {
       await fut;
+      // 只在成功路径置位，失败后允许重试
+      _loaded = true;
     } finally {
-      // 失败后清空，允许下次重试
       _loading = null;
     }
   }
