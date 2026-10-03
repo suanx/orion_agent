@@ -9,6 +9,10 @@ import '../services/skill_service.dart';
 import '../services/terminal_service.dart';
 
 /// 技能 Tab：内置技能库（可一键安装）+ 我的快捷指令 + 内置工具展示。
+///
+/// 顶部「探索发现 / 技能」是两个可点击的视图切换按钮：
+/// - 探索发现：内置技能库（分类 + 安装）
+/// - 技能：我的快捷指令 + 内置工具（卡片可一键试用）
 class SkillsScreen extends ConsumerStatefulWidget {
   const SkillsScreen({super.key, required this.onUseSkill});
 
@@ -22,16 +26,23 @@ class SkillsScreen extends ConsumerStatefulWidget {
 class _SkillsScreenState extends ConsumerState<SkillsScreen> {
   String _category = '全部';
 
+  /// 当前视图：false = 探索发现（内置技能库）；true = 技能（我的 + 工具）。
+  bool _mineView = false;
+
   static const _categories = ['全部', '写作办公', '信息检索', '生活助手', '开发者工具'];
 
+  /// 内置工具卡片：(emoji, 名称, 简介, 点击后预填的示例指令)。
+  ///
+  /// 示例指令要能直接触发对应工具——卡片不是摆设，点一下就到对话页
+  /// 带着预填文本，用户按发送即可看到工具真实运行。
   static const _builtins = [
-    ('🔍', '联网搜索', '实时检索网络信息，无需 API Key'),
-    ('🌐', '网页阅读', '抓取并总结任意网页内容'),
-    ('🧮', '精确计算', '四则运算、幂运算、括号表达式'),
-    ('🕐', '日期时间', '获取当前日期、星期与时间'),
-    ('💡', '长期记忆', '记住你的偏好与重要信息'),
-    ('📚', '知识库', '检索你导入的文档资料'),
-    ('💻', '终端命令', '在 Linux 沙箱里执行 shell 命令'),
+    ('🔍', '联网搜索', '实时检索网络信息，无需 API Key', '搜索一下今天的科技新闻'),
+    ('🌐', '网页阅读', '抓取并总结任意网页内容', '帮我读取这个网页并总结要点：'),
+    ('🧮', '精确计算', '四则运算、幂运算、括号表达式', '帮我精确计算：(1024*768+3600)/12^2'),
+    ('🕐', '日期时间', '获取当前日期、星期与时间', '现在几点了？今天星期几？'),
+    ('💡', '长期记忆', '记住你的偏好与重要信息', '请记住：我偏好简洁直接的表达方式'),
+    ('📚', '知识库', '检索你导入的文档资料', '在知识库里检索与「项目计划」相关的内容'),
+    ('💻', '终端命令', '在 Linux 沙箱里执行 shell 命令', '在终端环境里执行 uname -a 看看系统信息'),
   ];
 
   @override
@@ -53,15 +64,22 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
               padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
               child: Row(
                 children: [
-                  const Text('探索发现',
-                      style:
-                          TextStyle(fontSize: 26, fontWeight: FontWeight.w500)),
+                  // 顶部双标题 = 两个可点击的视图切换按钮。
+                  _TitleButton(
+                    label: '探索发现',
+                    active: !_mineView,
+                    onTap: () {
+                      if (_mineView) setState(() => _mineView = false);
+                    },
+                  ),
                   const SizedBox(width: 16),
-                  Text('技能',
-                      style: TextStyle(
-                          fontSize: 22,
-                          fontWeight: FontWeight.w500,
-                          color: onSurface(context, 0.3))),
+                  _TitleButton(
+                    label: '技能',
+                    active: _mineView,
+                    onTap: () {
+                      if (!_mineView) setState(() => _mineView = true);
+                    },
+                  ),
                 ],
               ),
             ),
@@ -71,169 +89,182 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 80),
             children: [
-              // ------- 内置技能库 -------
-              Row(
-                children: [
-                  const Text('内置技能库',
-                      style:
-                          TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-                  const Spacer(),
-                  Text('${builtinSkills.length} 个',
-                      style: TextStyle(
-                          fontSize: 12, color: onSurface(context, 0.4))),
-                  const SizedBox(width: 8),
-                  TextButton(
-                    onPressed: () => _installAll(context),
-                    child: const Text('全部安装',
-                        style: TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w500)),
-                  ),
-                ],
-              ),
-              // 分类筛选
-              SizedBox(
-                height: 34,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
+              if (!_mineView) ...[
+                // ================= 探索发现视图 =================
+                Row(
                   children: [
-                    for (final c in _categories)
-                      Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: _CategoryChip(
-                          label: c,
-                          selected: _category == c,
-                          onTap: () => setState(() => _category = c),
-                        ),
-                      ),
+                    const Text('内置技能库',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w500)),
+                    const Spacer(),
+                    Text('${builtinSkills.length} 个',
+                        style: TextStyle(
+                            fontSize: 12, color: onSurface(context, 0.4))),
+                    const SizedBox(width: 8),
+                    TextButton(
+                      onPressed: () => _installAll(context),
+                      child: const Text('全部安装',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w500)),
+                    ),
                   ],
                 ),
-              ),
-              const SizedBox(height: 10),
-              ...lib.map((s) => _BuiltinSkillTile(
-                    skill: s,
-                    installed: service.isInstalled(s),
-                    onInstall: () => _install(context, s),
-                  )),
-              const SizedBox(height: 20),
-
-              // ------- 我的快捷指令 -------
-              Row(
-                children: [
-                  const Text('我的快捷指令',
-                      style:
-                          TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-                  const Spacer(),
-                  TextButton.icon(
-                    onPressed: () => _addSkill(context),
-                    icon: const Icon(Icons.add_rounded, size: 18),
-                    label: const Text('新建',
-                        style: TextStyle(
-                            fontSize: 13, fontWeight: FontWeight.w500)),
-                  ),
-                ],
-              ),
-              Text('聊天输入「/名称 参数」即可触发，模板中的 {input} 会被参数替换。',
-                  style: TextStyle(
-                      fontSize: 12, color: onSurface(context, 0.4))),
-              const SizedBox(height: 8),
-              if (skills.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: surface(context),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Text('还没有快捷指令。可以从上面的内置技能库一键安装，\n'
-                      '或点「新建」自己写一个，如：\n'
-                      '名称「周报」，模板「帮我把以下工作内容整理成周报：{input}」',
-                      style: TextStyle(
-                          fontSize: 13,
-                          height: 1.5,
-                          color: onSurface(context, 0.45))),
-                )
-              else
-                ...skills.map((s) => Container(
-                      margin: const EdgeInsets.only(bottom: 8),
-                      decoration: BoxDecoration(
-                        color: surface(context),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: ListTile(
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(16)),
-                        leading: const Icon(Icons.bolt_rounded),
-                        title: Text('/${s.name}',
-                            style: const TextStyle(
-                                fontSize: 15, fontWeight: FontWeight.w500)),
-                        subtitle: Text(s.template,
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        onTap: () => widget.onUseSkill('/${s.name} '),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline, size: 20),
-                          onPressed: () => _deleteSkill(context, s),
-                        ),
-                      ),
-                    )),
-              const SizedBox(height: 16),
-
-              // ------- 内置工具 -------
-              const Text('内置工具',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
-              const SizedBox(height: 8),
-              GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 2,
-                  mainAxisSpacing: 12,
-                  crossAxisSpacing: 12,
-                  childAspectRatio: 1.15,
-                ),
-                itemCount: _builtins.length,
-                itemBuilder: (_, i) {
-                  final (emoji, title, desc) = _builtins[i];
-                  return InkWell(
-                    borderRadius: BorderRadius.circular(16),
-                    onTap: () => widget.onUseSkill(''),
-                    child: Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: surface(context),
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Container(
-                            width: 40,
-                            height: 40,
-                            decoration: BoxDecoration(
-                              color: onSurface(context, 0.05),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            alignment: Alignment.center,
-                            child:
-                                Text(emoji, style: const TextStyle(fontSize: 20)),
+                // 分类筛选
+                SizedBox(
+                  height: 34,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    children: [
+                      for (final c in _categories)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: _CategoryChip(
+                            label: c,
+                            selected: _category == c,
+                            onTap: () => setState(() => _category = c),
                           ),
-                          const Spacer(),
-                          Text(title,
+                        ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 10),
+                ...lib.map((s) => _BuiltinSkillTile(
+                      skill: s,
+                      installed: service.isInstalled(s),
+                      onInstall: () => _install(context, s),
+                    )),
+                const SizedBox(height: 16),
+                Text('已安装的快捷指令在顶部「技能」页查看。',
+                    style: TextStyle(
+                        fontSize: 12, color: onSurface(context, 0.4))),
+              ] else ...[
+                // ================= 技能视图 =================
+                // ------- 我的快捷指令 -------
+                Row(
+                  children: [
+                    const Text('我的快捷指令',
+                        style: TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.w500)),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: () => _addSkill(context),
+                      icon: const Icon(Icons.add_rounded, size: 18),
+                      label: const Text('新建',
+                          style: TextStyle(
+                              fontSize: 13, fontWeight: FontWeight.w500)),
+                    ),
+                  ],
+                ),
+                Text('聊天输入「/名称 参数」即可触发，模板中的 {input} 会被参数替换。',
+                    style: TextStyle(
+                        fontSize: 12, color: onSurface(context, 0.4))),
+                const SizedBox(height: 8),
+                if (skills.isEmpty)
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: surface(context),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Text('还没有快捷指令。可以到「探索发现」里一键安装，\n'
+                        '或点「新建」自己写一个，如：\n'
+                        '名称「周报」，模板「帮我把以下工作内容整理成周报：{input}」',
+                        style: TextStyle(
+                            fontSize: 13,
+                            height: 1.5,
+                            color: onSurface(context, 0.45))),
+                  )
+                else
+                  ...skills.map((s) => Container(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        decoration: BoxDecoration(
+                          color: surface(context),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: ListTile(
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16)),
+                          leading: const Icon(Icons.bolt_rounded),
+                          title: Text('/${s.name}',
                               style: const TextStyle(
                                   fontSize: 15, fontWeight: FontWeight.w500)),
-                          const SizedBox(height: 2),
-                          Text(desc,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                  fontSize: 11,
-                                  height: 1.3,
-                                  color: onSurface(context, 0.4))),
-                        ],
+                          subtitle: Text(s.template,
+                              maxLines: 1, overflow: TextOverflow.ellipsis),
+                          onTap: () => widget.onUseSkill('/${s.name} '),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline, size: 20),
+                            onPressed: () => _deleteSkill(context, s),
+                          ),
+                        ),
+                      )),
+                const SizedBox(height: 16),
+
+                // ------- 内置工具 -------
+                const Text('内置工具',
+                    style:
+                        TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 4),
+                Text('点卡片预填示例指令，跳到对话页即可试用。',
+                    style: TextStyle(
+                        fontSize: 12, color: onSurface(context, 0.4))),
+                const SizedBox(height: 8),
+                GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 2,
+                    mainAxisSpacing: 12,
+                    crossAxisSpacing: 12,
+                    childAspectRatio: 1.15,
+                  ),
+                  itemCount: _builtins.length,
+                  itemBuilder: (_, i) {
+                    final (emoji, title, desc, sample) = _builtins[i];
+                    return InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      // 预填一条能直接触发该工具的示例指令并跳到对话页，
+                      // 卡片点得动、也用得上，而不是一个空跳转。
+                      onTap: () => widget.onUseSkill(sample),
+                      child: Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: surface(context),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 40,
+                              decoration: BoxDecoration(
+                                color: onSurface(context, 0.05),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              alignment: Alignment.center,
+                              child: Text(emoji,
+                                  style: const TextStyle(fontSize: 20)),
+                            ),
+                            const Spacer(),
+                            Text(title,
+                                style: const TextStyle(
+                                    fontSize: 15, fontWeight: FontWeight.w500)),
+                            const SizedBox(height: 2),
+                            Text(desc,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    height: 1.3,
+                                    color: onSurface(context, 0.4))),
+                          ],
+                        ),
                       ),
-                    ),
-                  );
-                },
-              ),
+                    );
+                  },
+                ),
+              ],
             ],
           ),
         ),
@@ -248,7 +279,7 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
     // 已安装：提示并询问是否卸载
     if (ref.read(skillServiceProvider).isInstalled(s)) {
       ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('「${s.name}」已安装，可在下方「我的快捷指令」中使用')));
+          SnackBar(content: Text('「${s.name}」已安装，可在「技能」页的快捷指令中使用')));
       return;
     }
 
@@ -292,7 +323,7 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
     parts.add(r.added == 0 ? '没有新增技能' : '已安装 ${r.added} 个技能');
     if (r.skipped > 0) parts.add('跳过 ${r.skipped} 个（需先装终端环境）');
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('${parts.join('，')}。可在下方「我的快捷指令」中使用')));
+        content: Text('${parts.join('，')}。可在「技能」页的快捷指令中使用')));
   }
 
   Future<void> _addSkill(BuildContext context) async {
@@ -365,6 +396,39 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
     if (ok == true) {
       await ref.read(skillServiceProvider).removeSkill(skill.id);
     }
+  }
+}
+
+/// 顶部双标题按钮：激活项大而深色，非激活项小而浅色，点击切换视图。
+class _TitleButton extends StatelessWidget {
+  const _TitleButton({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(8),
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 2),
+        child: Text(
+          label,
+          style: active
+              ? const TextStyle(fontSize: 26, fontWeight: FontWeight.w500)
+              : TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.w500,
+                  color: onSurface(context, 0.3)),
+        ),
+      ),
+    );
   }
 }
 

@@ -119,10 +119,9 @@ class _McpScreenState extends ConsumerState<McpScreen> {
                   child: Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
-                      '还没有配置 MCP 服务器。\n\n'
-                      'MCP（Model Context Protocol）让 Agent 使用\n'
-                      '外部工具服务：文件、日历、数据库等。\n\n'
-                      '需要运行中并可达的 MCP 端点（Streamable HTTP）。',
+                      '还没有 MCP 服务器。\n\n'
+                      '添加后，Agent 可以调用外部工具服务。\n'
+                      '支持 Streamable HTTP 端点。',
                       textAlign: TextAlign.center,
                     ),
                   ),
