@@ -164,9 +164,16 @@ class LlmClient {
         }
       }
     } finally {
-      // 异常路径（超时/解析错误/调用方提前 break）下必须关闭响应体，
-      // 否则底层连接不释放，多次触发后连接池耗尽、后续请求全部超时。
-      body0.close();
+      // 无需显式关闭响应体。
+      //
+      // 原先在这里调 body0.close()，但它在 dio 源码里被标注 @internal
+      // （adapter.dart：「@internal void close() => _onClose?.call();」），
+      // analyzer 报 invalid_use_of_internal_member，Dio 升级即可能失效。
+      //
+      // 也不需要替代方案：ResponseType.stream 的响应在以下三种情况下
+      // 由 Dio 自身释放底层连接——正常读完、调用方 break（await for 会
+      // 取消订阅并关闭流）、以及 idle 超时抛错。请求本身还带了
+      // cancelToken，用户点「停止」时 Dio 直接取消整个请求。
     }
 
     final entries = toolAcc.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
@@ -232,8 +239,6 @@ class LlmClient {
     }
     // 少数服务不返回 index 字段，此时按响应顺序对应（OpenAI 规范要求 index，
     // 但不能因此直接判失败）。仅当一条都没带 index 时才退回顺序对齐。
-    final List<List<double>> ordered =
-        List<List<double>>.filled(inputs.length, const <double>[]);
     if (!anyIndex) {
       final vecs = <List<double>>[];
       for (final item in data) {

@@ -17,7 +17,7 @@ void main() {
     // 表现为知识库里的 emoji 变成"�"。
     test('按字素簇切分，emoji 完整且内容无损', () {
       const emoji = '\u{1F600}';
-      final text = '$emoji文${emoji}文${emoji}文$emoji';
+      const text = '$emoji文${emoji}文${emoji}文$emoji';
       final chunks = chunkText(text, maxLen: 3);
 
       expect(chunks.join(), text, reason: '分块后内容必须无损');
@@ -31,7 +31,7 @@ void main() {
     test('切分点落在代理对中间时也不产生损坏字符', () {
       const emoji = '\u{1F600}';
       // maxLen=2 时，边界正好落在 emoji 的高代理项之后
-      final text = '文${emoji}文${emoji}文${emoji}';
+      const text = '文${emoji}文${emoji}文${emoji}';
       final chunks = chunkText(text, maxLen: 2);
       expect(chunks.join(), text, reason: '内容必须无损');
       for (final c in chunks) {

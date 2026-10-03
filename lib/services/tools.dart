@@ -136,8 +136,8 @@ class CalculatorTool extends Tool {
     final exp = RegExp(r'^([+-]?[\d.]+)e([+-]?\d+)$').firstMatch(s);
     if (exp != null) {
       final mant = double.parse(exp.group(1)!);
-      return mant.toStringAsFixed((int.parse(exp.group(2)!) - 1).clamp(0, 20)) +
-          'e${exp.group(2)}';
+      final exp10 = int.parse(exp.group(2)!);
+      return '${mant.toStringAsFixed((exp10 - 1).clamp(0, 20))}e$exp10';
     }
     return s;
   }
