@@ -260,10 +260,13 @@ String uniqueId(String prefix) =>
 > ⚠️ **Debian rootfs 的备用下载地址依赖 GitHub Release**（`terminal_service.dart:53`）：
 > `https://github.com/suanx/orion_agent/releases/download/terminal-env/...`
 > 该 asset 由 CI 第 11 步自动构建并发布（用 `gh` CLI 绑定当前仓库，
-> 不硬编码仓库名）。**仓库删除后该 URL 失效**，新仓库首次 push 时
-> 会自动重建 release。
+> 不硬编码仓库名）。
 >
-> 好在它只是**备用源**：`install()` 里国内Docker 镜像
+> **迁移状态**：旧仓库 `suanx/pocket-agent` 已删除，代码与 git remote 均已
+> 指向 `suanx/orion_agent`并推送完成。该仓库首次 CI 运行会自动重建
+> `terminal-env` release（当前 release 列表为空，属正常中间态）。
+>
+> 好在它只是**备用源**：`install()` 里国内 Docker 镜像
 > （daocloud / 1ms / dockerproxy）**优先**尝试，三个全失败才走 GitHub
 > （`terminal_service.dart:212-225`）。所以国内用户通常感知不到这个依赖。
 > 同理通知渠道 id 虽然改了（`orion_agent_agent`），但旧渠道残留不影响，
