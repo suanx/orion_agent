@@ -106,6 +106,36 @@ class McpServers extends Table {
   Set<Column> get primaryKey => {id};
 }
 
+/// 单次模型调用的 token 用量。
+///
+/// OpenAI 兼容协议在每个 SSE 响应的**顶层**返回 usage（不在 choices 里）：
+///   {"usage":{"prompt_tokens":N,"completion_tokens":N,
+///             "prompt_tokens_details":{"cached_tokens":N}}}
+/// `cachedTokens` 是命中提示词缓存的部分，对应界面上的「缓存命中率」。
+///
+/// 流式响应里 usage 通常在最后一帧才出现，且部分网关还会额外发一个
+/// `choices: []` 的空帧专门携带 usage —— 解析时必须两种都覆盖。
+class TokenUsageRows extends Table {
+  TextColumn get id => text()();
+  IntColumn get createdAt => integer()();
+
+  /// 模型服务名（渠道统计维度）。
+  TextColumn get provider => text()();
+  TextColumn get model => text()();
+
+  /// 输入 / 输出 / 缓存命中 / 请求次数。
+  IntColumn get inputTokens => integer()();
+  IntColumn get outputTokens => integer()();
+  IntColumn get cachedTokens => integer()();
+  IntColumn get requests => integer()();
+
+  /// 估算的费用（分）。无价格表时为 0。
+  IntColumn get costCents => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 @DriftDatabase(tables: [
   SessionRows,
   MessageRows,
@@ -115,6 +145,7 @@ class McpServers extends Table {
   SkillItems,
   AgentRoles,
   McpServers,
+  TokenUsageRows,
 ])
 class AppDatabase extends _$AppDatabase {
   /// 生产环境不传 executor；测试注入 NativeDatabase.memory()。
@@ -122,7 +153,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'orion_agent'));
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   /// 全部索引。单独抽出以便 onCreate 与 onUpgrade 共用，避免漏建。
   ///
@@ -133,6 +164,9 @@ class AppDatabase extends _$AppDatabase {
     // 复合索引让「按会话取消息并按 id 排序」走索引。
     'CREATE INDEX IF NOT EXISTS idx_message_rows_session '
         'ON message_rows (session_id, id)',
+    // Token 统计页按时间倒序取用量，没有索引会全表扫描。
+    'CREATE INDEX IF NOT EXISTS idx_token_usage_created '
+        'ON token_usage_rows (created_at)',
   ];
 
   Future<void> _createIndexes() async {
@@ -162,6 +196,9 @@ class AppDatabase extends _$AppDatabase {
           }
           if (from < 5) {
             await m.createTable(mcpServers);
+          }
+          if (from < 7) {
+            await m.createTable(tokenUsageRows);
           }
           // 索引对所有旧版本都要补建（不只是 from < 6）：
           // 之前把它错放在 customConstraints 里，等于从未真正建过索引。

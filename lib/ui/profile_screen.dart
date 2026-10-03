@@ -10,164 +10,154 @@ import 'memory_screen.dart';
 import 'notification_settings_screen.dart';
 import 'roles_screen.dart';
 import 'settings_screen.dart';
+import 'skills_screen.dart';
 import 'storage_settings_screen.dart';
 import 'terminal_screen.dart';
+import 'token_stats_screen.dart';
 
-/// 我的 Tab：Marvis 风格的分组白卡片列表。
+/// 「技能」页在「我的」里只做浏览，点技能不跳转对话页。
+void _noopOnUseSkill(String _) {}
+
+/// 我的 Tab：分组白卡片列表。
+///
+/// 版式：每个分组带一行小标题，组内若干行；行内左边图标、中间标题、
+/// 右边当前值 + 箭头。
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final memory = ref.watch(memoryServiceProvider);
+    final config = ref.watch(configProvider);
+    final mode = ref.watch(themeModeProvider);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
       children: [
-        // ------- Agent 介绍卡 -------
+        // ------- 顶部留白（状态栏）+ 介绍卡 -------
         SafeArea(
           bottom: false,
-          child: Container(
-            margin: const EdgeInsets.fromLTRB(0, 16, 0, 12),
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: surface(context),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                MascotAvatar(size: 72, image: mascotAsset(context)),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Orion Agent',
-                          style: TextStyle(
-                              fontSize: 20, fontWeight: FontWeight.w500)),
-                      const SizedBox(height: 6),
-                      Text('我 24 小时在线，能搜索、算数、读网页，还有记性。',
-                          style: TextStyle(
-                              fontSize: 13,
-                              height: 1.45,
-                              color: onSurface(context, 0.55))),
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: ['理智高效', '极简办公', '默默干活']
-                            .map((t) => Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 10, vertical: 5),
-                                  decoration: BoxDecoration(
-                                    color: onSurface(context, 0.05),
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(t,
-                                      style: const TextStyle(
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w400)),
-                                ))
-                            .toList(),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+          child: Padding(
+            padding: const EdgeInsets.only(top: 8, bottom: 20),
+            child: _IntroCard(),
           ),
         ),
-        const SizedBox(height: 12),
-        // ------- 功能分组 -------
-        _CardGroup(items: [
-          _CardItem(
-            icon: Icons.palette_rounded,
-            title: '外观主题',
-            subtitle: '配色与明暗模式',
-            trailing: () => const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const AppearanceScreen())),
-          ),
-          _CardItem(
-            icon: Icons.build_rounded,
-            title: '模型设置',
-            trailing: () => const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SettingsScreen())),
-          ),
-          _CardItem(
-            icon: Icons.lightbulb_rounded,
-            title: '长期记忆',
-            trailing: () => Text('${memory.notes.length} 条',
-                style: TextStyle(
-                    fontSize: 13, color: onSurface(context, 0.4))),
-            onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const MemoryScreen())),
-          ),
-          _CardItem(
-            icon: Icons.auto_stories_rounded,
-            title: '知识库',
-            trailing: () => const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const KnowledgeScreen())),
-          ),
-          _CardItem(
-            icon: Icons.face_retouching_natural_rounded,
-            title: 'Agent 角色',
-            trailing: () => const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const RolesScreen())),
-          ),
-          _CardItem(
-            icon: Icons.dns_outlined,
-            title: 'MCP 服务器',
-            trailing: () => const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const McpScreen())),
-          ),
-          _CardItem(
-            icon: Icons.notifications_none_rounded,
-            title: '通知',
-            subtitle: '回答完成提醒与通知权限',
-            trailing: () => const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const NotificationSettingsScreen())),
-          ),
-          _CardItem(
-            icon: Icons.sd_storage_outlined,
-            title: '存储',
-            subtitle: '工作区、缓存与临时文件',
-            trailing: () => const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const StorageSettingsScreen())),
-          ),
-          _CardItem(
-            icon: Icons.terminal_rounded,
-            title: '终端环境',
-            subtitle: 'Alpine Linux 沙箱，Agent 可执行命令',
-            trailing: () => const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const TerminalScreen())),
-          ),
-        ]),
-        const SizedBox(height: 12),
-        _CardGroup(items: [
-          _CardItem(
-            icon: Icons.info_outline_rounded,
-            title: '关于',
-            trailing: () => Text('V0.1.0',
-                style: TextStyle(
-                    fontSize: 13, color: onSurface(context, 0.4))),
-            onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+
+        // ------- AI 配置 -------
+        _Group(
+          title: 'AI 配置',
+          children: [
+            _Row(
+              icon: Icons.cloud_outlined,
+              label: 'AI 提供商',
+              value: config.configs.isEmpty ? '未配置' : '${config.configs.length} 个',
+              onTap: () => _push(context, const SettingsScreen()),
+            ),
+            _Row(
+              icon: Icons.smart_toy_outlined,
+              label: '默认模型',
+              value: config.activeConfig?.model ?? '未配置',
+              onTap: () => _push(context, const SettingsScreen()),
+            ),
+            _Row(
+              icon: Icons.dns_outlined,
+              label: 'MCP 服务器',
+              onTap: () => _push(context, const McpScreen()),
+            ),
+            _Row(
+              icon: Icons.auto_stories_outlined,
+              label: '技能',
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                // 从「我的」进入只浏览，不预填任何内容到输入框
+                builder: (_) =>
+                    const SkillsScreen(onUseSkill: _noopOnUseSkill),
+              )),
+            ),
+            _Row(
+              icon: Icons.face_retouching_natural_rounded,
+              label: '子代理',
+              onTap: () => _push(context, const RolesScreen()),
+            ),
+          ],
+        ),
+
+        // ------- 记忆与知识 -------
+        _Group(
+          title: '记忆与知识',
+          children: [
+            _Row(
+              icon: Icons.lightbulb_outline_rounded,
+              label: '长期记忆',
+              value: '${memory.notes.length} 条',
+              onTap: () => _push(context, const MemoryScreen()),
+            ),
+            _Row(
+              icon: Icons.menu_book_outlined,
+              label: '知识库',
+              onTap: () => _push(context, const KnowledgeScreen()),
+            ),
+          ],
+        ),
+
+        // ------- 运行环境 -------
+        _Group(
+          title: '运行环境',
+          children: [
+            _Row(
+              icon: Icons.terminal_rounded,
+              label: '终端环境',
+              onTap: () => _push(context, const TerminalScreen()),
+            ),
+            _Row(
+              icon: Icons.sd_storage_outlined,
+              label: '存储',
+              onTap: () => _push(context, const StorageSettingsScreen()),
+            ),
+          ],
+        ),
+
+        // ------- 外观与语言 -------
+        _Group(
+          title: '外观',
+          children: [
+            _Row(
+              icon: Icons.palette_outlined,
+              label: '外观主题',
+              value: _modeLabel(mode),
+              onTap: () => _push(context, const AppearanceScreen()),
+            ),
+            _Row(
+              icon: Icons.notifications_none_rounded,
+              label: '通知',
+              onTap: () => _push(context, const NotificationSettingsScreen()),
+            ),
+          ],
+        ),
+
+        // ------- 系统 -------
+        _Group(
+          title: '系统',
+          children: [
+            _Row(
+              icon: Icons.insights_outlined,
+              label: 'Token 统计',
+              onTap: () => _push(context, const TokenStatsScreen()),
+            ),
+            _Row(
+              icon: Icons.info_outline_rounded,
+              label: '关于',
+              value: 'V0.1.0',
+              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                    content: Text('Orion Agent V0.1.0 · Flutter 构建'))),
-          ),
-        ]),
-        const SizedBox(height: 12),
-        // ------- 清空数据 -------
-        InkWell(
-          borderRadius: BorderRadius.circular(20),
+                    content: Text('Orion Agent V0.1.0 · Flutter 构建')),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 8),
+        _DangerButton(
+          label: '清空所有会话',
           onTap: () async {
             final ok = await showDialog<bool>(
               context: context,
@@ -189,106 +179,201 @@ class ProfileScreen extends ConsumerWidget {
               await ref.read(chatProvider.notifier).clearAllSessions();
             }
           },
-          child: Container(
-            width: double.infinity,
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            decoration: BoxDecoration(
-              color: surface(context),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: const Text(
-              '清空所有会话',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  color: Color(0xFFD93025),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500),
-            ),
-          ),
         ),
       ],
     );
   }
+
+  static void _push(BuildContext context, Widget page) {
+    Navigator.of(context)
+        .push(MaterialPageRoute(builder: (_) => page));
+  }
+
+  static String _modeLabel(ThemeMode m) => switch (m) {
+        ThemeMode.system => '跟随系统',
+        ThemeMode.light => '浅色',
+        ThemeMode.dark => '深色',
+      };
 }
 
-class _CardItem {
-  const _CardItem({
-    required this.icon,
-    required this.title,
-    required this.trailing,
-    required this.onTap,
-    this.subtitle,
-  });
-
-  final IconData icon;
-  final String title;
-  final String? subtitle;
-  final Widget Function() trailing;
-  final VoidCallback onTap;
-}
-
-class _CardGroup extends StatelessWidget {
-  const _CardGroup({required this.items});
-
-  final List<_CardItem> items;
+/// 顶部介绍卡：吉祥物 + 名称 + 一句话介绍。
+class _IntroCard extends StatelessWidget {
+  const _IntroCard();
 
   @override
   Widget build(BuildContext context) {
     return Container(
+      padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
         color: surface(context),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Column(
+      child: Row(
         children: [
-          for (var i = 0; i < items.length; i++) ...[
-            if (i > 0)
-              Padding(
-                padding: const EdgeInsets.only(left: 56),
-                child: Divider(
-                    height: 1, color: onSurface(context, 0.06)),
-              ),
-            InkWell(
-              borderRadius: i == 0
-                  ? const BorderRadius.vertical(top: Radius.circular(20))
-                  : (i == items.length - 1
-                      ? const BorderRadius.vertical(bottom: Radius.circular(20))
-                      : null),
-              onTap: items[i].onTap,
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                child: Row(
-                  children: [
-                    Icon(items[i].icon,
-                        size: 22, color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(width: 14),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(items[i].title,
-                              style: const TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w500)),
-                          if (items[i].subtitle != null)
-                            Text(items[i].subtitle!,
-                                style: TextStyle(
-                                    fontSize: 12,
-                                    height: 1.3,
-                                    color: onSurface(context, 0.4))),
-                        ],
-                      ),
-                    ),
-                    items[i].trailing(),
-                    const SizedBox(width: 4),
-                    Icon(Icons.chevron_right_rounded,
-                        size: 22, color: onSurface(context, 0.26)),
-                  ],
-                ),
+          MascotAvatar(size: 64, image: mascotAsset(context)),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Orion Agent',
+                    style: TextStyle(
+                        fontSize: 20, fontWeight: FontWeight.w500)),
+                const SizedBox(height: 6),
+                Text('我 24 小时在线，能搜索、算数、读网页，还有记性。',
+                    style: TextStyle(
+                        fontSize: 13,
+                        height: 1.45,
+                        color: onSurface(context, 0.55))),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 一个分组：小标题 + 白色圆角卡片。
+class _Group extends StatelessWidget {
+  const _Group({required this.title, required this.children});
+
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+            child: Text(
+              title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+                color: onSurface(context, 0.45),
               ),
             ),
-          ],
+          ),
+          Container(
+            decoration: BoxDecoration(
+              color: surface(context),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            // 必须裁剪：Container 只画背景不裁子节点，
+            // 没有它 InkWell 的水波纹会在卡片四角露出直角缺口。
+            clipBehavior: Clip.antiAlias,
+            child: Column(
+              children: [
+                for (var i = 0; i < children.length; i++) ...[
+                  if (i > 0)
+                    Padding(
+                      padding: const EdgeInsets.only(left: 52),
+                      child: Divider(
+                          height: 1, color: onSurface(context, 0.06)),
+                    ),
+                  children[i],
+                ],
+              ],
+            ),
+          ),
         ],
+      ),
+    );
+  }
+}
+
+/// 组内一行：图标 + 标题 +（右侧值）+ 箭头。
+class _Row extends StatelessWidget {
+  const _Row({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String? value;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      // 圆角由外层 _Group 的 Container 提供，这里保持直角，
+      // 否则行内的水波纹会在卡片边缘露出直角缺口。
+      borderRadius: BorderRadius.zero,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+        child: Row(
+          children: [
+            Icon(icon, size: 22, color: onSurface(context, 0.75)),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                    fontSize: 15.5, fontWeight: FontWeight.w400),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (value != null) ...[
+              const SizedBox(width: 8),
+              ConstrainedBox(
+                // 标题长时不给值无限撑开，留给标题至少 1/3 宽度
+                constraints: const BoxConstraints(maxWidth: 150),
+                child: Text(
+                  value!,
+                  style: TextStyle(
+                      fontSize: 13.5, color: onSurface(context, 0.42)),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.right,
+                ),
+              ),
+            ],
+            const SizedBox(width: 2),
+            Icon(Icons.chevron_right_rounded,
+                size: 22, color: onSurface(context, 0.26)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 危险操作按钮（清空数据）。
+class _DangerButton extends StatelessWidget {
+  const _DangerButton({required this.label, required this.onTap});
+
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(20),
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color: surface(context),
+          borderRadius: BorderRadius.circular(20),
+        ),
+        child: Text(
+          label,
+          textAlign: TextAlign.center,
+          style: const TextStyle(
+              color: Color(0xFFD93025),
+              fontSize: 15.5,
+              fontWeight: FontWeight.w500),
+        ),
       ),
     );
   }

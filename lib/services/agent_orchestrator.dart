@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'llm_client.dart';
 import 'memory_service.dart';
 import 'rag_service.dart';
+import 'token_stats_service.dart';
 import '../models/chat_message.dart' show ChatMessage;
 import '../models/llm_config.dart';
 import 'tools.dart';
@@ -51,9 +52,11 @@ class AgentOrchestrator {
     required LlmClient llm,
     required ToolRegistry tools,
     required MemoryService memory,
+    TokenStatsService? stats,
   })  : _llm = llm,
         _tools = tools,
-        _memory = memory;
+        _memory = memory,
+        _stats = stats;
 
   static const _maxSteps = 8;
 
@@ -61,12 +64,17 @@ class AgentOrchestrator {
   final ToolRegistry _tools;
   final MemoryService _memory;
 
+  /// Token 用量记账；为 null 时不统计（测试与降级场景）。
+  final TokenStatsService? _stats;
+
   Stream<AgentEvent> run({
     required LlmConfig config,
     required List<ChatMessage> history,
     CancelToken? cancelToken,
     List<RagHit> knowledge = const [],
     String persona = '',
+    bool thinking = false,
+    String reasoningEffort = 'medium',
   }) async* {
     final messages = <Map<String, dynamic>>[
       {'role': 'system', 'content': _systemPrompt(knowledge, persona)},
@@ -96,11 +104,22 @@ class AgentOrchestrator {
           messages: messages,
           tools: _tools.toOpenAiTools(),
           cancelToken: cancelToken,
+          thinking: thinking,
+          reasoningEffort: reasoningEffort,
         )) {
           if (ev is ContentDelta) {
             yield AgentDelta(ev.delta);
           } else if (ev is FinalMessage) {
             assistant = ev.message;
+          } else if (ev is TokenUsage) {
+            // 记账：每个工具调用轮次都单独计一次
+            _stats?.record(
+              provider: config.name.isEmpty ? config.model : config.name,
+              model: config.model,
+              inputTokens: ev.promptTokens,
+              outputTokens: ev.completionTokens,
+              cachedTokens: ev.cachedTokens,
+            );
           }
         }
       } on DioException catch (e) {

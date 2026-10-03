@@ -22,6 +22,7 @@ import '../services/memory_service.dart';
 import '../services/notification_service.dart';
 import '../services/rag_service.dart';
 import '../services/role_service.dart';
+import '../services/token_stats_service.dart';
 import '../services/skill_service.dart';
 import '../services/storage_service.dart';
 import '../services/terminal_service.dart';
@@ -75,7 +76,12 @@ final orchestratorProvider = Provider<AgentOrchestrator>((ref) => AgentOrchestra
       llm: ref.watch(llmClientProvider),
       tools: ref.watch(toolRegistryProvider),
       memory: ref.watch(memoryServiceProvider),
+      stats: ref.watch(tokenStatsServiceProvider),
     ));
+
+/// Token 用量统计服务。
+final tokenStatsServiceProvider =
+    Provider<TokenStatsService>((ref) => TokenStatsService(ref.watch(databaseProvider)));
 
 final voiceProvider = Provider<VoiceService>((ref) => VoiceService());
 
@@ -135,6 +141,20 @@ final activeRoleIdProvider = StateProvider<String>((ref) {
 
 /// 技能页 → 聊天输入框的预填文本（用后即清）。
 final prefillProvider = StateProvider<String>((ref) => '');
+
+/// 「深度思考」开关。开启后会在请求里带 `reasoning_effort`，
+/// 让支持该参数的模型先推理再回答（o1 / gpt-5 / glm / qwen-thinking 等）。
+///
+/// 默认关闭：不是所有服务都认这个参数，贸然开启会让部分网关报 400。
+final thinkingProvider = StateProvider<bool>((ref) {
+  return ref.watch(sharedPreferencesProvider).getBool('thinking_enabled') ?? false;
+});
+
+/// 思考强度：low / medium / high。配合 [thinkingProvider] 使用。
+final reasoningEffortProvider = StateProvider<String>((ref) {
+  return ref.watch(sharedPreferencesProvider).getString('reasoning_effort') ??
+      'medium';
+});
 
 /// 当前主题配色 id（持久化在 shared_preferences，默认经典黑）。
 final themeProvider = StateProvider<String>((ref) {
@@ -378,6 +398,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     double Function()? getTtsVolume,
     bool Function()? notifyOnAnswer,
     bool Function()? notifyPreview,
+    bool Function()? getThinking,
+    String Function()? getReasoningEffort,
   })  : _storage = storage,
         _orchestrator = orchestrator,
         _rag = rag,
@@ -392,6 +414,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _getTtsVolume = getTtsVolume ?? (() => 1.0),
         _notifyOnAnswer = notifyOnAnswer ?? (() => false),
         _notifyPreview = notifyPreview ?? (() => true),
+        _getThinking = getThinking ?? (() => false),
+        _getReasoningEffort = getReasoningEffort ?? (() => 'medium'),
         super(ChatState(
           sessions: initialSessions,
           activeSessionId: initialSessions.isEmpty ? null : initialSessions.first.id,
@@ -410,6 +434,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final double Function() _getTtsRate;
   final double Function() _getTtsVolume;
   final bool Function() _notifyOnAnswer;
+
+  /// 「深度思考」开关与思考强度（供请求体带 reasoning_effort）。
+  final bool Function() _getThinking;
+  final String Function() _getReasoningEffort;
   final bool Function() _notifyPreview;
 
   /// 由外部注入的通知发送回调（在 Provider 里绑定 NotificationService）。
@@ -557,6 +585,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
         cancelToken: _cancelToken,
         knowledge: knowledge,
         persona: _getPersona(),
+        thinking: _getThinking(),
+        reasoningEffort: _getReasoningEffort(),
       )) {
         // 长 Streaming 期间 notifier 可能已被 dispose（容器销毁/热重启），
         // 此时写 state 会抛 StateError 并让 isStreaming 永远无法复位。
@@ -681,6 +711,8 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     getTtsVolume: () => ref.read(ttsVolumeProvider),
     notifyOnAnswer: () => ref.read(notifyOnAnswerProvider),
     notifyPreview: () => ref.read(notifyPreviewProvider),
+    getThinking: () => ref.read(thinkingProvider),
+    getReasoningEffort: () => ref.read(reasoningEffortProvider),
   );
 
   // 绑定通知：读设置并在发送时遵循静音开关

@@ -23,6 +23,27 @@ class FinalMessage extends LlmEvent {
   const FinalMessage(this.message);
 }
 
+/// 一轮响应的 token 用量（OpenAI 兼容协议顶层 `usage` 字段）。
+///
+/// 单独作为事件而不是塞进 [FinalMessage]：Agent 循环里只有「拿到最终
+/// 消息」这一处会收敛统计，混进去容易被漏掉。
+class TokenUsage extends LlmEvent {
+  final int promptTokens;
+  final int completionTokens;
+
+  /// 命中提示词缓存的输入 token（`prompt_tokens_details.cached_tokens`）。
+  /// 不少网关不下发这个子对象，此时为 0。
+  final int cachedTokens;
+
+  const TokenUsage({
+    required this.promptTokens,
+    required this.completionTokens,
+    this.cachedTokens = 0,
+  });
+
+  bool get isEmpty => promptTokens <= 0 && completionTokens <= 0;
+}
+
 class _ToolCallAcc {
   String? id;
   String? name;
@@ -40,6 +61,8 @@ class LlmClient {
     required List<Map<String, dynamic>> messages,
     List<Map<String, dynamic>>? tools,
     CancelToken? cancelToken,
+    bool thinking = false,
+    String reasoningEffort = 'medium',
   }) async* {
     final base = config.baseUrl.endsWith('/')
         ? config.baseUrl.substring(0, config.baseUrl.length - 1)
@@ -52,6 +75,12 @@ class LlmClient {
       'temperature': config.temperature,
       'stream': true,
       if (tools != null && tools.isNotEmpty) 'tools': tools,
+      // 思考开关。reasoning_effort 是 OpenAI 推理模型的参数，
+      // glm / qwen 等网关也接受同名字段。不开就不下发——
+      // 部分服务见到未知参数会直接返回 400。
+      if (thinking) 'reasoning_effort': reasoningEffort,
+      // 配置里显式填了最大输出才下发，避免覆盖服务端默认值。
+      if (config.maxOutputTokens > 0) 'max_tokens': config.maxOutputTokens,
     };
 
     final resp = await _dio.post<ResponseBody>(
@@ -69,6 +98,10 @@ class LlmClient {
 
     final contentBuf = StringBuffer();
     final toolAcc = <int, _ToolCallAcc>{};
+
+    // 本轮累积到的 usage。流式里它只在最后一帧出现，
+    // 用可空变量收集，循环结束后统一 yield。
+    TokenUsage? usage;
 
     // 服务端返回空响应体（代理拦截、204、网关返回空）时 resp.data 为 null，
     // 原来的 resp.data! 会直接抛空指针。这里改为给出明确错误。
@@ -114,6 +147,47 @@ class LlmClient {
         // 异常从 async* 抛出后响应体未被关闭，反复触发会耗尽连接池。
         if (decoded is! Map) continue;
         final json = decoded.cast<String, dynamic>();
+
+        // usage 在**顶层**，不在 choices 里。流式协议有两种下发方式：
+        //   1) 最后一个带 content 的 chunk 里带 usage
+        //   2) 额外发一个 choices: [] 的空帧专门携带 usage
+        // 所以必须在 `rawChoices` 判空**之前**取，否则第 2 种会被
+        // 下面的 `isEmpty` 直接 continue 掉，统计永远拿不到数据。
+        //
+        // 不加 `usage == null` 守卫：部分网关（开了
+        // stream_options.include_usage 的 OpenAI 兼容层）**每帧都下发
+        // 累计 usage**，只有最后一帧是完整值。取最后一次才是对的。
+        final rawUsage = json['usage'];
+        if (rawUsage is Map) {
+          final u = rawUsage.cast<String, dynamic>();
+          final prompt = (u['prompt_tokens'] as num?)?.toInt() ?? 0;
+          final completion = (u['completion_tokens'] as num?)?.toInt() ?? 0;
+          // 缓存命中藏在子对象里，缺失属正常
+          var cached = 0;
+          final details = u['prompt_tokens_details'];
+          if (details is Map) {
+            cached = (details.cast<String, dynamic>()['cached_tokens'] as num?)
+                    ?.toInt() ??
+                0;
+          }
+          // 有些网关用 input_tokens / output_tokens（Anthropic 风格别名）
+          if (prompt == 0) {
+            cached = (u['cache_read_input_tokens'] as num?)?.toInt() ?? cached;
+          }
+          final effPrompt = prompt != 0
+              ? prompt
+              : ((u['input_tokens'] as num?)?.toInt() ?? 0);
+          final effCompletion = completion != 0
+              ? completion
+              : ((u['output_tokens'] as num?)?.toInt() ?? 0);
+          if (effPrompt > 0 || effCompletion > 0) {
+            usage = TokenUsage(
+              promptTokens: effPrompt,
+              completionTokens: effCompletion,
+              cachedTokens: cached,
+            );
+          }
+        }
 
         final Object? rawChoices = json['choices'];
         if (rawChoices is! List || rawChoices.isEmpty) continue;
@@ -190,6 +264,8 @@ class LlmClient {
           .toList(),
     );
     yield FinalMessage(finalMsg);
+    // usage 放在最后：Agent 循环先处理消息再记账，顺序稳定。
+    if (usage != null && !usage!.isEmpty) yield usage!;
   }
 
   /// 批量调用 OpenAI 兼容的 /embeddings 接口，返回与输入顺序一致的向量列表。
