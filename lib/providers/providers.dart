@@ -133,6 +133,18 @@ final summaryModelProvider = StateProvider<String>((ref) {
   return ref.watch(sharedPreferencesProvider).getString('summary_model') ?? '';
 });
 
+/// Agent 权限模式（聊天状态条的「权限」选择）。
+/// 初值从 prefs 读；变化由 chatProvider 构造处的 ref.listen 同步到
+/// ToolRegistry.permission（工具暴露与执行双重过滤）。
+final agentPermissionProvider = StateProvider<AgentPermission>((ref) {
+  final raw =
+      ref.watch(sharedPreferencesProvider).getString('agent_permission');
+  return AgentPermission.values.firstWhere(
+    (v) => v.name == raw,
+    orElse: () => AgentPermission.workspace,
+  );
+});
+
 /// Edge TTS 音色 id。
 final ttsVoiceProvider = StateProvider<String>((ref) {
   return ref
@@ -887,6 +899,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
 }
 
 final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
+  // 权限模式联动：初值设置 + UI 修改时同步到工具注册表。
+  // ToolRegistry 是单例，orchestrator 的每次 run 都通过它拿工具清单。
+  final registry = ref.watch(toolRegistryProvider);
+  registry.permission = ref.read(agentPermissionProvider);
+  ref.listen<AgentPermission>(agentPermissionProvider, (_, v) {
+    registry.permission = v;
+  });
   final notifier = ChatNotifier(
     initialSessions: ref.watch(initialSessionsProvider),
     storage: ref.watch(storageServiceProvider),

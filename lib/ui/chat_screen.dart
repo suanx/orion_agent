@@ -906,6 +906,7 @@ class _ComposerStatusBar extends ConsumerWidget {
     final thinking = ref.watch(thinkingProvider);
     final effort = ref.watch(reasoningEffortProvider);
     final ttsOn = ref.watch(ttsEnabledProvider);
+    final permission = ref.watch(agentPermissionProvider);
     final hasModel = active?.chatModel != null;
 
     // 模型选择器列出**同一提供商**下的聊天模型。
@@ -948,6 +949,16 @@ class _ComposerStatusBar extends ConsumerWidget {
                   .read(sharedPreferencesProvider)
                   .setBool('tts_enabled', next));
             },
+          ),
+          const SizedBox(width: 8),
+
+          // 权限模式：限制 Agent 可用的工具集（只读 / 工作区读写 / 完全访问）。
+          // 工具暴露与执行双重过滤在 ToolRegistry，切档即时生效。
+          _MiniChip(
+            icon: Icons.shield_outlined,
+            label: permission.label,
+            enabled: true,
+            onTap: () => _pickPermission(context, ref),
           ),
           const SizedBox(width: 8),
 
@@ -1029,6 +1040,38 @@ class _ComposerStatusBar extends ConsumerWidget {
     ref.read(reasoningEffortProvider.notifier).state = on ? sel : 'medium';
     unawaited(prefs.setBool('thinking_enabled', on));
     if (on) unawaited(prefs.setString('reasoning_effort', sel));
+  }
+
+  /// 弹出权限模式选择。切换同时写 provider 与 prefs，
+  /// 并由 chatProvider 的 listen 联动到 ToolRegistry。
+  Future<void> _pickPermission(BuildContext context, WidgetRef ref) async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    final current = ref.read(agentPermissionProvider);
+    final sel = await showModalBottomSheet<AgentPermission>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final p in AgentPermission.values)
+              ListTile(
+                leading: const Icon(Icons.shield_outlined, size: 20),
+                title: Text(p.label, style: const TextStyle(fontSize: 15)),
+                subtitle:
+                    Text(p.desc, style: const TextStyle(fontSize: 12)),
+                trailing: current == p
+                    ? const Icon(Icons.check_rounded, size: 20)
+                    : null,
+                onTap: () => Navigator.pop(ctx, p),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (sel == null || sel == current) return;
+    ref.read(agentPermissionProvider.notifier).state = sel;
+    unawaited(prefs.setString('agent_permission', sel.name));
   }
 
   static String _effortLabel(String effort) => switch (effort) {

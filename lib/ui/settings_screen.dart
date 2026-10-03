@@ -1325,6 +1325,17 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
                   ),
                 ],
               ),
+              // 预设参数：点选直接填入对应输入框，省得手动换算 token 数。
+              _PresetRow(
+                label: '上下文',
+                presets: const [8192, 16384, 32768, 65536, 131072, 262144, 1048576],
+                onTap: (v) => setState(() => _ctx.text = '$v'),
+              ),
+              _PresetRow(
+                label: '最大输出',
+                presets: const [1024, 2048, 4096, 8192, 16384, 32768],
+                onTap: (v) => setState(() => _out.text = '$v'),
+              ),
               Row(
                 children: [
                   const Text('温度'),
@@ -1582,6 +1593,68 @@ class _NavRow extends StatelessWidget {
                     : onSurface(context, 0.15)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 上下文长度 / 最大输出的预设参数 chips。
+///
+/// 点选直接把数值填入对应的 TextEditingController——预设覆盖常见档位
+/// （8K ~ 1M 上下文，1K ~ 32K 输出），手输仍然可用（TextField 不受限）。
+class _PresetRow extends StatelessWidget {
+  const _PresetRow({
+    required this.label,
+    required this.presets,
+    required this.onTap,
+  });
+
+  final String label;
+  final List<int> presets;
+  final ValueChanged<int> onTap;
+
+  static String _k(int n) {
+    if (n >= 1000000) {
+      final v = n / 1000000;
+      return '${v.toStringAsFixed(v % 1 == 0 ? 0 : 1)}M';
+    }
+    return '${n ~/ 1000}K';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 62,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(label,
+                  style: TextStyle(
+                      fontSize: 12, color: onSurface(context, 0.5))),
+            ),
+          ),
+          Expanded(
+            child: Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: [
+                for (final v in presets)
+                  ActionChip(
+                    label: Text(_k(v),
+                        style: const TextStyle(fontSize: 11)),
+                    visualDensity: VisualDensity.compact,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    side: BorderSide(color: onSurface(context, 0.15)),
+                    onPressed: () => onTap(v),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

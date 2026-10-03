@@ -514,6 +514,54 @@ class RunCommandTool extends Tool {
   }
 }
 
+/// Agent 权限模式（聊天状态条的「权限」选择）。
+///
+/// 三档由松到紧：完全访问 > 工作区读写 > 只读。
+/// 作用于两处：[ToolRegistry.toOpenAiTools] 只向模型暴露允许的工具，
+/// [ToolRegistry.execute] 对越权调用直接拒绝（双保险：模型幻觉调用
+/// 未暴露的工具时也能拦住）。
+enum AgentPermission { readOnly, workspace, full }
+
+extension AgentPermissionX on AgentPermission {
+  String get label => switch (this) {
+        AgentPermission.readOnly => '只读',
+        AgentPermission.workspace => '工作区读写',
+        AgentPermission.full => '完全访问',
+      };
+
+  String get desc => switch (this) {
+        AgentPermission.readOnly =>
+          '仅可联网搜索、读取网页、计算与查询知识库',
+        AgentPermission.workspace =>
+          '另可保存记忆、在终端环境执行命令（文件活动约定在 workspace）',
+        AgentPermission.full => '内置全部工具，以及 MCP 扩展工具',
+      };
+
+  /// 只读档可用的内置工具白名单。
+  static const _readOnlyTools = <String>{
+    'current_time', 'calculator', 'web_search', 'web_fetch', 'search_knowledge',
+  };
+
+  /// 工作区读写档 = 只读 + 记忆写入 + 终端命令。
+  static const _workspaceTools = <String>{
+    ..._readOnlyTools,
+    'save_memory', 'run_command',
+  };
+
+  /// 是否允许使用 [toolName]。内置名单之外的名字（MCP 扩展工具）
+  /// 仅在「完全访问」档放行。
+  bool allows(String toolName) {
+    switch (this) {
+      case AgentPermission.readOnly:
+        return _readOnlyTools.contains(toolName);
+      case AgentPermission.workspace:
+        return _workspaceTools.contains(toolName);
+      case AgentPermission.full:
+        return true;
+    }
+  }
+}
+
 /// 工具注册表：统一管理内置工具与（未来的）MCP 工具。
 class ToolRegistry {
   ToolRegistry({
@@ -540,6 +588,10 @@ class ToolRegistry {
 
   late final List<Tool> _tools;
 
+  /// 当前权限模式。由聊天页的「权限」选择联动设置（chatProvider），
+  /// 默认工作区读写（Agent 可写记忆与终端，MCP 扩展工具需手动放开）。
+  AgentPermission permission = AgentPermission.workspace;
+
   List<Tool> get all => List.unmodifiable(_tools);
 
   /// 注册工具；同名工具（如 MCP 重复连接）不会重复注册。
@@ -561,8 +613,10 @@ class ToolRegistry {
   /// 当前已注册的工具名（供测试与调试）。
   List<String> get toolNames => _tools.map((t) => t.name).toList();
 
-  /// 转成 OpenAI tools 参数格式。
+  /// 转成 OpenAI tools 参数格式。只暴露当前权限允许的工具——
+  /// 模型看不到被禁用的工具，从源头减少越权调用。
   List<Map<String, dynamic>> toOpenAiTools() => _tools
+      .where((t) => permission.allows(t.name))
       .map((t) => {
             'type': 'function',
             'function': {
@@ -575,6 +629,11 @@ class ToolRegistry {
 
   /// 执行一次工具调用，永不抛异常（错误转为文本返回给模型）。
   Future<String> execute(String name, String rawArguments) async {
+    // 双保险：即使模型幻觉调用了未暴露的工具，这里也直接拒绝。
+    if (!permission.allows(name)) {
+      return '错误：当前权限为「${permission.label}」，不允许使用工具 "$name"。'
+          '如需使用，请在聊天页的权限选择中切换模式。';
+    }
     final tool = _tools.where((t) => t.name == name).toList();
     if (tool.isEmpty) return '错误：未找到名为 "$name" 的工具';
     Map<String, dynamic> args;
