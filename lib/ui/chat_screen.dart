@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../models/chat_message.dart';
+import '../models/llm_config.dart';
 import '../providers/providers.dart';
 import '../services/skill_service.dart';
 
@@ -558,7 +559,7 @@ class _EmptyGreetingState extends State<_EmptyGreeting> {
               alignment: Alignment.centerLeft,
               child: InkWell(
                 borderRadius: BorderRadius.circular(20),
-                onTap: () => onSuggestion(text),
+                onTap: () => widget.onSuggestion(text),
                 child: Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 14, vertical: 11),
@@ -798,7 +799,7 @@ class _ComposerStatusBar extends ConsumerWidget {
             Expanded(
               child: _ModelPicker(
                 models: chatModels,
-                activeId: active!.id,
+                activeId: active.id,
                 onChanged: (id) =>
                     ref.read(configProvider.notifier).setActive(id),
               ),

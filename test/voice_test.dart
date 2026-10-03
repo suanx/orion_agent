@@ -46,15 +46,9 @@ void main() {
     });
 
     test('parseEdgeFrame 能解析文本帧里的音频（原实现只认二进制帧）', () {
-      // 服务端实际格式：头部 ASCII + 
-
- + MP3 数据
-      final header = 'X-RequestId:abc
-Content-Type:audio/mpeg
-'
-          'X-StreamId:xyz
-Path:audio
-';
+      // 服务端实际格式：头部 ASCII + \r\n\r\n + MP3 数据
+      final header = 'X-RequestId:abc\r\nContent-Type:audio/mpeg\r\n'
+          'X-StreamId:xyz\r\nPath:audio\r\n\r\n';
       final mp3 = <int>[0xFF, 0xFB, 0x90, 0x64];
       final raw = <int>[...latin1.encode(header), ...mp3];
       final f = parseEdgeFrame(Uint8List.fromList(raw), isText: true);

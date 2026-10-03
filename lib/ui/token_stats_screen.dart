@@ -451,16 +451,17 @@ class _ChartLegend extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _dot('输入', Theme.of(context).colorScheme.primary),
+        _dot(context, '输入', Theme.of(context).colorScheme.primary),
         const SizedBox(width: 16),
-        _dot('输出', const Color(0xFFF59E0B)),
+        _dot(context, '输出', const Color(0xFFF59E0B)),
         const SizedBox(width: 16),
-        _dot('缓存', const Color(0xFF7C3AED)),
+        _dot(context, '缓存', const Color(0xFF7C3AED)),
       ],
     );
   }
 
-  Widget _dot(String label, Color c) => Row(
+  // context 必须显式传进来：方法内嵌表达式里取不到 build 的 context
+  Widget _dot(BuildContext context, String label, Color c) => Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Container(

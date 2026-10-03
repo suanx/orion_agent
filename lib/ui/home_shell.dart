@@ -112,8 +112,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       backgroundColor: surface(context),
       drawer: const SessionDrawer(),
       extendBody: true,
-      // 自己避让，关掉 Scaffold 内置的（否则会与位移叠加成双倍间距）
-      resizeToAvoidBottomInsets: false,
+      // 不设 resizeToAvoidBottomInsets：当前 Flutter stable 已移除该参数
+      // （设了会编译失败）。改为整体不依赖 Scaffold 的避让——
+      // body 与底栏都用下面的 kb 手动位移，两者同步，不会叠加。
       body: Padding(
         padding: EdgeInsets.only(bottom: kb),
         child: IndexedStack(
