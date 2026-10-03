@@ -1,34 +1,61 @@
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../theme.dart';
+import '../providers/providers.dart';
 
 /// 当前版本号。发版时与 pubspec.yaml 的 `version` 同步更新。
-const String kAppVersion = '0.1.3';
+const String kAppVersion = '0.1.4';
 
-/// GitHub Releases 最新版 API 与页面。
-const _latestApi =
-    'https://api.github.com/repos/suanx/orion_agent/releases/latest';
+/// GitHub Releases 页面（检查逻辑在 UpdateService）。
 const _releasesPage = 'https://github.com/suanx/orion_agent/releases';
 
 /// 关于页：软件介绍 + 在线更新。
-class AboutScreen extends StatefulWidget {
+class AboutScreen extends ConsumerStatefulWidget {
   const AboutScreen({super.key});
 
   @override
-  State<AboutScreen> createState() => _AboutScreenState();
+  ConsumerState<AboutScreen> createState() => _AboutScreenState();
 }
 
-class _AboutScreenState extends State<AboutScreen> {
-  // 检查更新状态机：idle → checking → upToDate / available / downloading / error
+class _AboutScreenState extends ConsumerState<AboutScreen>
+    with WidgetsBindingObserver {
+  // 检查更新状态机：idle → checking → upToDate / available → downloading
+  //   → downloaded（等待安装授权或用户点安装）→ available
   String _state = 'idle';
   String? _message;
   String? _remoteVersion;
   String? _changelog;
   String? _apkUrl;
   int _downloadPct = 0;
+
+  /// 已下载的 APK 路径（downloaded 状态下点「安装」直接拉安装器）。
+  String? _downloadPath;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// 从「安装未知应用」授权页返回后自动继续安装。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _state == 'downloaded' &&
+        _downloadPath != null) {
+      _installApk();
+    }
+  }
 
   Future<void> _checkUpdate() async {
     if (_state == 'checking' || _state == 'downloading') return;
@@ -37,42 +64,22 @@ class _AboutScreenState extends State<AboutScreen> {
       _message = null;
     });
     try {
-      final resp = await Dio()
-          .get<Map<String, dynamic>>(
-        _latestApi,
-        options: Options(responseType: ResponseType.json),
-      )
-          .timeout(const Duration(seconds: 15));
-      final data = resp.data;
-      if (data == null) throw Exception('无响应数据');
-      final tag = (data['tag_name'] as String? ?? '').replaceFirst('v', '');
-      if (tag.isEmpty) throw Exception('release 缺少 tag_name');
-      final changelog = (data['body'] as String? ?? '').trim();
-      String? apkUrl;
-      final assets = data['assets'];
-      if (assets is List) {
-        for (final a in assets) {
-          if (a is! Map) continue;
-          final m = a.cast<String, dynamic>();
-          final name = m['name'] as String? ?? '';
-          if (name.toLowerCase().endsWith('.apk')) {
-            apkUrl = m['browser_download_url'] as String?;
-            break;
-          }
-        }
-      }
+      final info = await ref
+          .read(updateServiceProvider)
+          .checkForUpdate(kAppVersion, timeout: const Duration(seconds: 15));
       if (!mounted) return;
-      if (_isNewer(tag, kAppVersion)) {
-        setState(() {
-          _state = 'available';
-          _remoteVersion = tag;
-          _changelog = changelog.isEmpty ? null : changelog;
-          _apkUrl = apkUrl;
-        });
-      } else {
+      if (info == null) {
         setState(() {
           _state = 'upToDate';
           _message = '当前已是最新版本（$kAppVersion）';
+        });
+      } else {
+        setState(() {
+          _state = 'available';
+          _remoteVersion = info.version;
+          _changelog = info.changelog;
+          _apkUrl = info.apkUrl;
+          _message = null;
         });
       }
     } catch (e) {
@@ -97,17 +104,15 @@ class _AboutScreenState extends State<AboutScreen> {
           setState(() => _downloadPct = (received / total * 100).round());
         }
       });
-      // 安装 APK 需要用户在系统设置里允许「安装未知应用」，
-      // 首次触发时系统会弹授权页，这里只负责把安装器拉起来。
-      final r = await OpenFilex.open(savePath);
       if (!mounted) return;
-      if (r.type != ResultType.done) {
-        throw Exception(r.message);
-      }
+      _downloadPath = savePath;
       setState(() {
-        _state = 'available';
-        _message = '已启动安装器，如未弹出请允许「安装未知应用」权限。';
+        _state = 'downloaded';
+        _message = '下载完成，正在准备安装…';
       });
+      // 下载完自动进入安装流程：没授权会先跳授权页，
+      // 授权返回后 didChangeAppLifecycleState 会自动继续。
+      await _installApk();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -117,19 +122,39 @@ class _AboutScreenState extends State<AboutScreen> {
     }
   }
 
-  /// 版本比较：逐段数字比较，段数不足补 0。'v' 前缀已在调用前剥掉。
-  static bool _isNewer(String remote, String local) {
-    List<int> parse(String v) =>
-        v.split('.').map((s) => int.tryParse(s) ?? 0).toList();
-    final a = parse(remote);
-    final b = parse(local);
-    final n = a.length > b.length ? a.length : b.length;
-    for (var i = 0; i < n; i++) {
-      final x = i < a.length ? a[i] : 0;
-      final y = i < b.length ? b[i] : 0;
-      if (x != y) return x > y;
+  /// 拉起 APK 安装器。未授权「安装未知应用」时先跳授权页。
+  Future<void> _installApk() async {
+    final path = _downloadPath;
+    if (path == null) return;
+    final perms = ref.read(permissionServiceProvider);
+    final canInstall = await perms.canInstallPackages();
+    if (!canInstall) {
+      if (!mounted) return;
+      setState(() {
+        _state = 'downloaded';
+        _message = '需要允许「安装未知应用」：即将打开授权页，'
+            '开启后返回会自动继续安装。';
+      });
+      await perms.open('install');
+      return;
     }
-    return false;
+    try {
+      final r = await OpenFilex.open(path);
+      if (!mounted) return;
+      if (r.type != ResultType.done) {
+        throw Exception(r.message);
+      }
+      setState(() {
+        _state = 'available';
+        _message = '已启动安装器，按系统提示完成升级。';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _state = 'downloaded';
+        _message = '安装器启动失败（$e），点「安装」重试。';
+      });
+    }
   }
 
   @override
@@ -249,6 +274,7 @@ class _AboutScreenState extends State<AboutScreen> {
   }
 
   List<Widget> _updateTiles(BuildContext context) {
+    final busy = _state == 'checking' || _state == 'downloading';
     final tiles = <Widget>[
       ListTile(
         leading: const Icon(Icons.system_update_outlined, size: 20),
@@ -258,12 +284,14 @@ class _AboutScreenState extends State<AboutScreen> {
         // 必须包一层 Text（CI run#18 的 error 之一）
         subtitle: _subtitleText(context),
         trailing: _updateTrailing(context),
-        onTap:
-            (_state == 'checking' || _state == 'downloading')
-                ? null
-                : (_state == 'available' && _apkUrl != null
-                    ? _downloadUpdate
-                    : _checkUpdate),
+        onTap: busy
+            ? null
+            : switch (_state) {
+                // available 且下载过：点「安装」直接重试安装器
+                'downloaded' => _installApk,
+                'available' when _apkUrl != null => _downloadUpdate,
+                _ => _checkUpdate,
+              },
       ),
     ];
     // 发现新版时展示更新日志
@@ -309,6 +337,8 @@ class _AboutScreenState extends State<AboutScreen> {
             '${_apkUrl == null ? '（release 未附带 APK，请前往 GitHub 下载）' : ''}';
       case 'downloading':
         return '下载中 $_downloadPct%';
+      case 'downloaded':
+        return _message ?? '已下载，点击安装';
       case 'upToDate':
       case 'error':
         return _message;
@@ -330,6 +360,9 @@ class _AboutScreenState extends State<AboutScreen> {
                 strokeWidth: 2, value: _downloadPct / 100));
       case 'available':
         return Icon(Icons.download_rounded,
+            size: 20, color: Theme.of(context).colorScheme.primary);
+      case 'downloaded':
+        return Icon(Icons.install_mobile_rounded,
             size: 20, color: Theme.of(context).colorScheme.primary);
       default:
         return Icon(Icons.chevron_right_rounded,

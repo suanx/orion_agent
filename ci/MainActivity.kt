@@ -31,6 +31,14 @@ class MainActivity : FlutterActivity() {
                     "nativeLibDir" -> result.success(applicationInfo.nativeLibraryDir)
                     "filesDir" -> result.success(filesDir.absolutePath)
                     "permissionStatus" -> result.success(permissionStatus())
+                    "canInstallPackages" -> result.success(
+                        try {
+                            // 「安装未知应用」授权（API 26+；更早版本无此限制，
+                            // 视为已授权）
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+                                packageManager.canRequestPackageInstalls()
+                        } catch (_: Exception) { false }
+                    )
                     "openPermission" -> {
                         openPermission(call.argument<String>("kind") ?: "")
                         result.success(null)
@@ -132,6 +140,24 @@ class MainActivity : FlutterActivity() {
                             // 部分 ROM 不支持直达，退到列表页让用户自己找
                             startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
                         }
+                    }
+                }
+                "install" -> {
+                    // 应用内更新的前置授权：「安装未知应用」开关页。
+                    // 直达本应用；旧版本落到应用详情页。
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                    Uri.parse("package:$packageName")
+                                )
+                            )
+                        } catch (_: Exception) {
+                            openAppDetails()
+                        }
+                    } else {
+                        openAppDetails()
                     }
                 }
             }

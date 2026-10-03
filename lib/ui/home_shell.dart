@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/providers.dart';
 import '../services/navigation_service.dart';
 import '../services/terminal_service.dart';
+import 'about_screen.dart';
 import 'chat_screen.dart';
 import 'sessions_drawer.dart';
 import 'setup_screen.dart';
@@ -47,6 +48,71 @@ class _HomeShellState extends ConsumerState<HomeShell> {
       ref.read(navIntentProvider.notifier).state = null;
       _applyIntent(intent);
     });
+    // 启动自动检查更新：延迟几秒避开启动高峰；
+    // 发现新版本弹窗展示（用户要求：每次进入软件都自动检查）。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _autoCheckUpdate());
+  }
+
+  /// 启动时自动检查更新，发现新版本弹窗展示更新日志。
+  Future<void> _autoCheckUpdate() async {
+    // 延迟：首帧渲染 + 终端自启任务 + MCP 连接都在抢启动窗口，
+    // 更新检查不与它们竞争。
+    await Future<void>.delayed(const Duration(seconds: 4));
+    final info =
+        await ref.read(updateServiceProvider).checkForUpdate(kAppVersion);
+    if (info == null || !mounted) return;
+    ref.read(pendingUpdateProvider.notifier).state = info;
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (ctx) => AlertDialog(
+        title: Text('发现新版本 V${info.version}'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('当前版本 V$kAppVersion，建议更新以获得最新功能与修复。',
+                    style: TextStyle(
+                        fontSize: 13,
+                        height: 1.5,
+                        color: onSurface(ctx, 0.55))),
+                if (info.changelog != null) ...[
+                  const SizedBox(height: 12),
+                  Text('更新日志',
+                      style: TextStyle(
+                          fontSize: 12, color: onSurface(ctx, 0.4))),
+                  const SizedBox(height: 6),
+                  Text(info.changelog!,
+                      style: TextStyle(
+                          fontSize: 13,
+                          height: 1.55,
+                          color: onSurface(ctx, 0.7))),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('暂不'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              // 跳到关于页：那里有下载进度与安装授权引导
+              Navigator.of(ctx).push(MaterialPageRoute(
+                  builder: (_) => const AboutScreen()));
+            },
+            child: const Text('去更新'),
+          ),
+        ],
+      ),
+    );
   }
 
   /// 执行并清空导航意图。

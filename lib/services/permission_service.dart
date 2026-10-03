@@ -55,10 +55,19 @@ class PermissionService {
     }
   }
 
-  /// 跳转对应权限的系统设置页。kind 见 [openPermission] 的分支。
+  /// 跳转对应权限的系统设置页。kind 见 ci/MainActivity.kt openPermission。
   Future<void> open(String kind) async {
     try {
       await _channel.invokeMethod('openPermission', {'kind': kind});
     } catch (_) {}
+  }
+
+  /// 是否已授权「安装未知应用」（应用内更新装 APK 的前置条件）。
+  Future<bool> canInstallPackages() async {
+    try {
+      return await _channel.invokeMethod<bool>('canInstallPackages') ?? false;
+    } catch (_) {
+      return false;
+    }
   }
 }

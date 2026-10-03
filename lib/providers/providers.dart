@@ -30,6 +30,7 @@ import '../services/skill_service.dart';
 import '../services/storage_service.dart';
 import '../services/terminal_service.dart';
 import '../services/tools.dart';
+import '../services/update_service.dart';
 import '../services/voice_service.dart';
 
 /// 在 main() 中 override 注入。
@@ -95,6 +96,13 @@ final notificationServiceProvider =
 /// 用户从系统设置返回后要立刻看到最新状态。
 final permissionServiceProvider =
     Provider<PermissionService>((ref) => PermissionService());
+
+/// 应用内更新检查。
+final updateServiceProvider = Provider<UpdateService>((ref) => UpdateService());
+
+/// 启动自动检查发现的可用更新（null = 无）。
+/// HomeShell 弹窗展示；用户点「去更新」后清除。
+final pendingUpdateProvider = StateProvider<UpdateInfo?>((ref) => null);
 
 /// 当前语音合成引擎（edge = 免 Key 在线合成，system = 系统 TTS）。
 ///
