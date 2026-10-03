@@ -535,6 +535,43 @@ class TerminalService {
     );
   }
 
+  /// 环境诊断：终端起不来时输出关键状态，供用户截图反馈。
+  ///
+  /// 覆盖所有「文件层面」的可能故障点：
+  ///   - proot 四件套是否部署、大小是否正常（占位文本 ~50 字节即 APK 没注入）
+  ///   - rootfs 是否存在、/bin/sh（symlink）与 busybox 是否就位
+  ///   - 执行位是否有效（chmod 后 st_mode 的 user-exec 位）
+  Future<String> diagnose(TerminalDistro d) async {
+    final buf = StringBuffer();
+    final support = await getApplicationSupportDirectory();
+    final binDir = Directory('${support.path}/bin');
+    buf.writeln('[诊断] 可执行目录: ${binDir.path}');
+    for (final name in _prootAssets.keys) {
+      final f = File('${binDir.path}/$name');
+      if (!f.existsSync()) {
+        buf.writeln('[诊断] $name: 缺失');
+        continue;
+      }
+      final size = f.lengthSync();
+      final mode = f.statSync().mode;
+      // 0o100 = S_IXUSR（owner 执行位）
+      final execBit = (mode & 0x40) != 0;
+      buf.writeln(
+          '[诊断] $name: $size 字节, 可执行位=${execBit ? '有' : '无'}');
+    }
+    final rootfs = await rootfsDir(d);
+    buf.writeln('[诊断] rootfs: $rootfs '
+        '${Directory(rootfs).existsSync() ? '存在' : '缺失'}');
+    for (final p in const ['/bin/sh', '/bin/busybox', '/bin/apk', '/root']) {
+      final target = '$rootfs$p';
+      final isLink = Link(target).existsSync();
+      final ok = File(target).existsSync() || Directory(target).existsSync();
+      buf.writeln('[诊断] rootfs$p: '
+          '${ok ? (isLink ? '存在(链接)' : '存在') : '缺失'}');
+    }
+    return buf.toString();
+  }
+
   /// 删除指定发行版的环境。
   Future<void> uninstall(TerminalDistro d) async {
     final dir = Directory(await rootfsDir(d));

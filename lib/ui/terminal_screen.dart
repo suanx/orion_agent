@@ -152,8 +152,13 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
         if (!out.contains('__ok__')) {
           _envBroken = true;
           _appendLog('环境无法运行：echo 没有返回预期结果。');
-          _appendLog('exitCode=${probe.exitCode} 输出=${_clip(out)}');
-          _appendLog('请尝试「删除环境」后重新安装。');
+          _appendLog('exitCode=${probe.exitCode} 完整输出=${probe.output.trim()}');
+          // 文件层面的诊断：四件套是否部署、rootfs 是否完整，
+          // 用户截图这段即可定位「是 APK 不完整还是环境损坏」。
+          try {
+            _appendLog(await _terminal.diagnose(_distro));
+          } catch (_) {}
+          _appendLog('请尝试「删除环境」后重新安装；若诊断为缺失，请重新下载安装最新 APK。');
           return;
         }
         _appendLog('环境可用（${out.split('\n').last.trim()}）');
@@ -253,6 +258,13 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             out.contains('Could not resolve') ||
             out.contains('Network is unreachable')) {
           _appendLog('看起来是网络问题：检查设备是否能访问镜像源。');
+        }
+        if (out.contains('inaccessible or not found')) {
+          // 系统 shell 对 proot/初始程序的报错措辞 —— 文件层面有问题，
+          // 附上诊断，用户截图即可定位。
+          try {
+            _appendLog(await _terminal.diagnose(_distro));
+          } catch (_) {}
         }
       }
       await _checkTools();
