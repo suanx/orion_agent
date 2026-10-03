@@ -803,7 +803,10 @@ class _ComposerStatusBar extends ConsumerWidget {
                 activeName: active!.chatModel!.name,
                 onChanged: (name) => ref
                     .read(configProvider.notifier)
-                    .upsert(active.copyWith(defaultChatModel: name)),
+                    // active 是 LlmConfig?：`active!` 只在它所在的那个表达式里
+                    // 生效，不会把变量本身提升为非空。闭包里必须再写一次 !，
+                    // 否则 analyzer 报「receiver 可能为 null」。
+                    .upsert(active!.copyWith(defaultChatModel: name)),
               ),
             )
           else

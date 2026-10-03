@@ -1364,6 +1364,24 @@ zh-CN-liaoning-XiaobeiNeural  → (zh-CN-liaoning, XiaobeiNeural)
 Responses 协议栈，后者需要脚本运行时 + 面板渲染，都是独立子系统。
 界面上保留了行但明确标注「暂未支持」，不做成点了没反应的假开关。
 
+### 11.15 打包前全量复查（2026-10-03，第三次推送前）
+
+本地无 Flutter SDK，无法跑 `flutter analyze`，改用「语法配平扫描 +
+import 有效性 + 逐文件人工对照 + CI shell 块 `bash -n`」四层静态体检，
+覆盖 58 个 dart 文件与 11 个 CI run 块。查出 2 个会在 CI 上失败的问题：
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 76 | **composer 模型选择器编译不过** | `active` 声明为 `LlmConfig?`。同一表达式里写过 `active!.chatModel!.name`，但 `!` **只在它所在的那个表达式内生效，不会把变量本身提升为非空**；紧随其后的闭包 `onChanged: (name) => ... active.copyWith(...)` 里 receiver 仍可空，analyzer 报 `The method 'copyWith' can't be unconditionally invoked because the receiver can be null` | 闭包内补 `active!`，并加注释说明「`!` 不提升变量」这个坑 |
+| 77 | CI 构建失败时的诊断信息被污染 | `build.yml` 的 Build APK 步骤里有一行 `// Execution failed、Caused by 等`。YAML 的 `run:` 块是 **sh**，`//` 不是注释而是命令，会被当成路径 `/` 执行并报 `Is a directory`，把真正的 Gradle 错误挤走 | 改为 shell 的 `#`；并用 `bash -n` 校验全部 11 个 run 块 |
+
+**Dart 的 `!` 不提升变量**是这次唯一靠静态阅读发现、无法被任何 lint 规则
+提示的坑（`flutter_lints` 不含 `unnecessary_non_null_assertion` 之外的相关检查），
+后续凡「先 `x!` 取值、后在闭包里用 `x`」的写法都要复核。
+
+**顺带修正**：附录 A 中 `schemaVersion` 记为 6，实际已是 7
+（Token 用量统计表 `TokenUsageRows` 加入时升版）。
+
 ---
 
 ## 12. 待修复的问题
@@ -1545,7 +1563,7 @@ expect(s.contains('#'), isFalse);
 | 工具输出截断 | 4000 字 | `tools.dart:288/383/466` |
 | 通知摘要截断 | 120 字 | `notification_service.dart:202` |
 | 温度范围 | 0–1.5，默认 0.7 | `settings_screen.dart:388/335` |
-| schemaVersion | 6 | `database.dart:125` |
+| schemaVersion | 7 | `database.dart:156` |
 
 ## 附录 B：文档维护约定
 

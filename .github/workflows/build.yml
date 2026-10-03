@@ -328,7 +328,10 @@ jobs:
           if [ "$RC" -ne 0 ]; then
             echo "::error ::flutter build apk 退出码 $RC"
             # Kotlin/Gradle 编译错误的关键行：e:/w: 前缀、What went wrong、
-            // Execution failed、Caused by 等
+            # Execution failed、Caused by 等。
+            # ⚠️ 这里必须用 shell 的 `#`，不能用 `//` —— 后者在 sh 里不是注释，
+            # 会被当成命令去执行（`//` 是个目录，报 "Is a directory"），
+            # 失败信息会被淹没在无意义的报错里。
             grep -nE '^(e|w): |error:|^e: |What went wrong|Execution failed|Caused by|FAILURE:|\* Try|Compilation error' /tmp/build.txt \
               | head -50 | awk '{printf "::error ::%s\n", $0}'
             echo "::error ::--- What went wrong 段落 ---"
