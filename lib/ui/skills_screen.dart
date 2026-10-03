@@ -1,6 +1,7 @@
 import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'status_bar_area.dart';
 
 import '../providers/providers.dart';
 import '../services/database.dart';
@@ -44,22 +45,25 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
 
     return Column(
       children: [
-        SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
-            child: Row(
-              children: [
-                const Text('探索发现',
-                    style:
-                        TextStyle(fontSize: 26, fontWeight: FontWeight.w500)),
-                const SizedBox(width: 16),
-                Text('技能',
-                    style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w500,
-                        color: onSurface(context, 0.3))),
-              ],
+        // StatusBarArea 把状态栏那条区域也涂成页面底色（SafeArea 自身不画背景）
+        StatusBarArea(
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 4),
+              child: Row(
+                children: [
+                  const Text('探索发现',
+                      style:
+                          TextStyle(fontSize: 26, fontWeight: FontWeight.w500)),
+                  const SizedBox(width: 16),
+                  Text('技能',
+                      style: TextStyle(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w500,
+                          color: onSurface(context, 0.3))),
+                ],
+              ),
             ),
           ),
         ),

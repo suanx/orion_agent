@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'status_bar_area.dart';
 
 import '../models/chat_message.dart';
 import '../models/llm_config.dart';
@@ -276,11 +277,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     return Column(
       children: [
         // ------- 顶栏：汉堡 + 标题 -------
-        // SafeArea 只给子节点加padding，自身不涂背景；edge-to-edge 下
-        // 状态栏那条区域会透出窗口底色（黑边）。所以用 Container 包一层
-        // 把状态栏 + 顶栏一起涂成页面底色。
-        Container(
-          color: scaffoldBg(context),
+        // StatusBarArea 把状态栏那条区域也涂成页面底色。
+        // SafeArea 只给子节点加 padding、自身不涂背景，edge-to-edge 下
+        // 状态栏区域会透出窗口底色（黑边）。
+        StatusBarArea(
           child: SafeArea(
             bottom: false,
             child: SizedBox(

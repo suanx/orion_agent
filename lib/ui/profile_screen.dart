@@ -1,6 +1,7 @@
 import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'status_bar_area.dart';
 
 import '../providers/providers.dart';
 import 'appearance_screen.dart';
@@ -35,11 +36,14 @@ class ProfileScreen extends ConsumerWidget {
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
       children: [
         // ------- 顶部留白（状态栏）+ 介绍卡 -------
-        SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.only(top: 8, bottom: 20),
-            child: _IntroCard(),
+        // StatusBarArea 把状态栏那条区域也涂成页面底色（SafeArea 自身不画背景）
+        StatusBarArea(
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8, bottom: 20),
+              child: _IntroCard(),
+            ),
           ),
         ),
 

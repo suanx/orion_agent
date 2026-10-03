@@ -27,6 +27,14 @@ void _applyImmersiveUI(Brightness brightness) {
     SystemUiMode.edgeToEdge,
     overlays: SystemUiOverlay.values,
   );
+  // 状态栏/导航栏保持透明，背景由 Flutter 侧的 Scaffold + StatusBarArea 提供。
+  //
+  // ⚠️ 两条必要条件，缺一个就会出现「状态栏一条黑边」：
+  // 1. 这里 statusBarColor 必须是 transparent；
+  // 2. **CI 不能往 styles.xml 注入 windowDrawsSystemBarBackgrounds=true**。
+  //    那条属性把系统栏背景的绘制权交给 Android 框架，框架用主题默认值
+  //    （不透明黑）绘制，并画在 Flutter 之上——上面这条 transparent
+  //    会被完全架空，Flutter 里涂什么色都看不见。
   SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
     statusBarIconBrightness:

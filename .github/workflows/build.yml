@@ -132,33 +132,56 @@ jobs:
           echo "Kotlin/Java jvmTarget 均为 17，校验通过"
 
       - name: Enable edge-to-edge window layout
-        # 沉浸式状态栏：CI 用 flutter create 生成的 styles.xml 在部分 Flutter
-        # 版本里带 windowOptOutEdgeToEdgeEnforcement（Android 15 起强制
-        # edge-to-edge），这里去掉它并显式声明，让内容延伸到状态栏/手势条下方。
+        # 沉浸式状态栏：内容延伸到状态栏/手势条下方，背景由 Flutter 绘制。
+        #
+        # ⚠️ 不要加 android:windowDrawsSystemBarBackgrounds=true。
+        # 它会把系统栏背景的绘制权交给 Android 框架，框架用主题默认的
+        # 不透明黑（windowBackground/statusBarColor 的默认值）画状态栏，
+        # Flutter 里 SystemChrome 设的 statusBarColor: transparent 被架空，
+        # 表现为「状态栏一条黑边」—— 即使 Flutter 侧已经用 Container
+        # 涂了状态栏区域也盖不住，因为系统那层画在 Flutter 之上。
+        #
+        # 正确做法：系统栏保持透明（edge-to-edge 默认行为），
+        # 让 Flutter 的 Scaffold/Container 露出来当背景。
+        #
         # 注意：用 sed/grep 而非 python heredoc——YAML 里 run 块整体缩进，
         # heredoc 内容会带上前导空格，Python 会报 IndentationError。
         run: |
           set -e
-          STYLES=$(find android/app/src/main/res -name styles.xml | head -1)
-          echo "styles: $STYLES"
-          if [ -z "$STYLES" ]; then
+          # 处理**全部** styles.xml：项目通常有 values/ 与 values-night/ 两份，
+          # 只改一个（原先的 head -1）会漏掉深色模式那份，
+          # 表现为「浅色正常、深色模式下状态栏又黑回来了」。
+          mapfile -t STYLES < <(find android/app/src/main/res -name styles.xml)
+          if [ ${#STYLES[@]} -eq 0 ]; then
             echo "未找到 styles.xml，跳过（由 Flutter 默认值接管）"
             exit 0
           fi
-          echo "--- before ---"; cat "$STYLES"
-          # 移除 edge-to-edge 退出开关
-          sed -i '/windowOptOutEdgeToEdgeEnforcement/d' "$STYLES"
-          # 移除已有的 cutout 声明，随后统一补一条（保证幂等）
-          sed -i '/windowLayoutInDisplayCutoutMode/d' "$STYLES"
-          # 在 </style> 前插入两条；用 \( *\) 复用原有缩进，避免破坏 XML 排版
-          sed -i 's#^\( *\)</style>#\1    <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>\n\1    <item name="android:windowDrawsSystemBarBackgrounds">true</item>\n\1</style>#' "$STYLES"
-          echo "--- after ---"; cat "$STYLES"
-          grep -q "windowLayoutInDisplayCutoutMode" "$STYLES" \
-            || { echo "edge-to-edge 注入失败"; exit 1; }
-          if grep -q "windowOptOutEdgeToEdgeEnforcement" "$STYLES"; then
-            echo "windowOptOutEdgeToEdgeEnforcement 仍存在"; exit 1
-          fi
-          echo "edge-to-edge 配置完成"
+          echo "找到 ${#STYLES[@]} 个 styles.xml"
+          for STYLES in "${STYLES[@]}"; do
+            echo "=== 处理 $STYLES ==="
+            echo "--- before ---"; cat "$STYLES"
+            # 移除 edge-to-edge 退出开关
+            sed -i '/windowOptOutEdgeToEdgeEnforcement/d' "$STYLES"
+            # 移除已有的 cutout / 系统栏背景权声明，随后统一补（保证幂等）
+            sed -i '/windowLayoutInDisplayCutoutMode/d' "$STYLES"
+            sed -i '/windowDrawsSystemBarBackgrounds/d' "$STYLES"
+            # 显式声明系统栏透明：Android 15 之前靠这个生效，
+            # 15 之后被强制 edge-to-edge 覆盖，但写出来无害且意图明确。
+            sed -i 's#^\( *\)</style>#\1    <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>\n\1    <item name="android:statusBarColor">@android:color/transparent</item>\n\1    <item name="android:navigationBarColor">@android:color/transparent</item>\n\1</style>#' "$STYLES"
+            echo "--- after ---"; cat "$STYLES"
+            # 校验：cutout 已加、退出开关已删、**系统栏背景权没有回到框架手里**
+            grep -q "windowLayoutInDisplayCutoutMode" "$STYLES" \
+              || { echo "$STYLES: cutout 注入失败"; exit 1; }
+            if grep -q "windowOptOutEdgeToEdgeEnforcement" "$STYLES"; then
+              echo "$STYLES: windowOptOutEdgeToEdgeEnforcement 仍存在"; exit 1
+            fi
+            if grep -q "windowDrawsSystemBarBackgrounds" "$STYLES"; then
+              echo "$STYLES: windowDrawsSystemBarBackgrounds 仍存在（会让状态栏变黑）"; exit 1
+            fi
+            grep -q "android:statusBarColor" "$STYLES" \
+              || { echo "$STYLES: statusBarColor 未注入"; exit 1; }
+          done
+          echo "edge-to-edge 配置完成（${#STYLES[@]} 个文件）"
 
       - name: Generate app icon from mascot
         run: |

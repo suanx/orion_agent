@@ -2,6 +2,7 @@ import '../theme.dart';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'status_bar_area.dart';
 
 /// 任务 Tab（M3 功能的占位页，风格与设计稿一致）。
 class TasksScreen extends StatefulWidget {
@@ -62,35 +63,38 @@ class _TasksScreenState extends State<TasksScreen> {
     return Column(
       children: [
         // ------- 顶栏 -------
-        SafeArea(
-          bottom: false,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('自动任务',
-                    style:
-                        TextStyle(fontSize: 26, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    Container(
-                      width: 6,
-                      height: 6,
-                      decoration: const BoxDecoration(
-                          color: Color(0xFF3B82F6), shape: BoxShape.circle),
-                    ),
-                    const SizedBox(width: 5),
-                    Text('我的手机',
-                        style: TextStyle(
-                            fontSize: 13,
-                            color: onSurface(context, 0.4))),
-                    Icon(Icons.keyboard_arrow_down_rounded,
-                        size: 16, color: onSurface(context, 0.4)),
-                  ],
-                ),
-              ],
+        // StatusBarArea 把状态栏那条区域也涂成页面底色（SafeArea 自身不画背景）
+        StatusBarArea(
+          child: SafeArea(
+            bottom: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('自动任务',
+                      style:
+                          TextStyle(fontSize: 26, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Container(
+                        width: 6,
+                        height: 6,
+                        decoration: const BoxDecoration(
+                            color: Color(0xFF3B82F6), shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 5),
+                      Text('我的手机',
+                          style: TextStyle(
+                              fontSize: 13,
+                              color: onSurface(context, 0.4))),
+                      Icon(Icons.keyboard_arrow_down_rounded,
+                          size: 16, color: onSurface(context, 0.4)),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ),
         ),

@@ -1133,6 +1133,33 @@ class ToolCall {
 > 100% 不可用。这两个都是「analyze 查不出来」的问题——本地无 Flutter SDK、
 > 依赖解析不了，只能靠逐行审查发现。
 
+### 11.11 状态栏黑边（修了两轮才找到真根因）
+
+**症状**：状态栏位置一条黑边，页面本身正常。第一轮修复无效——因为改错了地方。
+
+| # | 缺陷 | 根因 | 修复 |
+|---|---|---|---|
+| 60 | 状态栏黑边（真根因） | **CI 往 `styles.xml` 注入了 `windowDrawsSystemBarBackgrounds=true`**，把系统栏背景的绘制权交给 Android 框架。框架用主题默认值（不透明黑）画状态栏，且画在 Flutter 之上——`main.dart` 里 `statusBarColor: Colors.transparent` 被完全架空 | CI 不再注入该属性，改为显式声明 `statusBarColor`/`navigationBarColor` 为透明 |
+| 61 | 深色模式下黑边依旧 | CI 用 `find ... \| head -1` **只处理一个** `styles.xml`。项目通常有 `values/` 与 `values-night/` 两份，`find` 返回顺序不保证，深色模式用到的那份没被处理 | 改用 `mapfile` 遍历**全部** `styles.xml`，逐个校验 |
+| 62 | 三个页面顶栏没背景 | 只给 `chat_screen` 包了 `Container`，`tasks`/`profile`/`skills` 的 `SafeArea` 是裸露的 | 抽出公共组件 `StatusBarArea`，四个页面统一使用 |
+| 63 | 状态栏与页面有色差 | `HomeShell` 的 `Scaffold(backgroundColor: surface(context))` 用的是**卡片色**（纯白），而页面用 `scaffoldBackgroundColor`（灰白 `#F6F6F6`） | 统一为 `scaffoldBg(context)` |
+
+**为什么第一轮会失败**：第一轮只在 Flutter 侧给 `chat_screen` 加了 `Container`，
+而黑边是**系统层**画的——在 Flutter 内容之上。Flutter 里涂什么色都盖不住。
+这类问题的教训是：**先分清是谁在画**。修 UI 黑边/透明区域前，先确认那层
+是系统画的（styles.xml）还是 Flutter 画的（widget 树），两者的修法完全不同。
+
+**`windowDrawsSystemBarBackgrounds` 是什么**：Android 主题属性，决定
+「系统栏背景由谁画」。为 `true` 时 Android 框架会用主题默认色绘制状态栏和
+导航栏（不透明），Flutter 侧设的透明色无效。edge-to-edge 下应该让
+Flutter 画，所以**不能设成 true**。
+
+**新增公共组件** `lib/ui/status_bar_area.dart`：这是一条**全局约束**
+（edge-to-edge 下所有顶栏都必须给状态栏区域涂底色），逐页包 `Container`
+必然会漏、以后新增页面又要记得包一次。组件独立成文件而非放在
+`home_shell.dart`，是因为 HomeShell 导入了 tasks/profile/skills 三个页面，
+组件放那里会让它们形成循环依赖。
+
 ---
 
 ## 12. 待修复的问题

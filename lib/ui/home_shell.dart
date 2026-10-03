@@ -109,7 +109,11 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     final kb = MediaQuery.viewInsetsOf(context).bottom;
 
     return Scaffold(
-      backgroundColor: surface(context),
+      // 必须用 scaffoldBg（= scaffoldBackgroundColor，页面底色）而不是
+      // surface（卡片色）。Scaffold 的背景会铺满整个窗口，edge-to-edge 下
+      // 状态栏那条区域也是它在画；用 surface 会出现「状态栏纯白 + 页面灰白」
+      // 的色差带，看起来就像一条边。
+      backgroundColor: scaffoldBg(context),
       drawer: const SessionDrawer(),
       extendBody: true,
       // 不设 resizeToAvoidBottomInsets：当前 Flutter stable 已移除该参数
