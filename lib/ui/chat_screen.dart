@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -324,16 +325,29 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (chat.isStreaming &&
         chat.streamingSessionId != null &&
         chat.streamingSessionId == chat.activeSessionId) {
+      // 思考行右侧的模式徽章（⚡快速回答 / ⚡深度思考）跟随输入栏当前开关。
+      final thinkingOn = ref.watch(thinkingProvider);
       // RepaintBoundary 把流式气泡的重绘限制在气泡自身图层内，
       // 每个 delta 不再连带顶栏/输入栏等整页重绘。
       items.add(RepaintBoundary(
         child: _StreamingBubble(
             content: chat.streamingContent,
             reasoning: chat.streamingReasoning,
-            steps: chat.steps),
+            steps: chat.steps,
+            modeLabel: thinkingOn ? '深度思考' : '快速回答'),
       ));
     }
     final empty = items.isEmpty;
+    if (!empty) {
+      // 底部水印：与主流 AI 对话产品一致的生成内容提示。
+      items.add(Padding(
+        padding: const EdgeInsets.only(top: 12, bottom: 4),
+        child: Center(
+          child: Text('内容由 AI 生成，请注意核实',
+              style: TextStyle(fontSize: 11.5, color: onSurface(context, 0.3))),
+        ),
+      ));
+    }
 
     return Column(
       children: [
@@ -677,11 +691,77 @@ class _EmptyGreetingState extends State<_EmptyGreeting> {
   }
 }
 
+/// 正文 Markdown 样式：无气泡纯文本风（参考主流 AI 对话产品），
+/// 标题加粗分级、正文 15.5 / 行高 1.6，引用块带主题色左描边。
+MarkdownStyleSheet _mdStyleSheet(BuildContext context) {
+  final on = onSurface(context, 0.88);
+  final onStrong = onSurface(context, 0.95);
+  final primary = Theme.of(context).colorScheme.primary;
+  return MarkdownStyleSheet(
+    p: TextStyle(fontSize: 15.5, height: 1.6, color: on),
+    h1: TextStyle(
+        fontSize: 21, height: 1.35, fontWeight: FontWeight.w700, color: onStrong),
+    h2: TextStyle(
+        fontSize: 18.5, height: 1.35, fontWeight: FontWeight.w700, color: onStrong),
+    h3: TextStyle(
+        fontSize: 16.5, height: 1.4, fontWeight: FontWeight.w600, color: onStrong),
+    h4: TextStyle(
+        fontSize: 15.5, height: 1.4, fontWeight: FontWeight.w600, color: onStrong),
+    strong: TextStyle(fontWeight: FontWeight.w700, color: onStrong),
+    em: TextStyle(fontStyle: FontStyle.italic, color: on),
+    listBullet: TextStyle(fontSize: 15.5, height: 1.6, color: on),
+    listIndent: 22,
+    blockquote: TextStyle(fontSize: 14.5, height: 1.55, color: onSurface(context, 0.6)),
+    blockquoteDecoration: BoxDecoration(
+      color: onSurface(context, 0.05),
+      borderRadius: BorderRadius.circular(8),
+      border: Border(left: BorderSide(color: primary, width: 3)),
+    ),
+    blockquotePadding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+    code: TextStyle(
+        fontFamily: 'monospace', fontSize: 13, color: onSurface(context, 0.85)),
+    // 代码块由 _CodeBlock 自绘（语言栏 + 复制 + 折叠），这里不重复装饰。
+    codeblockDecoration: const BoxDecoration(),
+    horizontalRuleDecoration: BoxDecoration(
+        border: Border(top: BorderSide(color: onSurface(context, 0.12)))),
+  );
+}
+
+/// 带样式与代码块构建器的 Markdown 正文（流式与缓存共用同一入口）。
+MarkdownBody _mdBody(BuildContext context, String text) => MarkdownBody(
+      data: text,
+      styleSheet: _mdStyleSheet(context),
+      builders: {
+        'code': (context, element, _) {
+          // 行内 `code` 与 ``` 围栏代码块共用 code 构建器：
+          // 块级带 isCodeBlock 标记与 language 属性。
+          final isBlock = element.attributes['isCodeBlock'] == 'true';
+          final code = element.textContent;
+          if (!isBlock) {
+            return Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+              decoration: BoxDecoration(
+                color: onSurface(context, 0.07),
+                borderRadius: BorderRadius.circular(5),
+              ),
+              child: Text(code,
+                  style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      color: onSurface(context, 0.85))),
+            );
+          }
+          return _CodeBlock(
+              code: code, language: element.attributes['language'] ?? '');
+        },
+      },
+    );
+
 /// 已完结消息的 Markdown 渲染缓存。
 ///
 /// 流式期间每个 delta 都会触发整页 rebuild，未缓存的 MarkdownBody 会被
-/// 重新解析全部消息文本。这里以文本为键缓存解析结果（Widget 实例复用后
-/// Flutter 会直接跳过该子树的 rebuild），上限 32 条，满了先移除最早条目。
+/// 重新解析全部消息文本。这里以「亮度|文本」为键缓存解析结果（Widget 实例
+/// 复用后 Flutter 会直接跳过该子树的 rebuild），上限 32 条，满了先移除最早条目。
 class _CachedMarkdown extends StatelessWidget {
   const _CachedMarkdown({required this.text});
 
@@ -691,11 +771,12 @@ class _CachedMarkdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hit = _cache[text];
+    final key = '${Theme.of(context).brightness.name}|$text';
+    final hit = _cache[key];
     if (hit != null) return hit;
-    final body = MarkdownBody(data: text);
+    final body = _mdBody(context, text);
     if (_cache.length >= 32) _cache.remove(_cache.keys.first);
-    _cache[text] = body;
+    _cache[key] = body;
     return body;
   }
 }
@@ -708,18 +789,21 @@ class _MessageBubble extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (message.role == 'user') {
+      // 用户消息：右对齐浅色气泡（primaryContainer 随主题/明暗自适应）。
       final hasImages = message.images.isNotEmpty;
+      final bg = Theme.of(context).colorScheme.primaryContainer;
+      final fg = Theme.of(context).colorScheme.onPrimaryContainer;
       return Align(
         alignment: Alignment.centerRight,
         child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 4),
+          margin: const EdgeInsets.symmetric(vertical: 5),
           padding: hasImages
               ? const EdgeInsets.all(6)
-              : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              : const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
           constraints: BoxConstraints(
               maxWidth: MediaQuery.of(context).size.width * 0.78),
           decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.primary,
+            color: bg,
             borderRadius: BorderRadius.circular(18)
                 .copyWith(bottomRight: const Radius.circular(6)),
           ),
@@ -740,7 +824,7 @@ class _MessageBubble extends StatelessWidget {
                 ),
               if (message.content.isNotEmpty)
                 SelectableText(message.content,
-                    style: TextStyle(color: Theme.of(context).colorScheme.onPrimary, fontSize: 15)),
+                    style: TextStyle(color: fg, fontSize: 15, height: 1.5)),
             ],
           ),
         ),
@@ -764,38 +848,29 @@ class _MessageBubble extends StatelessWidget {
       );
     }
 
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.86),
-        decoration: BoxDecoration(
-          color: surface(context),
-          borderRadius: BorderRadius.circular(18)
-              .copyWith(bottomLeft: const Radius.circular(6)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看。
-            if ((message.reasoning ?? '').trim().isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: _ReasoningPanel(text: message.reasoning!),
-              ),
-            for (final tc in message.toolCalls)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text('🔧 已调用 ${tc.name}',
-                    style: TextStyle(
-                        fontSize: 12, color: onSurface(context, 0.45))),
-              ),
-            if (message.content.isNotEmpty)
-              _CachedMarkdown(text: message.content),
-          ],
-        ),
+    // 助手消息：无气泡纯正文（与主流 AI 对话产品一致），
+    // Markdown 直接铺在页面背景上，满宽阅读。
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看。
+          if ((message.reasoning ?? '').trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: _ReasoningPanel(text: message.reasoning!),
+            ),
+          for (final tc in message.toolCalls)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Text('🔧 已调用 ${tc.name}',
+                  style: TextStyle(
+                      fontSize: 12, color: onSurface(context, 0.45))),
+            ),
+          if (message.content.isNotEmpty)
+            _CachedMarkdown(text: message.content),
+        ],
       ),
     );
   }
@@ -806,6 +881,7 @@ class _StreamingBubble extends StatelessWidget {
     required this.content,
     required this.reasoning,
     required this.steps,
+    this.modeLabel,
   });
 
   final String content;
@@ -814,61 +890,55 @@ class _StreamingBubble extends StatelessWidget {
   final String reasoning;
   final List<String> steps;
 
+  /// 思考行右侧模式徽章（⚡快速回答 / ⚡深度思考），仅流式期间显示。
+  final String? modeLabel;
+
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.86),
-        decoration: BoxDecoration(
-          color: surface(context),
-          borderRadius: BorderRadius.circular(18)
-              .copyWith(bottomLeft: const Radius.circular(6)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 思考阶段（content 还没开始）默认展开实时思考内容；
-            // 正文开始后由面板自己收起，保留可展开回看。
-            if (reasoning.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: _ReasoningPanel(
-                  text: reasoning,
-                  inProgress: content.isEmpty,
-                  initiallyExpanded: true,
-                ),
+    // 与已完成消息一致：无气泡纯正文。
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 思考阶段（content 还没开始）默认展开实时思考内容；
+          // 正文开始后由面板自己收起，保留可展开回看。
+          if (reasoning.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 6),
+              child: _ReasoningPanel(
+                text: reasoning,
+                inProgress: content.isEmpty,
+                initiallyExpanded: true,
+                badgeLabel: modeLabel,
               ),
-            for (final s in steps)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(s,
-                    style: TextStyle(
-                        fontSize: 12, color: onSurface(context, 0.45))),
-              ),
-            // 思考流本身就是"在进行中"的可视反馈，此时不再叠加转圈；
-            // 两者都空才是真正的等待（首字节未到）。
-            if (content.isEmpty && reasoning.isEmpty)
-              const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            else if (content.isNotEmpty)
-              MarkdownBody(data: content),
-          ],
-        ),
+            ),
+          for (final s in steps)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 2),
+              child: Text(s,
+                  style: TextStyle(
+                      fontSize: 12, color: onSurface(context, 0.45))),
+            ),
+          // 思考流本身就是"在进行中"的可视反馈，此时不再叠加转圈；
+          // 两者都空才是真正的等待（首字节未到）。
+          if (content.isEmpty && reasoning.isEmpty)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else if (content.isNotEmpty)
+            _mdBody(context, content),
+        ],
       ),
     );
   }
 }
 
-/// 可折叠的思考过程面板。
+/// 可折叠的思考过程面板（参考主流 AI App：一行「已思考 >」+ 右侧模式徽章）。
 ///
-/// - 收起时一行「思考中…/已深度思考」，点击展开；
+/// - 收起时一行「正在思考/已思考」+ 展开箭头，点击展开；
 /// - 展开时限高 220 可滚动，流式新内容自动跟随到底部；
 /// - 思考进行中 → 完成的瞬间自动收起（与主流 AI App 的交互一致），
 ///   用户可再点开回看。
@@ -877,11 +947,15 @@ class _ReasoningPanel extends StatefulWidget {
     required this.text,
     this.inProgress = false,
     this.initiallyExpanded = false,
+    this.badgeLabel,
   });
 
   final String text;
   final bool inProgress;
   final bool initiallyExpanded;
+
+  /// 右侧模式徽章文字（如「快速回答」）；null 不显示。
+  final String? badgeLabel;
 
   @override
   State<_ReasoningPanel> createState() => _ReasoningPanelState();
@@ -924,45 +998,70 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        InkWell(
-          borderRadius: BorderRadius.circular(8),
-          onTap: () => setState(() => _expanded = !_expanded),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.psychology_outlined,
-                    size: 14, color: onSurface(context, 0.5)),
-                const SizedBox(width: 4),
-                Text(
-                  widget.inProgress ? '思考中…' : '已深度思考',
-                  style: TextStyle(
-                      fontSize: 12, color: onSurface(context, 0.5)),
+        Row(
+          children: [
+            InkWell(
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => setState(() => _expanded = !_expanded),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _expanded
+                          ? Icons.expand_more_rounded
+                          : Icons.chevron_right_rounded,
+                      size: 16,
+                      color: onSurface(context, 0.45),
+                    ),
+                    const SizedBox(width: 2),
+                    Text(
+                      widget.inProgress ? '正在思考' : '已思考',
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w500,
+                          color: onSurface(context, 0.5)),
+                    ),
+                  ],
                 ),
-                Icon(
-                  _expanded
-                      ? Icons.expand_less_rounded
-                      : Icons.expand_more_rounded,
-                  size: 16,
-                  color: onSurface(context, 0.4),
-                ),
-              ],
+              ),
             ),
-          ),
+            const Spacer(),
+            // 模式徽章（⚡快速回答 / ⚡深度思考），跟随思考开关实时显示。
+            if (widget.badgeLabel != null)
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.bolt_rounded, size: 14, color: primary),
+                  const SizedBox(width: 2),
+                  Text(
+                    widget.badgeLabel!,
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w500,
+                        color: primary,
+                        decoration: TextDecoration.underline,
+                        decorationColor: primary.withValues(alpha: 0.4)),
+                  ),
+                ],
+              ),
+          ],
         ),
         if (_expanded)
           Container(
             width: double.infinity,
             constraints: const BoxConstraints(maxHeight: 220),
-            margin: const EdgeInsets.only(top: 4),
-            padding: const EdgeInsets.all(10),
+            margin: const EdgeInsets.only(top: 6),
+            padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
               color: onSurface(context, 0.04),
-              borderRadius: BorderRadius.circular(10),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: onSurface(context, 0.06)),
             ),
             child: SingleChildScrollView(
               controller: _scroll,
@@ -970,7 +1069,7 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
                 widget.text,
                 style: TextStyle(
                     fontSize: 12.5,
-                    height: 1.5,
+                    height: 1.55,
                     color: onSurface(context, 0.55)),
               ),
             ),
@@ -978,6 +1077,224 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
       ],
     );
   }
+}
+
+/// 围栏代码块卡片：语言栏（语言名 + 复制 + 全屏）+ 高亮代码体，
+/// 超过 12 行默认折叠到 240 高，底部渐隐 + 圆形箭头展开（参考主流 AI App）。
+class _CodeBlock extends StatefulWidget {
+  const _CodeBlock({required this.code, required this.language});
+
+  final String code;
+  final String language;
+
+  @override
+  State<_CodeBlock> createState() => _CodeBlockState();
+}
+
+class _CodeBlockState extends State<_CodeBlock> {
+  bool _copied = false;
+  bool _unfolded = false;
+
+  Future<void> _copy() async {
+    await Clipboard.setData(ClipboardData(text: widget.code));
+    if (!mounted) return;
+    setState(() => _copied = true);
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _copied = false);
+    });
+  }
+
+  Future<void> _showFull() async {
+    await showGlassDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(widget.language.isEmpty ? '代码' : widget.language),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: SelectableText(
+              widget.code,
+              style: const TextStyle(
+                  fontFamily: 'monospace', fontSize: 13, height: 1.55),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('关闭')),
+          FilledButton(onPressed: _copy, child: const Text('复制')),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final on = onSurface(context, 0.85);
+    final collapsible = widget.code.split('\n').length > 12;
+    final capped = collapsible && !_unfolded;
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: onSurface(context, 0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: onSurface(context, 0.07)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // ------- 语言栏 -------
+          Container(
+            height: 38,
+            padding: const EdgeInsets.only(left: 14, right: 4),
+            color: onSurface(context, 0.04),
+            child: Row(
+              children: [
+                Text(
+                  widget.language.isEmpty ? '代码' : widget.language.toLowerCase(),
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3,
+                      color: onSurface(context, 0.55)),
+                ),
+                const Spacer(),
+                IconButton(
+                  tooltip: '复制代码',
+                  iconSize: 16,
+                  icon: Icon(
+                    _copied ? Icons.check_rounded : Icons.copy_rounded,
+                    color: onSurface(context, _copied ? 0.7 : 0.45),
+                  ),
+                  onPressed: _copy,
+                ),
+                IconButton(
+                  tooltip: '全屏查看',
+                  iconSize: 15,
+                  icon: Icon(Icons.open_in_full_rounded,
+                      color: onSurface(context, 0.45)),
+                  onPressed: _showFull,
+                ),
+              ],
+            ),
+          ),
+          // ------- 代码体 -------
+          ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: capped ? 240.0 : 6000.0),
+            child: Stack(
+              children: [
+                SingleChildScrollView(
+                  padding: const EdgeInsets.all(12),
+                  child: _HighlightedCode(code: widget.code),
+                ),
+                if (capped)
+                  Positioned(
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: 72,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            onSurface(context, 0.08),
+                          ],
+                        ),
+                      ),
+                      alignment: Alignment.bottomCenter,
+                      child: GestureDetector(
+                        onTap: () => setState(() => _unfolded = true),
+                        child: Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: surface(context),
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withValues(alpha: 0.15),
+                                blurRadius: 8,
+                              ),
+                            ],
+                          ),
+                          child: Icon(Icons.expand_more_rounded,
+                              size: 20, color: onSurface(context, 0.6)),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // 底色与卡片同色系收尾，避免滚动条透出背景
+          if (!capped) const SizedBox(height: 0),
+        ],
+      ),
+    );
+  }
+}
+
+/// 轻量语法高亮：注释/字符串/数字/关键字四类着色（双引号正则，
+/// 避免与模板字符串转义冲突）。未覆盖的文本用正文色。
+class _HighlightedCode extends StatelessWidget {
+  const _HighlightedCode({required this.code});
+
+  final String code;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final spans = _highlightSpans(code, isDark);
+    return SelectableText.rich(
+      TextSpan(
+        children: spans,
+        style: TextStyle(
+          fontFamily: 'monospace',
+          fontSize: 13,
+          height: 1.55,
+          color: onSurface(context, 0.85),
+        ),
+      ),
+    );
+  }
+}
+
+List<TextSpan> _highlightSpans(String code, bool isDark) {
+  final comment = isDark ? const Color(0xFF8B949E) : const Color(0xFF6B7280);
+  final stringC = isDark ? const Color(0xFF7EE787) : const Color(0xFF0A7F3C);
+  final numberC = isDark ? const Color(0xFF79C0FF) : const Color(0xFF0550AE);
+  final keywordC = isDark ? const Color(0xFFD2A8FF) : const Color(0xFF8250DF);
+  final re = RegExp(
+    "(#[^\\n]*|//[^\\n]*|/\\*[\\s\\S]*?\\*/)"
+    "|(\"(?:[^\"\\\\\\n]|\\\\.)*\"|\\u0027(?:[^\\u0027\\\\\\n]|\\\\.)*\\u0027)"
+    "|\\b(\\d+(?:\\.\\d+)?)\\b"
+    "|\\b(const|let|var|function|return|if|else|for|while|import|from|export|class|new|def|async|await|try|catch|true|false|null|None|True|False|SELECT|INSERT|UPDATE|DELETE|FROM|WHERE|JOIN|CREATE|TABLE|print)\\b",
+  );
+  final spans = <TextSpan>[];
+  var last = 0;
+  for (final m in re.allMatches(code)) {
+    if (m.start > last) {
+      spans.add(TextSpan(text: code.substring(last, m.start)));
+    }
+    final Color c;
+    if (m.group(1) != null) {
+      c = comment;
+    } else if (m.group(2) != null) {
+      c = stringC;
+    } else if (m.group(3) != null) {
+      c = numberC;
+    } else {
+      c = keywordC;
+    }
+    spans.add(TextSpan(text: m.group(0), style: TextStyle(color: c)));
+    last = m.end;
+  }
+  if (last < code.length) spans.add(TextSpan(text: code.substring(last)));
+  return spans;
 }
 
 /// 上下文用量动态图标：环形进度 + 百分比 + 数值，颜色随占用率变化。

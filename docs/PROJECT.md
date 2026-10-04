@@ -153,6 +153,7 @@ orion_agent/
 │   │   ├── notification_service.dart  本地通知
 │   │   ├── mcp_client.dart            MCP 协议客户端
 │   │   ├── mcp_service.dart           MCP 连接管理
+│   │   ├── cloud_service.dart         云端后端客户端（账号/卡密/中继/更新，国内可达）
 │   │   ├── skill_service.dart         技能（18 个内置）
 │   │   ├── role_service.dart          角色（无预置）
 │   │   ├── file_storage_service.dart  存储统计与清理
@@ -161,7 +162,7 @@ orion_agent/
 │   │
 │   └── ui/                界面层
 │       ├── home_shell.dart             4 Tab 外壳 + 抽屉 + 底部导航
-│       ├── chat_screen.dart            对话页（782 行，最大文件）
+│       ├── chat_screen.dart            对话页（1867 行，最大文件；无气泡正文版式）
 │       ├── sessions_drawer.dart        会话抽屉
 │       ├── tasks_screen.dart           自动任务（M3 占位页）
 │       ├── skills_screen.dart          技能管理
@@ -175,6 +176,7 @@ orion_agent/
 │       ├── storage_settings_screen.dart     存储管理 + 工作区目录选择
 │       ├── about_screen.dart           关于页（软件介绍 + 在线更新）
 │       ├── profile_screen.dart         我的
+│       ├── cloud_account_screen.dart   云端服务（Hero 登录页 + 多功能个人中心）
 │       └── setup_screen.dart           首次运行引导
 │
 ├── test/                单元测试（10 个文件）
@@ -774,9 +776,22 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 
 首次运行会检测终端环境，全部缺失时推入 `SetupScreen` 引导下载。
 
-### 7.2 对话页（最大文件，782 行）
+### 7.2 对话页（最大文件，1867 行）
 
 - 消息列表 + 流式气泡（`_StreamingBubble` 显示 `steps`）
+- **消息版式**（参考主流 AI 对话产品重构）：用户消息 = 右对齐
+  `primaryContainer` 浅色气泡（深浅色/六主题自适应）；助手消息 = **无气泡**
+  满宽 Markdown 正文（`_mdStyleSheet` 定制标题/引用/列表样式）；
+  消息列表底部「内容由 AI 生成，请注意核实」水印
+- **思考行**（`_ReasoningPanel`）：收起一行「正在思考/已思考 ›」，右侧 ⚡模式徽章
+  （快速回答/深度思考，跟随输入栏思考开关，仅流式期间显示）；展开为限高 220
+  圆角卡片可滚动，流式结束瞬间自动收起
+- **代码块**（`_CodeBlock`）：语言栏（语言名 + 复制 + 全屏玻璃弹窗）+ 轻量语法
+  高亮（注释/字符串/数字/关键字四类着色，`_highlightSpans` 正则分词）；
+  超 12 行默认折叠到 240 高，底部渐隐 + 圆形箭头展开；行内 `code` 仍走
+  MarkdownBody builders 的紧凑样式
+- **Markdown 缓存**：`_CachedMarkdown` 键含明暗模式（样式随亮度变化），
+  流式 delta 不重复解析历史消息
 - 输入栏：发送/停止按钮切换、图片附件（`image_picker` 拍照或相册，1600px/quality80）
 - 语音输入（麦克风按钮）、技能调用（`/技能名`）
 - **发送前拦截**（`:112-119`）：流式期间必须**先拦截再清空输入框**，
@@ -792,7 +807,8 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 
 | 页面 | 状态 |
 |---|---|
-| `chat_screen` | ✅ 完整 |
+| `chat_screen` | ✅ 完整（无气泡正文 + 思考行 + 代码块卡片） |
+| `cloud_account_screen` | ✅ 云端登录页 + 个人中心（卡密/设备/用量） |
 | `sessions_drawer` | ✅ 会话列表、切换、删除 |
 | `skills_screen` | ✅ 18 内置 + 自定义 |
 | `roles_screen` | ✅ CRUD（无预置） |
@@ -904,6 +920,9 @@ grep -qE 'jvmTarget\s*=\s*.*(JVM_17|VERSION_17)' "$F" || exit 1
 | `theme_mode` | String | `system` | `system`/`light`/`dark` |
 | `terminal_setup_done` | bool | `false` | 首次运行引导是否已完成 |
 | `terminal_tasks` | String(JSON) | `[]` | 终端自启动任务数组 |
+| `cloud_base_url` | String | 无 | 云端服务器地址（空 = 云功能降级，本地不受影响） |
+| `cloud_device_id` | String | 自动生成 | 云端设备标识（激活/登录/设备管理用） |
+| `cloud_email` | String | 无 | 登录邮箱（后端响应不回传，登录时本地记录，登出清除） |
 
 > `pubspec.lock` 被 `.gitignore` 忽略，依赖在 CI 统一解析。
 
@@ -912,6 +931,8 @@ grep -qE 'jvmTarget\s*=\s*.*(JVM_17|VERSION_17)' "$F" || exit 1
 | key | 说明 |
 |---|---|
 | `llm_configs` | 模型服务 JSON 数组（含 API Key）|
+| `cloud_tokens` | 云端账号 JWT（access + refresh，2h/30d 轮换）|
+| `cloud_device_token` | 云端 MCP 设备令牌（`dt_` 前缀，编进 MCP URL）|
 
 > 旧版本把配置明文存在 SharedPreferences，读取时会自动迁移到加密存储并删除明文
 > （`providers.dart:196-204`）。
@@ -1443,6 +1464,21 @@ CI 同款的 Termux deb 包、解析 `proot` 二进制的 ELF 动态段，实锤
 抛错回退，真正挂住的是 `await speak()` 之后的播放层与被吞错误的系统 TTS。
 
 ---
+
+### 11.17 更新提示永远指向「相同版本」（kAppVersion 未随发版同步）
+
+**现象**：安装最新版 APK 后，启动弹窗/关于页仍一直提示安装同一版本。
+
+**根因**：应用自报版本是 `about_screen.dart` 里手写的 `kAppVersion` 常量。
+v0.2.0 发版只升了 `pubspec.yaml` 的 `version`，忘升 `kAppVersion`（停在 0.1.9）。
+更新检查拿 0.1.9 比远端 0.2.0 → 永远「发现新版本 V0.2.0」，用户装完最新包
+自报版本仍是 0.1.9，如此循环。
+
+**修复**：`kAppVersion` 同步为 0.2.0；「我的」页关于行版本号改为引用
+`kAppVersion`（原来还有一处硬编码 V0.1.9）；AGENTS.md 发版清单第 1 步
+强制 pubspec 与 `kAppVersion` 同步。
+
+**教训**：版本号必须单一事实来源；发版 checklist 要覆盖所有自报版本的位置。
 
 ## 12. 待修复的问题
 

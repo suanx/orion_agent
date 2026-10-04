@@ -177,7 +177,7 @@ class ProfileScreen extends ConsumerWidget {
             _Row(
               icon: Icons.info_outline_rounded,
               label: '关于',
-              value: 'V0.1.9',
+              value: 'V$kAppVersion',
               onTap: () => _push(context, const AboutScreen()),
             ),
           ],

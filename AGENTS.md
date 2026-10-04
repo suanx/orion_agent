@@ -1,25 +1,25 @@
 # orion_agent 开发约定（Agent 必读）
 
-## 发版规则（必须遵守，每次发版都执行）
+## 推送与发版规则（用户指令，最高优先级，每次必须遵守）
 
-**每次发布正式版本，必须同时做到：**
-
-1. **创建 GitHub Release**（tag 形如 `v0.2.0`，名称 `Orion Agent v0.2.0`）
-2. **Release 附更新说明**——正文写清本版功能/修复要点（与 `RELEASE_NOTES.md` 顶部版本一致）
-3. **Release 附 APK 文件**——命名 `orion-agent-v{版本}.apk`，从最新成功 CI run 的
-   Artifacts `orion-agent-apk` 解压取得 `app-release.apk` 后改名上传
-
-### 标准发版流程
-
-1. `pubspec.yaml` 的 `version:` 升版（如 `0.1.9+10` → `0.2.0+11`，`+` 后为 build 号递增）
-2. `RELEASE_NOTES.md` 顶部新增本版更新说明
-3. 推送到 main → 等 CI（flutter analyze/test/build）全绿
-4. 用 GitHub API 下载最新 run 的 Artifacts → 解压出 APK
-5. `POST /repos/suanx/orion_agent/releases` 创建 Release（附更新说明）
-6. `POST .../releases/{id}/assets?name=orion-agent-vX.Y.Z.apk` 上传 APK
+1. **未经用户明确指令，禁止推送**。改完代码先本地验证（`ci_check/brace_check.js`），
+   停下等用户说「推送」。
+2. **用户说「推送」= 发正式版本**，每次都必须完成：
+   1. **版本号递增**：`pubspec.yaml` 的 `version:`（如 `0.2.0+11` → `0.2.1+12`，
+      `+` 后 build 号 +1）**同时**把 `lib/ui/about_screen.dart` 的 `kAppVersion`
+      改成同版本号（不带 build 号）。只改 pubspec 不改 kAppVersion →
+      应用自报版本落后，装了最新版也会一直提示更新同版本（见 docs/PROJECT.md §11.17）。
+   2. `RELEASE_NOTES.md` 顶部新增本版更新说明
+   3. 推送到 main → 等 CI（flutter analyze/test/build）全绿
+   4. 用 GitHub API 下载最新 run 的 Artifacts → 解压出 APK，
+      改名 `orion-agent-vX.Y.Z.apk`
+   5. 创建 GitHub Release：tag `vX.Y.Z`，名称 `Orion Agent vX.Y.Z`，
+      正文与 `RELEASE_NOTES.md` 一致，上传 APK 附件
+      （`ci_check/make_release.mjs` 可一键完成 4-5 步）
 
 注意：本机 git 直连 github.com 不通，推送/发版一律走 GitHub REST API
-（可复用工作区的 `push_update.mjs` 与 credential manager 中的凭据）。
+（可复用工作区的 `push_update.mjs` 与 credential manager 中的凭据，
+永远不要回显密码）。
 
 ## 其它关键约定
 
