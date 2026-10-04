@@ -362,27 +362,60 @@ class TerminalService {
     } else {
       tarBytes = XZDecoder().decodeBytes(compressed);
     }
-    final tar = TarDecoder().decodeBytes(tarBytes);
-    for (final entry in tar) {
-      final path = '$rootfs/${entry.name}';
-      if (entry.isSymbolicLink) {
-        String target;
-        try {
-          target = utf8.decode(entry.content as List<int>);
-        } catch (_) {
-          continue;
-        }
-        final link = Link(path);
-        if (!link.existsSync()) link.create(target);
-      } else if (entry.isFile) {
-        final f = File(path);
-        f.createSync(recursive: true);
-        f.writeAsBytesSync(entry.content as List<int>);
-      } else {
-        Directory(path).createSync(recursive: true);
+    // 必须迭代 TarFile（而非 ArchiveFile）：符号链接的目标存在 tar
+    // 头的 linkname 字段（TarFile.nameOfLinkedFile），条目 content
+    // 恒为空——此前误用 content 当目标，300+ 个链接全部被创建成
+    // 「空目标」，guest 内一切命令 not found（V0.1.7 根因）。
+    // 只有 TarFile 保留 typeFlag 与 nameOfLinkedFile 原始信息。
+    final decoder = TarDecoder();
+    decoder.decodeBytes(tarBytes);
+    var createdLinks = 0;
+    final hardLinks = <String, String>{}; // 落盘路径 -> rootfs 内目标路径
+    for (final tf in decoder.files) {
+      final path = '$rootfs/${tf.filename}';
+      switch (tf.typeFlag) {
+        case TarFile.TYPE_SYMBOLIC_LINK:
+          final target = tf.nameOfLinkedFile ?? '';
+          if (target.isEmpty) continue;
+          final link = Link(path);
+          // typeSync 不跟随链接：链接已存在（含悬空）则不重复创建，
+          // 避免 link.create 撞 EEXIST
+          if (FileSystemEntity.typeSync(path, followLinks: false) ==
+              FileSystemEntityType.notFound) {
+            link.create(target);
+            createdLinks++;
+          }
+          break;
+        case TarFile.TYPE_HARD_LINK:
+          // 硬链接无独立内容，目标条目在 tar 中先于链接出现；
+          // 主循环结束后从已落盘的目标复制内容（alpine 0 个、debian 2 个）
+          final target = tf.nameOfLinkedFile;
+          if (target != null && target.isNotEmpty) {
+            hardLinks[path] = '$rootfs/$target';
+          }
+          break;
+        case TarFile.TYPE_DIRECTORY:
+          Directory(path).createSync(recursive: true);
+          break;
+        default:
+          // 普通文件（typeFlag '0' / '\0' / '7'）
+          final f = File(path);
+          f.createSync(recursive: true);
+          final bytes = tf.rawContent?.toUint8List();
+          if (bytes != null && bytes.isNotEmpty) f.writeAsBytesSync(bytes);
+          break;
+      }
+    }
+    // 硬链接落盘：copySync 跟随目标上的符号链接取到真实内容，
+    // busybox 类多合一二进制按 argv[0] 分发，副本同样可用
+    for (final e in hardLinks.entries) {
+      final src = File(e.value);
+      if (src.existsSync()) {
+        src.copySync(e.key);
       }
     }
     File(archivePath).deleteSync();
+    report('  已创建 $createdLinks 个符号链接');
 
     report('修正执行权限…');
     // rootfs 内二进制需要 exec 位；dart:io 无 chmod，借用系统 toybox
