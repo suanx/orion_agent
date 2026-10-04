@@ -904,10 +904,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
           } else {
             _bumpUsage(sessionId, 2, 1);
           }
-          final brief = ev.result.characters.take(120).toString();
-          final briefText = ev.result.characters.length > 120 ? '$brief…' : brief;
-          state = state.copyWith(
-              steps: [...state.steps, '🔧 ${ev.toolName} → $briefText']);
+          // 只记录工具名（UI 在「正在思考」行旁展示），
+          // 不再拼接结果摘要——按用户要求不显示调用详情。
+          state = state.copyWith(steps: [...state.steps, '🔧 ${ev.toolName}']);
         } else if (ev is AgentTokenUsage) {
           _bumpUsage(sessionId, 0, ev.promptTokens);
           _bumpUsage(sessionId, 1, ev.completionTokens);

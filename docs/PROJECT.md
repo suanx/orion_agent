@@ -767,6 +767,8 @@ State，只有 `HomeShell` 知道怎么切；navigatorKey 只能 push/pop。
 ### 7.1 外壳
 
 `HomeShell` = 4 Tab（`IndexedStack` 保持状态）+ 会话抽屉（`Drawer`）+ 磨砂玻璃底部导航。
+键盘弹起时底部导航**整条隐藏**（`AnimatedContainer` 高度动画到 0，收起后展开），
+输入界面只留输入栏，不再与键盘之间夹一条导航（2026-10-05 用户反馈）。
 
 Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 —— 与 `HomeTab` 常量一一对应。
@@ -783,9 +785,12 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
   `primaryContainer` 浅色气泡（深浅色/六主题自适应）；助手消息 = **无气泡**
   满宽 Markdown 正文（`_mdStyleSheet` 定制标题/引用/列表样式）；
   消息列表底部「内容由 AI 生成，请注意核实」水印
-- **思考行**（`_ReasoningPanel`）：收起一行「正在思考/已思考 ›」，右侧 ⚡模式徽章
-  （快速回答/深度思考，跟随输入栏思考开关，仅流式期间显示）；展开为限高 220
-  圆角卡片可滚动，流式结束瞬间自动收起
+- **思考行**（`_ReasoningPanel`）：收起一行「正在思考/已思考 ›」，行内并入本轮
+  调用的**工具/技能名**（只显示名称，providers 的 steps 不再拼结果摘要，
+  按用户要求不显示调用详情），右侧 ⚡模式徽章（快速回答/深度思考，跟随输入栏
+  思考开关，仅流式期间显示）；展开为限高 220 圆角卡片可滚动，流式结束瞬间自动收起。
+  无思考流但有工具调用时也渲染收起状态的行；无思考行的已完成消息仍单独列
+  「🔧 已调用 名称」
 - **代码块**（`_CodeBlock`）：语言栏（语言名 + 复制 + 全屏玻璃弹窗）+ 轻量语法
   高亮（注释/字符串/数字/关键字四类着色，`_highlightSpans` 正则分词）；
   超 12 行默认折叠到 240 高，底部渐隐 + 圆形箭头展开；行内 `code` 仍走
@@ -826,6 +831,12 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 ## 8. 构建与 CI
 
 **唯一工作流**：`.github/workflows/build.yml`（push to main +手动触发）
+
+**防反编译**（2026-10-05 起）：release 构建启用 `--obfuscate --split-debug-info=build/symbols`
+（Dart 符号混淆并从 libapp.so 剥离，崩溃堆栈用 `flutter symbolize` + 符号文件还原，
+符号单独上传为 `orion-agent-symbols` artifact）+ R8 `isMinifyEnabled` /
+`isShrinkResources`（Kotlin 层压缩，规则由 workflow 落盘 `proguard-rules.pro`）。
+首次开启 R8 后需真机回归一轮，确认反射类未被误删。
 
 **18 个步骤**：
 

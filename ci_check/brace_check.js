@@ -7,6 +7,7 @@ const files = [
   'lib/providers/providers.dart',
   'lib/ui/cloud_account_screen.dart',
   'lib/ui/chat_screen.dart',
+  'lib/ui/home_shell.dart',
   'lib/ui/about_screen.dart',
   'lib/ui/profile_screen.dart',
   'lib/main.dart',

@@ -868,19 +868,25 @@ class _MessageBubble extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看。
+          // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看；
+          // 调用过的工具/技能名并入思考行（只显示名称，不显示详情）。
           if ((message.reasoning ?? '').trim().isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: _ReasoningPanel(text: message.reasoning!),
+              child: _ReasoningPanel(
+                text: message.reasoning!,
+                toolNames: [for (final tc in message.toolCalls) tc.name],
+              ),
             ),
-          for (final tc in message.toolCalls)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: Text('🔧 已调用 ${tc.name}',
-                  style: TextStyle(
-                      fontSize: 12, color: onSurface(context, 0.45))),
-            ),
+          // 无思考行时工具名单独列出（有思考行时名称已在行内，避免重复）。
+          if ((message.reasoning ?? '').trim().isEmpty)
+            for (final tc in message.toolCalls)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('🔧 已调用 ${tc.name}',
+                    style: TextStyle(
+                        fontSize: 12, color: onSurface(context, 0.45))),
+              ),
           if (message.content.isNotEmpty)
             _CachedMarkdown(text: message.content),
         ],
@@ -908,6 +914,12 @@ class _StreamingBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 本轮调用的工具/技能名：steps 里 🔧 开头的行只存名称（providers 侧
+    // 不再拼结果摘要），提取后并入思考行展示。
+    final toolNames = <String>[];
+    for (final s in steps) {
+      if (s.startsWith('🔧 ')) toolNames.add(s.substring(2));
+    }
     // 与已完成消息一致：无气泡纯正文。
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -916,26 +928,30 @@ class _StreamingBubble extends StatelessWidget {
         children: [
           // 思考阶段（content 还没开始）默认展开实时思考内容；
           // 正文开始后由面板自己收起，保留可展开回看。
-          if (reasoning.isNotEmpty)
+          // 只有工具调用、没有思考流时也渲染收起状态的行，用于展示工具名。
+          if (reasoning.isNotEmpty || toolNames.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: _ReasoningPanel(
                 text: reasoning,
                 inProgress: content.isEmpty,
-                initiallyExpanded: true,
+                initiallyExpanded: reasoning.isNotEmpty,
                 badgeLabel: modeLabel,
+                toolNames: toolNames,
               ),
             ),
+          // 🔧 工具名已并入思考行，这里只保留 ⏳ 状态行，不显示调用详情。
           for (final s in steps)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 2),
-              child: Text(s,
-                  style: TextStyle(
-                      fontSize: 12, color: onSurface(context, 0.45))),
-            ),
+            if (!s.startsWith('🔧 '))
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: Text(s,
+                    style: TextStyle(
+                        fontSize: 12, color: onSurface(context, 0.45))),
+              ),
           // 思考流本身就是"在进行中"的可视反馈，此时不再叠加转圈；
           // 两者都空才是真正的等待（首字节未到）。
-          if (content.isEmpty && reasoning.isEmpty)
+          if (content.isEmpty && reasoning.isEmpty && toolNames.isEmpty)
             const SizedBox(
               width: 18,
               height: 18,
@@ -961,6 +977,7 @@ class _ReasoningPanel extends StatefulWidget {
     this.inProgress = false,
     this.initiallyExpanded = false,
     this.badgeLabel,
+    this.toolNames = const [],
   });
 
   final String text;
@@ -969,6 +986,9 @@ class _ReasoningPanel extends StatefulWidget {
 
   /// 右侧模式徽章文字（如「快速回答」）；null 不显示。
   final String? badgeLabel;
+
+  /// 本轮调用的工具/技能名——只显示名称，不显示参数与结果详情。
+  final List<String> toolNames;
 
   @override
   State<_ReasoningPanel> createState() => _ReasoningPanelState();
@@ -1044,6 +1064,18 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
                 ),
               ),
             ),
+            // 工具/技能名：并入思考行展示，只显示名称（用户要求不显示详情）
+            if (widget.toolNames.isNotEmpty) ...[
+              const SizedBox(width: 6),
+              Flexible(
+                child: Text(
+                  '· 🔧 ' + widget.toolNames.join(' · '),
+                  style: TextStyle(fontSize: 12, color: onSurface(context, 0.45)),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
             const Spacer(),
             // 模式徽章（⚡快速回答 / ⚡深度思考），跟随思考开关实时显示。
             if (widget.badgeLabel != null)

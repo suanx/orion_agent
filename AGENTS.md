@@ -12,7 +12,8 @@
    2. `RELEASE_NOTES.md` 顶部新增本版更新说明
    3. 推送到 main → 等 CI（flutter analyze/test/build）全绿
    4. 用 GitHub API 下载最新 run 的 Artifacts → 解压出 APK，
-      改名 `orion-agent-vX.Y.Z.apk`
+      改名 `orion-agent-vX.Y.Z.apk`；同 run 的 `orion-agent-symbols`
+      artifact（混淆符号文件）留档，供崩溃堆栈 `flutter symbolize` 还原
    5. 创建 GitHub Release：tag `vX.Y.Z`，名称 `Orion Agent vX.Y.Z`，
       正文与 `RELEASE_NOTES.md` 一致，上传 APK 附件
       （`ci_check/make_release.mjs` 可一键完成 4-5 步）

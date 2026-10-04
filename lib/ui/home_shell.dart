@@ -208,17 +208,22 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           ],
         ),
       ),
-      bottomNavigationBar: Padding(
-        // 键盘弹起时把底栏一起抬到键盘上方。
-        // 用 AnimatedPadding 让它跟随动画过渡，而不是瞬间跳。
-        padding: EdgeInsets.only(bottom: kb),
-        child: _FrostedNavBar(
-          index: _tab,
-          height: _navHeight,
-          // 与 HomeTab 常量保持一致：HomeShell 的 children 顺序即 Tab 顺序，
-          // 两处都用常量，任一处调整顺序都会立刻暴露不一致。
-          onTap: (i) => setState(() => _tab = i),
-        ),
+      bottomNavigationBar: AnimatedContainer(
+        // 键盘弹起时整条底栏隐藏（用户要求：输入界面不显示底部导航），
+        // 键盘收起后展开回原高度。clipBehavior 防止收起动画期间内容溢出。
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        height: kb > 0 ? 0 : null,
+        clipBehavior: Clip.hardEdge,
+        child: kb > 0
+            ? null
+            : _FrostedNavBar(
+                index: _tab,
+                height: _navHeight,
+                // 与 HomeTab 常量保持一致：HomeShell 的 children 顺序即 Tab 顺序，
+                // 两处都用常量，任一处调整顺序都会立刻暴露不一致。
+                onTap: (i) => setState(() => _tab = i),
+              ),
       ),
     );
   }
