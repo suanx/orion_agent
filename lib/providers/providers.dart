@@ -71,6 +71,7 @@ final toolRegistryProvider = Provider<ToolRegistry>((ref) => ToolRegistry(
       ragService: ref.watch(ragServiceProvider),
       batchEmbed: ref.watch(batchEmbedProvider),
       terminalService: ref.watch(terminalServiceProvider),
+      skillService: ref.watch(skillServiceProvider),
     ));
 
 final llmClientProvider = Provider<LlmClient>(
@@ -81,6 +82,7 @@ final orchestratorProvider = Provider<AgentOrchestrator>((ref) => AgentOrchestra
       tools: ref.watch(toolRegistryProvider),
       memory: ref.watch(memoryServiceProvider),
       stats: ref.watch(tokenStatsServiceProvider),
+      skills: ref.watch(skillServiceProvider),
     ));
 
 /// Token 用量统计服务。

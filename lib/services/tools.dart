@@ -8,6 +8,7 @@ import 'package:characters/characters.dart';
 
 import 'memory_service.dart';
 import 'rag_service.dart';
+import 'skill_service.dart';
 import 'terminal_service.dart';
 import 'package:flutter/foundation.dart';
 
@@ -514,6 +515,48 @@ class RunCommandTool extends Tool {
   }
 }
 
+/// 技能调用工具：把用户安装的快捷指令模板展开返回给模型照做。
+/// 技能本质是提示词模板而非代码，模型拿到模板后按其中的步骤执行任务。
+class UseSkillTool extends Tool {
+  UseSkillTool(this._skills);
+
+  final SkillService _skills;
+
+  @override
+  String get name => 'use_skill';
+
+  @override
+  String get description =>
+      '获取用户安装的快捷指令技能（如 写周报、今日要闻、专题调研等）的完整执行指令。'
+      '当用户的请求与某个技能的用途匹配，或用户输入「/技能名」时调用本工具，'
+      '然后严格按返回的指令步骤执行任务。';
+
+  @override
+  Map<String, dynamic> get parameters => {
+        'type': 'object',
+        'properties': {
+          'name': {'type': 'string', 'description': '技能名称，需与已安装的技能名完全一致'},
+          'input': {'type': 'string', 'description': '用户本次请求的具体内容（作为技能的输入参数），可为空'},
+        },
+        'required': ['name'],
+      };
+
+  @override
+  Future<String> execute(Map<String, dynamic> args) async {
+    final name = args['name']?.toString().trim() ?? '';
+    final input = args['input']?.toString() ?? '';
+    if (name.isEmpty) return '错误：技能名为空';
+    await _skills.load();
+    final skill = _skills.findByName(name);
+    if (skill == null) {
+      final names = _skills.skills.map((s) => s.name).toList();
+      return '错误：没有名为「$name」的技能。'
+          '当前已安装：${names.isEmpty ? '（无）' : names.join('、')}';
+    }
+    return '请严格按以下技能指令执行任务：\n${SkillService.expand(skill, input)}';
+  }
+}
+
 /// Agent 权限模式（聊天状态条的「权限」选择）。
 ///
 /// 三档由松到紧：完全访问 > 工作区读写 > 只读。
@@ -540,6 +583,7 @@ extension AgentPermissionX on AgentPermission {
   /// 只读档可用的内置工具白名单。
   static const _readOnlyTools = <String>{
     'current_time', 'calculator', 'web_search', 'web_fetch', 'search_knowledge',
+    'use_skill',
   };
 
   /// 工作区读写档 = 只读 + 记忆写入 + 终端命令。
@@ -569,6 +613,7 @@ class ToolRegistry {
     RagService? ragService,
     BatchEmbed? batchEmbed,
     TerminalService? terminalService,
+    SkillService? skillService,
   }) {
     final dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 20),
@@ -583,6 +628,7 @@ class ToolRegistry {
       if (ragService != null && batchEmbed != null)
         SearchKnowledgeTool(ragService, batchEmbed),
       if (terminalService != null) RunCommandTool(terminalService),
+      if (skillService != null) UseSkillTool(skillService),
     ];
   }
 

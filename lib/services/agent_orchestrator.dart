@@ -5,6 +5,7 @@ import 'package:dio/dio.dart';
 import 'llm_client.dart';
 import 'memory_service.dart';
 import 'rag_service.dart';
+import 'skill_service.dart';
 import 'token_stats_service.dart';
 import '../models/chat_message.dart' show ChatMessage;
 import '../models/llm_config.dart';
@@ -69,10 +70,12 @@ class AgentOrchestrator {
     required ToolRegistry tools,
     required MemoryService memory,
     TokenStatsService? stats,
+    SkillService? skills,
   })  : _llm = llm,
         _tools = tools,
         _memory = memory,
-        _stats = stats;
+        _stats = stats,
+        _skills = skills;
 
   static const _maxSteps = 8;
 
@@ -82,6 +85,9 @@ class AgentOrchestrator {
 
   /// Token 用量记账；为 null 时不统计（测试与降级场景）。
   final TokenStatsService? _stats;
+
+  /// 技能服务；为 null 时系统提示词不含技能清单。
+  final SkillService? _skills;
 
   Stream<AgentEvent> run({
     required LlmConfig config,
@@ -277,7 +283,43 @@ class AgentOrchestrator {
         '2. 得到工具结果后，用自然语言总结回答，不要原样粘贴原始数据。\n'
         '3. 使用与用户相同的语言回答（默认中文）。\n'
         '4. 回答力求准确、简洁。\n'
-        '当前日期：${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日。$p$mem$kb';
+        '当前日期：${DateTime.now().year}年${DateTime.now().month}月${DateTime.now().day}日。'
+        '$p$mem$kb${_capabilityPrompt()}';
+  }
+
+  /// 把「当前有哪些扩展能力」写进系统提示词。
+  ///
+  /// 模型只看得到 tools 参数里的名字与描述：MCP 工具名是「服务器名__工具名」
+  /// （中文服务器名会被清理成下划线前缀），模型无从知道它们来自 MCP、
+  /// 该在什么时候用——于是出现「我没有 MCP 工具」这类错误回答；
+  /// 技能则完全是提示词模板，不说明就根本不存在于模型的认知里。
+  String _capabilityPrompt() {
+    final buf = StringBuffer();
+
+    // MCP 扩展工具：与 toOpenAiTools 相同的权限过滤，只列模型真能调的
+    final mcp = _tools.all
+        .where((t) => t.name.contains('__') && _tools.permission.allows(t.name))
+        .toList();
+    if (mcp.isNotEmpty) {
+      buf
+        ..writeln()
+        ..write('用户配置了 MCP 服务器，以下扩展工具来自 MCP（工具名格式为「服务器名__工具名」）：')
+        ..writeln(mcp.map((t) => t.name).join('、'))
+        ..write('当用户提到 MCP、或需要内置工具之外的能力（外部数据源、自定义服务等）时，'
+            '优先从上述工具中选择调用，不要声称自己没有 MCP 工具。');
+    }
+
+    // 已安装技能：告知存在与用法，模板全文由 use_skill 工具按需返回
+    final skills = _skills?.skills ?? const [];
+    if (skills.isNotEmpty) {
+      final names = skills.map((s) => '「${s.name}」').join('、');
+      buf
+        ..writeln()
+        ..write('用户安装了以下快捷指令技能：$names。'
+            '当用户的请求与某技能的用途匹配时，调用 use_skill 工具（传技能名）'
+            '获取完整执行指令并按其步骤执行；用户输入「/技能名」也等价于此操作。');
+    }
+    return buf.toString();
   }
 
   String _dioError(DioException e) {
