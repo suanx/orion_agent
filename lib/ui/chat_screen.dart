@@ -720,8 +720,10 @@ MarkdownStyleSheet _mdStyleSheet(BuildContext context) {
     blockquotePadding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
     code: TextStyle(
         fontFamily: 'monospace', fontSize: 13, color: onSurface(context, 0.85)),
-    // 代码块由 _CodeBlock 自绘（语言栏 + 复制 + 折叠），这里不重复装饰。
+    // 代码块由 _CodeBlock 自绘（语言栏 + 复制 + 折叠），这里不重复装饰；
+    // pre 外壳的内边距也归零，避免卡片外再套一圈空 padding。
     codeblockDecoration: const BoxDecoration(),
+    codeblockPadding: EdgeInsets.zero,
     horizontalRuleDecoration: BoxDecoration(
         border: Border(top: BorderSide(color: onSurface(context, 0.12)))),
   );
@@ -731,33 +733,42 @@ MarkdownStyleSheet _mdStyleSheet(BuildContext context) {
 MarkdownBody _mdBody(BuildContext context, String text) => MarkdownBody(
       data: text,
       styleSheet: _mdStyleSheet(context),
-      // 参数类型显式标注：lambda 靠上下文推断会被推成 dynamic 三参函数，
-      // 无法赋给 Map<String, MarkdownElementBuilder>（CI run 37219882832）。
-      builders: <String, MarkdownElementBuilder>{
-        'code': (BuildContext context, md.Element element, Widget? child) {
-          // 行内 `code` 与 ``` 围栏代码块共用 code 构建器：
-          // 块级带 isCodeBlock 标记与 language 属性。
-          final isBlock = element.attributes['isCodeBlock'] == 'true';
-          final code = element.textContent;
-          if (!isBlock) {
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-              decoration: BoxDecoration(
-                color: onSurface(context, 0.07),
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: Text(code,
-                  style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 13,
-                      color: onSurface(context, 0.85))),
-            );
-          }
-          return _CodeBlock(
-              code: code, language: element.attributes['language'] ?? '');
-        },
-      },
+      builders: <String, MarkdownElementBuilder>{'code': _MdCodeBuilder()},
     );
+
+/// 代码构建器：行内 `code` 紧凑样式；``` 围栏块走 _CodeBlock 卡片。
+///
+/// flutter_markdown 0.7.x 的 builders 是抽象类
+/// （`visitElementAfterWithContext`），不是函数 typedef——
+/// 直接塞 lambda 会报 map_value_type_not_assignable（CI run 37220472428）。
+class _MdCodeBuilder extends MarkdownElementBuilder {
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final isBlock = element.attributes['isCodeBlock'] == 'true';
+    final code = element.textContent;
+    if (!isBlock) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+        decoration: BoxDecoration(
+          color: onSurface(context, 0.07),
+          borderRadius: BorderRadius.circular(5),
+        ),
+        child: Text(code,
+            style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 13,
+                color: onSurface(context, 0.85))),
+      );
+    }
+    return _CodeBlock(
+        code: code, language: element.attributes['language'] ?? '');
+  }
+}
 
 /// 已完结消息的 Markdown 渲染缓存。
 ///
