@@ -90,4 +90,50 @@ void main() {
     await fresh.removeNote(fresh.notes.first.id);
     expect(fresh.notes, hasLength(1));
   });
+
+  group('decodeToolCalls 容错（坏数据降级为空列表，不炸加载链路）', () {
+    test('非 JSON 字符串返回空列表且不抛异常', () {
+      expect(decodeToolCalls('not json at all'), isEmpty);
+      expect(decodeToolCalls(''), isEmpty);
+    });
+
+    test('JSON 非数组（如对象、null 字面量）返回空列表', () {
+      expect(decodeToolCalls('{"a":1}'), isEmpty);
+      expect(decodeToolCalls('null'), isEmpty);
+    });
+
+    test('JSON 数组但元素类型错误被过滤', () {
+      // 元素不是 Map：whereType 丢弃，非法字段静默降级
+      expect(decodeToolCalls('[1,2,3]'), isEmpty);
+      expect(decodeToolCalls('["str"]'), isEmpty);
+      // 半条合法数据：合法项保留
+      final decoded = decodeToolCalls('[{"id":"c1","name":"calc"},123]');
+      expect(decoded, hasLength(1));
+      expect(decoded.single.name, 'calc');
+    });
+
+    test('合法 toolCalls JSON 正常解码', () {
+      final decoded = decodeToolCalls(
+          '[{"id":"c1","name":"calc","arguments":"{\\"a\\":1}"}]');
+      expect(decoded, hasLength(1));
+      expect(decoded.single.id, 'c1');
+      expect(decoded.single.name, 'calc');
+      expect(decoded.single.arguments, '{"a":1}');
+    });
+  });
+
+  group('decodeStringList 容错（损坏数据降级为空列表）', () {
+    test('非 JSON 字符串返回空列表且不抛异常', () {
+      expect(decodeStringList('garbage'), isEmpty);
+      expect(decodeStringList(''), isEmpty);
+    });
+
+    test('数组内非字符串元素被过滤，字符串保留', () {
+      expect(decodeStringList('[1,"a",true,null,"b"]'), ['a', 'b']);
+    });
+
+    test('合法字符串数组正常解码', () {
+      expect(decodeStringList('["x","y"]'), ['x', 'y']);
+    });
+  });
 }

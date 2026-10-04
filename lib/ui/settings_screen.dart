@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import '../theme.dart';
+import 'format_utils.dart';
 import 'glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -620,7 +621,9 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
 
   Future<void> _editProxy(BuildContext context, LlmConfig config) async {
     final ctrl = TextEditingController(text: config.proxy);
-    final ok = await showGlassDialog<bool>(
+    // 值随 pop 一起带出（P2-6）：whenComplete 会先 dispose 控制器，
+    // 之后再读 ctrl.text 会抛「used after dispose」。
+    final result = await showGlassDialog<(bool, String)>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('网络代理'),
@@ -646,24 +649,25 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
+            onPressed: () => Navigator.of(ctx).pop(),
             child: const Text('取消'),
           ),
           if (config.proxy.trim().isNotEmpty)
             TextButton(
-              onPressed: () => Navigator.of(ctx).pop(true),
+              onPressed: () => Navigator.of(ctx).pop((true, '')),
               child: const Text('清除'),
             ),
           FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
+            onPressed: () =>
+                Navigator.of(ctx).pop((true, ctrl.text.trim())),
             child: const Text('保存'),
           ),
         ],
       ),
-    );
-    if (ok != true) return;
-    // 「清除」与「保存」都返回 true；靠输入框是否为空区分意图
-    _patch((c) => c.copyWith(proxy: ctrl.text.trim()));
+    ).whenComplete(ctrl.dispose);
+    if (result == null || !result.$1) return;
+    // 「清除」与「保存」都返回 true；靠输入框内容是否为空区分意图
+    _patch((c) => c.copyWith(proxy: result.$2));
   }
 
   Future<void> _testConnection(BuildContext context, LlmConfig config) async {
@@ -763,26 +767,13 @@ class _KeyList extends StatelessWidget {
   }
 
   Future<void> _add(BuildContext context) async {
-    final ctrl = TextEditingController();
-    final v = await showGlassDialog<String>(
+    // 单文本输入统一走 showGlassTextDialog（P2-6）：
+    // 控制器由助手内部创建并在弹窗关闭时 dispose，调用方不再持有。
+    final v = await showGlassTextDialog(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('添加备用 Key'),
-        content: TextField(
-          controller: ctrl,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: 'API Key'),
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.of(ctx).pop(),
-              child: const Text('取消')),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-            child: const Text('添加'),
-          ),
-        ],
-      ),
+      title: '添加备用 Key',
+      labelText: 'API Key',
+      confirmLabel: '添加',
     );
     if (v == null || v.isEmpty) return;
     if (config.extraKeys.contains(v)) return;
@@ -1222,17 +1213,58 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
           .showSnackBar(const SnackBar(content: Text('模型名不能为空')));
       return;
     }
-    int tok(String s) => int.tryParse(s.trim()) ?? 0;
-    ref.read(configProvider.notifier).addModel(
-          widget.configId,
-          ProviderModel(
-            name: name,
-            kind: _kind,
-            contextWindow: tok(_ctx.text),
-            maxOutputTokens: tok(_out.text),
-            temperature: _temp,
-          ),
-        );
+    // 空串按 0（未设置）；填了但非法（如 "128k"、"-500"）解析得 null，
+    // 提示后阻止保存，不再被静默归 0（P2-23）。
+    final ctxText = _ctx.text.trim();
+    final outText = _out.text.trim();
+    final ctxV = ctxText.isEmpty ? 0 : parseTokenCount(ctxText);
+    final outV = outText.isEmpty ? 0 : parseTokenCount(outText);
+    if (ctxV == null || outV == null) {
+      showHint(context, '请输入正整数，支持 128k / 1.5m 格式');
+      return;
+    }
+    final model = ProviderModel(
+      name: name,
+      kind: _kind,
+      contextWindow: ctxV,
+      maxOutputTokens: outV,
+      temperature: _temp,
+    );
+    final notifier = ref.read(configProvider.notifier);
+    final old = widget.existing;
+    final renamed = old != null && old.name != name;
+    // 编辑既有模型且改了名：先删旧名条目再加新条目（P1-15）。
+    // addModel 按 name 替换，不改名时单独调用即可覆盖旧参数。
+    if (renamed) {
+      notifier.removeModel(widget.configId, old.name);
+    }
+    notifier.addModel(widget.configId, model);
+    if (renamed) {
+      // 配置内指向旧名的默认模型字段逐个改指新名，否则用户改的
+      // 参数对当前对话不生效（chatModel getter 按 defaultChatModel 查找）。
+      final c = notifier.byId(widget.configId);
+      if (c != null) {
+        notifier.upsert(c.copyWith(
+          defaultChatModel: c.defaultChatModel == old.name ? name : null,
+          defaultEmbeddingModel:
+              c.defaultEmbeddingModel == old.name ? name : null,
+        ));
+      }
+      // 专项模型引用存在 SharedPreferences（vision/compress/summary_model），
+      // 同样指向模型名，改名后一并迁移。
+      final prefs = ref.read(sharedPreferencesProvider);
+      final specialties = <String, StateProvider<String>>{
+        'vision_model': visionModelProvider,
+        'compress_model': compressModelProvider,
+        'summary_model': summaryModelProvider,
+      };
+      specialties.forEach((key, provider) {
+        if (prefs.getString(key) == old.name) {
+          prefs.setString(key, name);
+          ref.read(provider.notifier).state = name;
+        }
+      });
+    }
     Navigator.of(context).pop();
   }
 
@@ -1291,7 +1323,8 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
                       keyboardType: TextInputType.number,
                       decoration: const InputDecoration(
                         labelText: '上下文长度',
-                        hintText: '如 128000',
+                        hintText: '如 128000 或 128k',
+                        helperText: '0 = 不自动压缩',
                       ),
                     ),
                   ),
@@ -1303,6 +1336,7 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
                       decoration: const InputDecoration(
                         labelText: '最大输出',
                         hintText: '如 4096',
+                        helperText: '0 = 不限制',
                       ),
                     ),
                   ),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:drift/drift.dart';
 import 'package:flutter/foundation.dart';
 
@@ -113,6 +115,9 @@ class TokenStatsService {
 
   final AppDatabase _db;
 
+  /// 上次过期清理日期（进程内去重，每天最多清一次）。
+  DateTime? _lastPrune;
+
   /// 记录一次模型调用的用量。
   Future<void> record({
     required String provider,
@@ -126,6 +131,15 @@ class TokenStatsService {
     // 全零的记录没有统计价值，还会把「请求次数」算错
     if (inputTokens <= 0 && outputTokens <= 0) return;
     final ts = at ?? DateTime.now();
+    // 顺手做过期清理：用量明细只保留 180 天，防止无限增长。
+    // 每天最多执行一次，失败静默（统计数据不值得为它报错）。
+    final today = DateTime.now();
+    if (_lastPrune == null ||
+        today.day != _lastPrune!.day ||
+        today.month != _lastPrune!.month) {
+      _lastPrune = today;
+      unawaited(_pruneOld(today));
+    }
     try {
       await _db.into(_db.tokenUsageRows).insert(
             // ⚠️ drift 的 Companion.insert：必需字段收**裸值**，
@@ -147,6 +161,19 @@ class TokenStatsService {
     } catch (e) {
       // 统计失败绝不能影响正常对话
       debugPrint('Token 用量写入失败：$e');
+    }
+  }
+
+  /// 删除 [now] 往前 180 天之前的用量明细行。
+  Future<void> _pruneOld(DateTime now) async {
+    try {
+      final cutoff =
+          now.subtract(const Duration(days: 180)).millisecondsSinceEpoch;
+      await (_db.delete(_db.tokenUsageRows)
+            ..where((t) => t.createdAt.isSmallerThanValue(cutoff)))
+          .go();
+    } catch (e) {
+      debugPrint('Token 用量过期清理失败（不影响使用）：$e');
     }
   }
 

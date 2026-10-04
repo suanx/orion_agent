@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import '../theme.dart';
@@ -60,6 +61,19 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   final _cmdCtrl = TextEditingController();
   late TerminalDistro _distro;
 
+  // Workspace 目录 future 只在 initState 建一次（P1-16）：
+  // 原来写在 build 里，安装日志每行一次 setState 都会重建 future，
+  // 卡片反复闪烁且重复发起平台通道调用（安装可达 20 分钟）。
+  Future<String>? _wsDirFuture;
+
+  // 安装日志逐行 setState 会让整页 rebuild；这里合帧批量刷新（P2-5）。
+  bool _pendingDirty = false;
+  Timer? _logFlushTimer;
+
+  // 自启动任务列表缓存（P2-5）：原来 build 里每次重新 JSON 解析
+  // prefs，改为 initState 读取、_saveTasks 时同步更新。
+  List<TerminalTask> _tasks = const [];
+
   TerminalService get _terminal => ref.read(terminalServiceProvider);
 
   @override
@@ -68,7 +82,22 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     // specs 理论上非空，但 keys.first 在空 map 上会抛 StateError，这里兜底
     final keys = TerminalService.specs.keys;
     _distro = keys.isEmpty ? TerminalDistro.alpine : keys.first;
+    _tasks = _loadTasks();
+    _wsDirFuture = _terminal.workspaceDir();
     _restoreDistroAndRefresh();
+  }
+
+  @override
+  void dispose() {
+    _logFlushTimer?.cancel();
+    _cmdCtrl.dispose();
+    super.dispose();
+  }
+
+  /// 显式刷新 Workspace 目录（需要时调用并触发重建）。
+  void _refreshWorkspace() {
+    if (!mounted) return;
+    setState(() => _wsDirFuture = _terminal.workspaceDir());
   }
 
   Future<void> _restoreDistroAndRefresh() async {
@@ -103,7 +132,16 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
 
   void _appendLog(String s) {
     _log.writeln(s);
-    if (mounted) setState(() {});
+    if (!mounted) return;
+    // 只标脏 + 100ms 合帧（P2-5）：安装输出每行一次 setState，
+    // 长输出时整页 rebuild 频率过高，合并到定时器里统一刷。
+    _pendingDirty = true;
+    _logFlushTimer ??= Timer(const Duration(milliseconds: 100), () {
+      _logFlushTimer = null;
+      if (!mounted || !_pendingDirty) return;
+      _pendingDirty = false;
+      setState(() {});
+    });
   }
 
   Future<void> _installEnv() async {
@@ -111,6 +149,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     try {
       await _terminal.install(_distro, onProgress: _appendLog);
       await _refreshInstalled();
+      _refreshWorkspace();
     } catch (e) {
       // 终端依赖 proot 才能跑。proot 起不来时 rootfs 下载完成但环境不可用，
       // 这里把proot 相关的原因单独拎出来，否则用户只会看到
@@ -452,7 +491,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
             _sectionTitle('Workspace 挂载'),
             _card(
               FutureBuilder<String>(
-                future: _terminal.workspaceDir(),
+                future: _wsDirFuture,
                 builder: (context, snap) {
                   final ws = snap.data ?? '…';
                   return Column(
@@ -505,11 +544,12 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     ref
         .read(sharedPreferencesProvider)
         .setString(TerminalService.tasksPrefsKey, TerminalTask.encodeList(tasks));
+    _tasks = tasks;
     if (mounted) setState(() {});
   }
 
   Widget _buildTasksSection() {
-    final tasks = _loadTasks();
+    final tasks = _tasks;
     if (tasks.isEmpty) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -605,7 +645,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     var enabled = existing?.enabled ?? true;
     var distro = existing?.distro ?? _distro;
 
-    final saved = await showGlassDialog<bool>(
+    // 输入值随 pop 一起带出（P2-6）：whenComplete 会先 dispose 控制器，
+    // 之后再读 ctrl.text 会抛「used after dispose」。
+    final saved = await showGlassDialog<(String, String)>(
       context: context,
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setDialog) => AlertDialog(
@@ -650,18 +692,22 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
           ),
           actions: [
             TextButton(
-                onPressed: () => Navigator.pop(ctx, false),
+                onPressed: () => Navigator.pop(ctx),
                 child: const Text('取消')),
             TextButton(
-                onPressed: () => Navigator.pop(ctx, true),
+                onPressed: () => Navigator.pop(
+                    ctx, (nameCtrl.text.trim(), cmdCtrl.text.trim())),
                 child: const Text('保存')),
           ],
         ),
       ),
-    );
-    if (saved != true) return;
-    final name = nameCtrl.text.trim();
-    final command = cmdCtrl.text.trim();
+    ).whenComplete(() {
+      nameCtrl.dispose();
+      cmdCtrl.dispose();
+    });
+    if (saved == null) return;
+    final name = saved.$1;
+    final command = saved.$2;
     if (name.isEmpty || command.isEmpty) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -669,7 +715,16 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       }
       return;
     }
-    final tasks = _loadTasks().where((t) => t.name != existing?.name).toList()
+    // 任务名与已有任务重复时拒绝保存（P2-23）。
+    final dup = _tasks.any((t) => t.name == name && t.name != existing?.name);
+    if (dup) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('任务名「$name」已存在，请换一个名字')));
+      }
+      return;
+    }
+    final tasks = _tasks.where((t) => t.name != existing?.name).toList()
       ..add(TerminalTask(
           name: name, command: command, enabled: enabled, distro: distro));
     _saveTasks(tasks);
@@ -705,16 +760,18 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
         : ready
             ? '已安装'
             : (envBroken ? '环境异常' : '未安装');
+    // 语义色（P2-20）：固定浅色底在深色模式下刺眼且对比不足。
+    final scheme = Theme.of(context).colorScheme;
     final bg = !checked
         ? onSurface(context, 0.05)
         : ready
-            ? const Color(0xFFE6F4EA)
-            : const Color(0xFFFCE8E6);
+            ? scheme.primaryContainer
+            : scheme.errorContainer;
     final fg = !checked
         ? onSurface(context, 0.45)
         : ready
-            ? const Color(0xFF137333)
-            : const Color(0xFFC5221F);
+            ? scheme.onPrimaryContainer
+            : scheme.onErrorContainer;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(

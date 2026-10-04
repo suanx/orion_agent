@@ -33,7 +33,9 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
     final titleCtrl = TextEditingController();
     final textCtrl = TextEditingController();
 
-    final saved = await showGlassDialog<bool>(
+    // 双输入框弹窗语义特殊（标题 + 多行正文），不迁移 showGlassTextDialog；
+    // 输入值随 pop 带出 + whenComplete dispose（P2-6）。
+    final saved = await showGlassDialog<(String, String)>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: Colors.transparent,
@@ -64,18 +66,22 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
               ),
               const SizedBox(height: 12),
               FilledButton(
-                onPressed: () => Navigator.of(ctx).pop(true),
+                onPressed: () => Navigator.of(ctx)
+                    .pop((titleCtrl.text.trim(), textCtrl.text.trim())),
                 child: const Text('导入并向量化'),
               ),
             ],
           ),
         ),
       ),
-    );
+    ).whenComplete(() {
+      titleCtrl.dispose();
+      textCtrl.dispose();
+    });
 
-    if (saved != true || !mounted) return;
-    final title = titleCtrl.text.trim();
-    final text = textCtrl.text.trim();
+    if (saved == null || !mounted) return;
+    final title = saved.$1;
+    final text = saved.$2;
     if (title.isEmpty || text.isEmpty) {
       ScaffoldMessenger.of(context)
           .showSnackBar(const SnackBar(content: Text('标题和内容不能为空')));

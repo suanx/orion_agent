@@ -65,7 +65,8 @@ class MemoryService {
     // 去重：Agent 在 ReAct 循环里可能对同一件事反复 save_memory，
     // 不去重会让记忆库和prompt 一起膨胀。
     if (_notes.any((n) => n.text.trim() == body)) {
-      debugPrint('memory: 跳过重复记忆「$body」');
+      // 不打印用户记忆原文（P2-15：用户数据不得进 logcat），只打印长度。
+      debugPrint('memory: 跳过重复记忆（长度 ${body.length}）');
       return;
     }
     final note = MemoryNote(

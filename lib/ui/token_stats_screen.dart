@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../providers/providers.dart';
 import '../services/token_stats_service.dart';
 import '../theme.dart';
+import 'format_utils.dart';
 import 'glass.dart';
 
 /// Token 统计页。
@@ -44,6 +45,9 @@ class _TokenStatsScreenState extends ConsumerState<TokenStatsScreen> {
   }
 
   Future<void> _confirmClear() async {
+    // 先捕获 service（P2-9）：await 之后 ref 可能已随 State 销毁不可用，
+    // 但清空动作本身仍应执行。
+    final svc = ref.read(tokenStatsServiceProvider);
     final ok = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -63,7 +67,7 @@ class _TokenStatsScreenState extends ConsumerState<TokenStatsScreen> {
       ),
     );
     if (ok != true) return;
-    await ref.read(tokenStatsServiceProvider).clear();
+    await svc.clear();
     await _load();
   }
 
@@ -188,14 +192,9 @@ class _TokenStatsScreenState extends ConsumerState<TokenStatsScreen> {
   }
 
   /// 1280000 → "1.3M"。图表轴与卡片共用，避免出现 1280000 这种长串。
-  static String _compact(int n) {
-    if (n >= 1000000) {
-      final v = n / 1000000;
-      return '${v.toStringAsFixed(v >= 10 ? 0 : 1)}M';
-    }
-    if (n >= 1000) return '${(n / 1000).toStringAsFixed(n >= 10000 ? 0 : 1)}K';
-    return '$n';
-  }
+  /// 统一委托 format_utils.compactTokens（P2-22：原先与 chat_screen
+  /// 各维护一份，口径不一致）。
+  static String _compact(int n) => compactTokens(n);
 }
 
 class _EmptyHint extends StatelessWidget {

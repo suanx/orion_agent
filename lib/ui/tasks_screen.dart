@@ -56,6 +56,9 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
   }
 
   Future<void> _delete(TaskRow t) async {
+    // 先捕获 notifier（P2-9）：await 之后 ref 可能已随 State 销毁不可用，
+    // 但删除动作本身仍应执行。
+    final notifier = ref.read(tasksProvider.notifier);
     final ok = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -72,9 +75,8 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
         ],
       ),
     );
-    if (ok == true) {
-      await ref.read(tasksProvider.notifier).remove(t.id);
-    }
+    if (ok != true) return;
+    await notifier.remove(t.id);
   }
 
   Future<void> _run(TaskRow t) async {

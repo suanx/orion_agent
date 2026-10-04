@@ -392,9 +392,12 @@ class VoiceService {
     final ratePct = ((rate - 1.0) * 100).round();
     final volPct = ((volume - 1.0) * 100).round();
     final fullVoice = edgeVoiceName(voice);
+    // voice 名来自用户配置，拼入 SSML 属性前必须转义，防止属性值被注入
+    // 引号闭合后注入额外属性/元素（P2-14）。rate/volume/pitch 均为代码
+    // 计算的数值，无注入面。
     final ssml = "<speak version='1.0' "
         "xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='zh-CN'>"
-        "<voice name='$fullVoice'>"
+        "<voice name='${escapeXml(fullVoice)}'>"
         "<prosody pitch='+0Hz' rate='${ratePct >= 0 ? '+' : ''}$ratePct%' "
         "volume='${volPct >= 0 ? '+' : ''}$volPct%'>"
         '${escapeXml(text)}</prosody></voice></speak>';

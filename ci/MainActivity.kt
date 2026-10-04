@@ -56,8 +56,16 @@ class MainActivity : FlutterActivity() {
                             androidx.core.app.ActivityCompat.requestPermissions(
                                 this, perms, 7001
                             )
+                            result.success(null)
+                        } else {
+                            // 未知 permission kind 不能静默 success（会让 Dart 侧
+                            // 误以为已发起授权）：返回带错误信息的失败结果。
+                            result.error(
+                                "unknown_permission_kind",
+                                "未知的权限类型：$kind（支持 camera / mic）",
+                                null
+                            )
                         }
-                        result.success(null)
                     }
                     "openPermission" -> {
                         openPermission(call.argument<String>("kind") ?: "")
@@ -107,14 +115,18 @@ class MainActivity : FlutterActivity() {
             val enabled = Settings.Secure.getString(
                 contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
             ) ?: ""
-            // 按包名匹配：我们的服务是 com.example.orion_agent.AgentAccessibilityService
-            enabled.split(':').any { it.contains(packageName) }
+            // 组件在设置串里的标准格式是「包名/完整类名」，用完整服务类名
+            // 精确匹配，避免子串匹配被同名前缀的其他包误判。
+            val service = "$packageName/com.example.orion_agent.AgentAccessibilityService"
+            enabled.split(':').any { it.equals(service, ignoreCase = true) }
         } catch (_: Exception) { false }
         out["appsList"] = try {
-            // QUERY_ALL_PACKAGES 已在 Manifest 声明时安装即授予，这里用
-            // 「能看到的 installedPackages 数量」验证它真的生效：
-            // 未授权时 API 30+ 只能看到极少数包（自己 + 交互过的系统组件）。
-            packageManager.getInstalledPackages(0).size > 50
+            // 用系统无障碍管理器判断本应用的无障碍服务是否启用，替代不可靠的
+            // 「可见包数>50」启发式。getEnabledAccessibilityServiceList 与
+            // FEEDBACK_ALL_MASK 均 API 14+ 可用，兼容 targetSdk 28，无额外依赖。
+            val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
+            am?.getEnabledAccessibilityServiceList(AccessibilityManager.FEEDBACK_ALL_MASK)
+                ?.any { it.resolveInfo?.serviceInfo?.packageName == packageName } ?: false
         } catch (_: Exception) { false }
         // a11yServiceEnabled 保留：区分「系统里有无此服务」与「服务已开启」
         out["a11yServiceDeclared"] = a11y != null

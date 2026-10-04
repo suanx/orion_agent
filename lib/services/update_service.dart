@@ -8,16 +8,26 @@ class UpdateService {
   static const _latestApi =
       'https://api.github.com/repos/suanx/orion_agent/releases/latest';
 
+  /// 复用单个 Dio 实例：每次检查都 new Dio 会泄漏底层 HttpClient 连接。
+  UpdateService() : _dio = Dio(BaseOptions(connectTimeout: _defaultTimeout));
+
+  static const _defaultTimeout = Duration(seconds: 15);
+
+  final Dio _dio;
+
   /// 检查结果：null 表示已是最新或检查失败（自动检查应当静默）。
   Future<UpdateInfo?> checkForUpdate(String currentVersion,
-      {Duration timeout = const Duration(seconds: 15)}) async {
+      {Duration timeout = _defaultTimeout}) async {
     try {
-      final resp = await Dio()
-          .get<Map<String, dynamic>>(
+      // 超时交给 Dio 的 connect/receiveTimeout 配置：原来的 Future.timeout
+      // 只是放弃等待，底层请求仍会继续跑，连接无法取消。
+      final resp = await _dio.get<Map<String, dynamic>>(
         _latestApi,
-        options: Options(responseType: ResponseType.json),
-      )
-          .timeout(timeout);
+        options: Options(
+          responseType: ResponseType.json,
+          receiveTimeout: timeout,
+        ),
+      );
       final data = resp.data;
       if (data == null) return null;
       final tag = (data['tag_name'] as String? ?? '').replaceFirst('v', '');

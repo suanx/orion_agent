@@ -284,7 +284,7 @@ jobs:
               android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
               android:accessibilityFeedbackType="feedbackGeneric"
               android:notificationTimeout="100"
-              android:canRetrieveWindowContent="true"
+              android:canRetrieveWindowContent="false"
               android:description="@string/accessibility_service_desc" />
           XML
           # description 必须是字符串资源；strings.xml 若已存在只追加（幂等）

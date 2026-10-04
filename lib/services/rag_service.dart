@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math' as math;
 
 import 'package:drift/drift.dart';
@@ -127,40 +128,51 @@ class RagService {
     };
     final chunks = await (_db.select(_db.knowledgeChunks)).get();
 
-    final hits = <RagHit>[];
-    var skipped = 0;
-    for (final c in chunks) {
-      // 单条脏数据（写入时截断、历史迁移遗留、手动改库）会让 jsonDecode 抛
-      // FormatException 并毁掉【整次】检索——所有查询归零，且上游多半是空catch，
-      // 用户只看到"AI 不认识我导入的资料了"。这里改为跳过并计数。
-      List<double> vec;
-      try {
-        final decoded = jsonDecode(c.embeddingJson);
-        if (decoded is! List) {
-          skipped++;
+    // JSON 解码 + 全量余弦相似度是纯 CPU 计算，分块一多就会卡住主 isolate
+    //（掉帧、输入无响应）。移入后台 isolate 执行：只传入字符串/数值/List
+    // 等可跨 isolate 的基本数据，命中对象在 isolate 内构造后带回。
+    final payload = [
+      for (final c in chunks) (c.embeddingJson, c.content, c.docId),
+    ];
+    final q = List<double>.of(qv);
+    final docTitles = Map<String, String>.of(docs);
+    final (hits, skipped, total) = await Isolate.run(() {
+      final computed = <RagHit>[];
+      var bad = 0;
+      for (final (embeddingJson, content, docId) in payload) {
+        // 单条脏数据（写入时截断、历史迁移遗留、手动改库）会让 jsonDecode 抛
+        // FormatException 并毁掉【整次】检索——所有查询归零，且上游多半是空catch，
+        // 用户只看到"AI 不认识我导入的资料了"。这里改为跳过并计数。
+        List<double> vec;
+        try {
+          final decoded = jsonDecode(embeddingJson);
+          if (decoded is! List) {
+            bad++;
+            continue;
+          }
+          vec = decoded.whereType<num>().map((e) => e.toDouble()).toList();
+        } on FormatException {
+          bad++;
           continue;
         }
-        vec = decoded.whereType<num>().map((e) => e.toDouble()).toList();
-      } on FormatException {
-        skipped++;
-        continue;
+        // 维度与查询向量不一致时余弦无意义（会被当成 0 分），直接跳过。
+        if (vec.length != q.length || vec.isEmpty) {
+          bad++;
+          continue;
+        }
+        final score = cosineSimilarity(q, vec);
+        if (score >= _minScore) {
+          computed.add(RagHit(
+            docTitle: docTitles[docId] ?? docId,
+            content: content,
+            score: score,
+          ));
+        }
       }
-      // 维度与查询向量不一致时余弦无意义（会被当成 0 分），直接跳过。
-      if (vec.length != qv.length || vec.isEmpty) {
-        skipped++;
-        continue;
-      }
-      final score = cosineSimilarity(qv, vec);
-      if (score >= _minScore) {
-        hits.add(RagHit(
-          docTitle: docs[c.docId] ?? c.docId,
-          content: c.content,
-          score: score,
-        ));
-      }
-    }
+      return (computed, bad, payload.length);
+    });
     if (skipped > 0) {
-      debugPrint('RAG: 跳过 $skipped/${chunks.length} 个损坏或维度不符的分块');
+      debugPrint('RAG: 跳过 $skipped/$total 个损坏或维度不符的分块');
     }
     hits.sort((a, b) => b.score.compareTo(a.score));
     return hits.take(topK).toList();

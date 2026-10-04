@@ -84,6 +84,27 @@ class LlmClient {
   /// 否则会污染走默认 UA 的请求。
   final _proxyDioCache = <String, Dio>{};
 
+  /// 上述缓存的容量上限：超过后关闭并移除最早创建的条目，防止
+  /// 用户反复更换代理/UA 组合导致 Dio（连接池）无界增长。
+  static const _proxyDioCacheLimit = 16;
+
+  /// 从 SSE error 帧里提取人类可读的错误描述。
+  /// 兼容常见形态：纯字符串、{message}、{error:{message}}、{Message} 等。
+  static String _describeSseError(Object raw) {
+    if (raw is String) return raw;
+    if (raw is Map) {
+      final err = raw['error'];
+      if (err is Map) {
+        final m = err['message'] ?? err['msg'] ?? err['Message'];
+        if (m != null) return m.toString();
+      }
+      final direct =
+          raw['message'] ?? raw['msg'] ?? raw['Message'] ?? raw['code'];
+      if (direct != null) return direct.toString();
+    }
+    return raw.toString();
+  }
+
   /// 默认 User-Agent。
   ///
   /// 部分网关（Cloudflare 前置、企业代理）会拦截空 UA 或明显是脚本的 UA，
@@ -117,6 +138,11 @@ class LlmClient {
           return client;
         },
       );
+    }
+    // LinkedHashMap 保持插入序，keys.first 即最早创建的条目。
+    while (_proxyDioCache.length >= _proxyDioCacheLimit) {
+      final oldestKey = _proxyDioCache.keys.first;
+      _proxyDioCache.remove(oldestKey)?.close(force: true);
     }
     _proxyDioCache[key] = dio;
     return dio;
@@ -323,6 +349,17 @@ class LlmClient {
       // 网关有时返回 {"error": {...}} 之类结构，这里逐层做类型收敛而不是强转。
       if (decoded is! Map) continue;
       final json = decoded.cast<String, dynamic>();
+
+      // one-api / new-api 类网关在限流、余额不足时会在流里下发
+      // {"error": {...}} 帧（HTTP 状态仍是 200），原实现直接 continue 跳过，
+      // 最终产出空内容被当正常回答。这里解析出服务端错误信息并抛出。
+      // 抛出点位于任何内容 yield 之前（错误帧是网关在首 token 前下发的），
+      // 处于 chatStream 多 Key 重试的 try 范围内，可自然参与其重试语义；
+      // 若在已吐字后才出现错误帧，则沿用「不重试、直接抛」的原有行为。
+      final rawError = json['error'];
+      if (rawError != null) {
+        throw Exception('模型服务返回错误：${_describeSseError(rawError)}');
+      }
 
       // usage 在**顶层**，不在 choices 里。流式协议有两种下发方式：
       //   1) 最后一个带 content 的 chunk 里带 usage
@@ -585,6 +622,9 @@ class LlmClient {
     // 按 index 显式对齐：某些网关返回顺序不保证与请求一致，
     // 若按到达顺序建表会让「分块 i」写入「分块 j 的向量」而永久错位。
     final slots = <int, List<double>>{};
+    // 服务端可能返回非法 index（越界/负数），这些向量先攒着，
+    // 之后按到达顺序兜底填进没被覆盖的槽位。
+    final leftovers = <List<double>>[];
     var anyIndex = false;
     for (final item in data) {
       if (item is! Map) continue;
@@ -598,6 +638,12 @@ class LlmClient {
       // 空向量会让余弦相似度恒为 0，等于往知识库里塞入一条永远检索不到、
       // 又会在 search 里触发维度不匹配的数据，直接丢弃。
       if (vec.isEmpty) continue;
+      if (idx < 0 || idx >= inputs.length) {
+        debugPrint(
+            'embedBatch: 忽略非法 index=$idx（请求 ${inputs.length} 条），向量转入兜底填充');
+        leftovers.add(vec);
+        continue;
+      }
       slots[idx] = vec;
     }
     // 少数服务不返回 index 字段，此时按响应顺序对应（OpenAI 规范要求 index，
@@ -621,14 +667,21 @@ class LlmClient {
       return vecs;
     }
 
-    if (slots.length != inputs.length) {
+    if (slots.length + leftovers.length != inputs.length) {
       throw Exception(
-        'Embedding 返回 ${slots.length} 条有效向量，与请求的 ${inputs.length} 条不符',
+        'Embedding 返回 ${slots.length + leftovers.length} 条有效向量，与请求的 ${inputs.length} 条不符',
       );
     }
-    _checkDims(slots.values);
     final ordered = List<List<double>>.filled(inputs.length, const <double>[]);
     slots.forEach((i, v) => ordered[i] = v);
+    // 非法 index 留下的空槽按剩余向量（响应到达顺序）兜底填充。
+    var li = 0;
+    for (var i = 0; i < ordered.length; i++) {
+      if (ordered[i].isEmpty && li < leftovers.length) {
+        ordered[i] = leftovers[li++];
+      }
+    }
+    _checkDims(ordered);
     return ordered;
   }
 

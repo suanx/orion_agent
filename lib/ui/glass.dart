@@ -55,6 +55,44 @@ Future<T?> showGlassDialog<T>({
   );
 }
 
+/// 单文本输入的玻璃对话框。
+///
+/// 内部创建 [TextEditingController]，弹窗关闭时自动 dispose——调用方
+/// 不再持有控制器，杜绝「弹窗关了控制器没释放」的泄漏（P2-6）。
+///
+/// 返回值：确认 → 输入框内容（已 trim）；取消 / 点遮罩关闭 → null。
+Future<String?> showGlassTextDialog({
+  required BuildContext context,
+  required String title,
+  String? labelText,
+  String? hint,
+  String? initialText,
+  String confirmLabel = '确定',
+  int maxLines = 1,
+}) {
+  final ctrl = TextEditingController(text: initialText);
+  return showGlassDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: TextField(
+        controller: ctrl,
+        autofocus: true,
+        maxLines: maxLines,
+        decoration: InputDecoration(labelText: labelText, hintText: hint),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.of(ctx).pop(), child: const Text('取消')),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
+          child: Text(confirmLabel),
+        ),
+      ],
+    ),
+  ).whenComplete(ctrl.dispose);
+}
+
 /// 锚定浮层的选项条目。
 class GlassMenuOption<T> {
   const GlassMenuOption({

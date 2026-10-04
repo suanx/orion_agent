@@ -325,15 +325,27 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
   bool _localTouched = false;
 
   Future<void> _load() async {
-    var raw = await _secure.read(key: _kConfigs);
-    if (raw == null) {
-      // 旧版本把配置明文存在 shared_preferences，迁移到加密存储后删除明文。
-      final legacy = _prefs.getString(_kConfigs);
-      if (legacy != null) {
-        raw = legacy;
-        await _secure.write(key: _kConfigs, value: legacy);
-        await _prefs.remove(_kConfigs);
+    String? raw;
+    try {
+      raw = await _secure.read(key: _kConfigs);
+      if (raw == null) {
+        // 旧版本把配置明文存在 shared_preferences，迁移到加密存储后删除明文。
+        final legacy = _prefs.getString(_kConfigs);
+        if (legacy != null) {
+          raw = legacy;
+          await _secure.write(key: _kConfigs, value: legacy);
+          await _prefs.remove(_kConfigs);
+        }
       }
+    } catch (e) {
+      // Keystore 初始化失败/设备锁变更等会让 read 抛异常。数据其实还在，
+      // 只是读不出来——置 error 提示而不是静默变空（否则用户以为配置全丢）。
+      debugPrint('读取模型配置异常：$e');
+      if (mounted) {
+        state = state.copyWith(
+            error: '读取模型配置失败（数据仍在，重启或重新解锁设备后可恢复）：$e');
+      }
+      return;
     }
     final list = <LlmConfig>[];
     if (raw != null) {
@@ -482,6 +494,11 @@ class ChatState {
   final bool isStreaming;
   final String streamingContent;
 
+  /// 正在生成的内容所属会话。流式状态是全局单份，用它区分归属：
+  /// UI 只在 activeSessionId == streamingSessionId 时渲染流式气泡，
+  /// 避免用户切到别的会话后流式内容「串台」渲染进错误会话。
+  final String? streamingSessionId;
+
   /// 流式期间的思考过程（开启思考且模型返回时才有内容）。
   final String streamingReasoning;
   final List<String> steps;
@@ -501,6 +518,7 @@ class ChatState {
     required this.sessions,
     this.activeSessionId,
     this.isStreaming = false,
+    this.streamingSessionId,
     this.streamingContent = '',
     this.streamingReasoning = '',
     this.steps = const [],
@@ -523,11 +541,13 @@ class ChatState {
     List<ChatSession>? sessions,
     String? activeSessionId,
     bool? isStreaming,
+    String? streamingSessionId,
     String? streamingContent,
     String? streamingReasoning,
     List<String>? steps,
     String? error,
     bool clearError = false,
+    bool clearStreamingSession = false,
     int? sessionPromptTokens,
     int? sessionCompletionTokens,
     int? toolRoundsBuiltIn,
@@ -538,6 +558,9 @@ class ChatState {
         sessions: sessions ?? this.sessions,
         activeSessionId: activeSessionId ?? this.activeSessionId,
         isStreaming: isStreaming ?? this.isStreaming,
+        streamingSessionId: clearStreamingSession
+            ? null
+            : (streamingSessionId ?? this.streamingSessionId),
         streamingContent: streamingContent ?? this.streamingContent,
         streamingReasoning: streamingReasoning ?? this.streamingReasoning,
         steps: steps ?? this.steps,
@@ -634,6 +657,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   CancelToken? _cancelToken;
 
+  /// 上下文压缩流的取消令牌：压缩进行中删除会话时取消，防止
+  /// 压缩完成后把已删除的消息重新插回（孤儿数据）。
+  CancelToken? _compressToken;
+
+  /// send() 的同步互斥占位。原实现依赖 state.isStreaming，但该标志
+  /// 在首个 await（_persistOp）之后才置位——守卫与置位之间隔着
+  /// await，两条并发 send 都能通过检查。同步 bool 在任何 await
+  /// 之前检查并置位，彻底封死竞态窗口。
+  bool _sending = false;
+
+  /// 流式期间每帧全量 state 重建是 O(n²) 拷贝；按时间合帧，
+  /// 最多每 60ms 刷一次 UI（打字机观感不受影响）。
+  DateTime _lastStreamFlush = DateTime.fromMillisecondsSinceEpoch(0);
+
   // 统一走 database.dart 的 uniqueId（带自增序列）。原来的实现用
   // state.sessions.length 做序列，而 deleteSession 会让长度回落，
   // 删除后再新建就可能复用已占用的 id → insertSession 抛 UNIQUE constraint。
@@ -690,6 +727,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (state.isStreaming) {
       unawaited(stop());
     }
+    // 压缩流不归 stop() 管（独立 CancelToken），单独取消。
+    _compressToken?.cancel();
+    // 该会话的用量/标题记录同步清掉，否则 Map 只增不减（内存缓慢泄漏）。
+    _usage.remove(id);
+    _titleSummarized.remove(id);
     final remaining = state.sessions.where((s) => s.id != id).toList();
     final newActive = state.activeSessionId == id
         ? (remaining.isEmpty ? null : remaining.first.id)
@@ -705,6 +747,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
       // 给 send() 一点时间收尾（它会检测 isStreaming 并停止写入）
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
+    _compressToken?.cancel();
+    _usage.clear();
+    _titleSummarized.clear();
+    if (!mounted) return;
     state = ChatState(sessions: const [], activeSessionId: null);
     await _storage.clearSessions();
   }
@@ -718,10 +764,16 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   Future<void> send(String text, {List<String> images = const []}) async {
     final content = text.trim();
-    if ((content.isEmpty && images.isEmpty) || state.isStreaming) return;
+    // 同步互斥：在任何 await 之前检查并占位（state.isStreaming 要到
+    // 首个 await 之后才置位，只靠它会被并发 send 击穿）。
+    if ((content.isEmpty && images.isEmpty) || _sending || state.isStreaming) {
+      return;
+    }
+    _sending = true;
 
     final config = _getConfig();
     if (config == null) {
+      _sending = false;
       state = state.copyWith(error: '请先在「设置」中添加并选择一个模型服务。');
       return;
     }
@@ -730,7 +782,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
     if (session == null) {
       newSession();
       session = state.activeSession;
-      if (session == null) return;
+      if (session == null) {
+        _sending = false;
+        return;
+      }
     }
 
     final userMsg = ChatMessage(
@@ -743,7 +798,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final title = session.title == '新对话'
         ? (content.isEmpty
             ? '[图片]'
-            : (content.length > 16 ? '${content.substring(0, 16)}…' : content))
+            : (content.characters.length > 16
+                ? '${content.characters.take(16).toString()}…'
+                : content))
         : session.title;
     final updated = ChatSession(
       id: session.id,
@@ -757,24 +814,19 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     state = state.copyWith(
       isStreaming: true,
+      streamingSessionId: updated.id,
       streamingContent: '',
       streamingReasoning: '',
       steps: [],
       clearError: true,
     );
+    _lastStreamFlush = DateTime.fromMillisecondsSinceEpoch(0);
 
     _cancelToken = CancelToken();
-    // 上下文自动压缩：历史 token 估算超过模型窗口 75% 时，
-    // 用压缩模型把较旧的历史折叠成一条摘要（保留最近几条原文）。
-    // 失败静默降级为不压缩——压缩是优化，绝不能阻断对话。
-    final historyMessages = await _maybeCompressHistory(updated, config);
-    final history = List<ChatMessage>.from(historyMessages);
-    // 锁定本次请求所属的会话 id。原实现到最后用 state.activeSession 取会话，
-    // 而整个 await for 期间用户可以切换/新建/删除会话——回答会被追加到
-    // 另一个会话，或写入一个没有 session 行的孤儿记录，重启即消失。
     final sessionId = updated.id;
 
-    // 发送前自动检索知识库（未配置 embedding 模型或检索失败时静默跳过）
+    // 发送前自动检索知识库（未配置 embedding 模型或检索失败时静默跳过）。
+    // 放在压缩之前：压缩估算需要把检索到的知识计入上下文占用。
     var knowledge = const <RagHit>[];
     if (config.embeddingModelName.trim().isNotEmpty) {
       try {
@@ -792,6 +844,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
         debugPrint('RAG 检索失败，已降级为无知识库：$e');
       }
     }
+
+    // 上下文自动压缩：历史 token 估算超过模型窗口 75% 时，
+    // 用压缩模型把较旧的历史折叠成一条摘要（保留最近几条原文）。
+    // 失败静默降级为不压缩——压缩是优化，绝不能阻断对话。
+    final historyMessages = await _maybeCompressHistory(updated, config,
+        knowledge: knowledge);
+    final history = List<ChatMessage>.from(historyMessages);
 
     final buf = StringBuffer();
     ChatMessage? answer;
@@ -821,7 +880,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
         if (!mounted) return;
         if (ev is AgentDelta) {
           buf.write(ev.delta);
-          state = state.copyWith(streamingContent: buf.toString());
+          // 合帧：每个 delta 都全量 toString + 重建整个 ChatState 是
+          // O(n²) 拷贝，长回答会明显卡顿。60ms 内的 delta 只累积，
+          // 到点或流结束时统一刷一次 UI。
+          final now = DateTime.now();
+          if (now.difference(_lastStreamFlush).inMilliseconds >= 60) {
+            _lastStreamFlush = now;
+            state = state.copyWith(streamingContent: buf.toString());
+          }
         } else if (ev is AgentReasoning) {
           state = state.copyWith(
               streamingReasoning:
@@ -835,18 +901,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
           } else {
             _bumpUsage(sessionId, 2, 1);
           }
-          final brief = ev.result.length > 120
-              ? '${ev.result.substring(0, 120)}…'
-              : ev.result;
+          final brief = ev.result.characters.take(120).toString();
+          final briefText = ev.result.characters.length > 120 ? '$brief…' : brief;
           state = state.copyWith(
-              steps: [...state.steps, '🔧 ${ev.toolName} → $brief']);
+              steps: [...state.steps, '🔧 ${ev.toolName} → $briefText']);
         } else if (ev is AgentTokenUsage) {
           _bumpUsage(sessionId, 0, ev.promptTokens);
           _bumpUsage(sessionId, 1, ev.completionTokens);
         } else if (ev is AgentAnswer) {
           answer = ev.message;
         } else if (ev is AgentFailure) {
-          state = state.copyWith(error: ev.message);
+          // 用户主动取消不是错误：不弹错误横幅（部分内容如何落库见下方收尾逻辑）。
+          if (ev.message != '已取消。') {
+            state = state.copyWith(error: ev.message);
+          }
         }
       }
     } catch (e) {
@@ -854,6 +922,17 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
 
     if (!mounted) return;
+
+    // 取消但已产出部分内容：把已有内容作为部分回答落库，而不是整段丢弃。
+    // 标记「（已停止）」让用户知道回答被截断。
+    final wasCancelled = _cancelToken?.isCancelled ?? false;
+    if (wasCancelled && answer == null && buf.toString().trim().isNotEmpty) {
+      answer = ChatMessage(
+        id: uniqueId('a'),
+        role: 'assistant',
+        content: '${buf.toString().trim()}\n\n（已停止）',
+      );
+    }
 
     // 最终回答写入会话历史（工具中间过程不入库，节省上下文长度）
     // 按锁定的 sessionId 定位，而不是读当前的 activeSession。
@@ -900,7 +979,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       if (_notifyOnAnswer()) {
         final brief = answer.content.replaceAll(RegExp(r'\s+'), ' ').trim();
         final body = _notifyPreview()
-            ? (brief.length > 120 ? '${brief.substring(0, 120)}…' : brief)
+            ? (brief.characters.length > 120
+                ? '${brief.characters.take(120).toString()}…'
+                : brief)
             : '';
         unawaited(onAnswerNotification?.call(
           withAnswer.title,
@@ -914,9 +995,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     // 放在 finally 语义位置：任何提前 return 都不会让 isStreaming 卡在 true
     if (mounted) {
-      state = state.copyWith(isStreaming: false, streamingContent: '', steps: []);
+      state = state.copyWith(
+        isStreaming: false,
+        streamingContent: '',
+        steps: [],
+        clearStreamingSession: true,
+      );
     }
     _cancelToken = null;
+    _sending = false;
   }
 
   /// 统一处理数据库写入：原来是裸 Future，磁盘满/DB 关闭时错误被完全吞掉，
@@ -946,14 +1033,23 @@ class ChatNotifier extends StateNotifier<ChatState> {
   ///
   /// - 压缩模型：专项设置优先，未设置回退当前聊天模型
   /// - 任何失败都静默返回原消息（压缩是优化，不能阻断对话）
-  /// - 摘要以 role=system 消息存入历史：发送时随上下文带给模型，
-  ///   UI 上显示为普通消息气泡（用户能看到被压缩成什么）
+  /// - 摘要以 role=user 消息存入历史（部分网关对历史中段的 system
+  ///   消息返回 400），发送时随上下文带给模型
+  /// - 压缩流有独立 CancelToken：压缩期间删除会话时取消，防止
+  ///   已删除的消息被重新插回（孤儿行）
   Future<List<ChatMessage>> _maybeCompressHistory(
-      ChatSession session, LlmConfig config) async {
+      ChatSession session, LlmConfig config,
+      {List<RagHit> knowledge = const []}) async {
     final msgs = session.messages;
     final total = config.chatModel?.contextWindow ?? 0;
     if (total <= 0) return msgs; // 未知窗口大小，无法判断何时压缩
-    var est = 0;
+
+    // 估算不只算消息本身：系统提示词（人设）、检索到的知识库内容、
+    // 工具定义都要占窗口。工具定义按 ~800 tokens 固定预留。
+    var est = estimateTokens(_getPersona()) + 800;
+    for (final h in knowledge) {
+      est += estimateTokens(h.content) + 8;
+    }
     for (final m in msgs) {
       est += estimateTokens(m.content) + 8; // 每条消息的包装开销
     }
@@ -969,16 +1065,22 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final olderText = older
         .map((m) => '${m.role == 'user' ? '用户' : 'AI'}：${m.content}')
         .join('\n\n');
-    // 只取较旧部分的【后半段】（靠近当下的内容信息密度更高）
-    final text = olderText.length > 20000
-        ? olderText.substring(olderText.length - 20000)
+    // 只取较旧部分的【后半段】（靠近当下的内容信息密度更高）。
+    // 用 characters 切尾，避免 substring 劈开 emoji 代理对。
+    final text = olderText.characters.length > 20000
+        ? olderText.characters
+            .skip(olderText.characters.length - 20000)
+            .toString()
         : olderText;
 
+    final token = CancelToken();
+    _compressToken = token;
     try {
       final eff = config.copyWith(defaultChatModel: model);
       final buf = StringBuffer();
       await for (final ev in _llm.chatStream(
         config: eff,
+        cancelToken: token,
         messages: [
           {
             'role': 'system',
@@ -998,9 +1100,14 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final summary = buf.toString().trim();
       if (summary.isEmpty) return msgs;
 
+      // 压缩期间会话被删除（或已被别的压缩替换过）→ 放弃写回，
+      // 否则已删除的消息会以「摘要」形式复活成孤儿数据。
+      final stillExists = state.sessions.any((s) => s.id == session.id);
+      if (!stillExists || token.isCancelled) return msgs;
+
       final summaryMsg = ChatMessage(
         id: uniqueId('sum'),
-        role: 'system',
+        role: 'user',
         content: '【此前对话已自动压缩，摘要如下】\n$summary',
       );
       final kept = msgs.sublist(msgs.length - keep);
@@ -1008,6 +1115,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
       // 持久化 + 同步内存会话
       await _storage.replaceMessages(session.id, newMessages);
+      if (!mounted) return newMessages;
       final sessions = state.sessions
           .map((s) => s.id == session.id
               ? ChatSession(
@@ -1019,8 +1127,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
                 )
               : s)
           .toList();
-      state = state.copyWith(
-          sessions: sessions, compressionCount: state.compressionCount + 1);
+      state = state.copyWith(sessions: sessions);
+      // 压缩次数统一走 _bumpUsage 按会话记账。原实现直接把
+      // state.compressionCount+1 写进「当前激活会话」的显示值——
+      // 压缩的是 A 会话、激活的是 B 会话时，计数被记到 B 头上。
       _bumpUsage(session.id, 4, 1);
       debugPrint('上下文压缩完成：${older.length} 条旧消息 → 摘要 '
           '(${estimateTokens(summary)} tokens)，保留最近 $keep 条');
@@ -1028,6 +1138,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
     } catch (e) {
       debugPrint('上下文压缩失败（降级为不压缩）：$e');
       return msgs;
+    } finally {
+      if (identical(_compressToken, token)) _compressToken = null;
     }
   }
   /// 非流式语义但复用 chatStream（拿到 FinalMessage 即收敛）。
@@ -1056,7 +1168,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
         ],
       ).timeout(const Duration(seconds: 30))) {
         if (ev is FinalMessage) {
-          buf.write(ev.message.content);
+          // ContentDelta 与 FinalMessage 正常情况下都会发：直接累积会把
+          // 同一段内容写两遍（生成的标题几乎必然是坏的）。
+          // FinalMessage 是全量收敛，先 clear 再写。
+          buf
+            ..clear()
+            ..write(ev.message.content);
           break;
         }
         if (ev is ContentDelta) buf.write(ev.delta);
@@ -1351,7 +1468,9 @@ class TasksNotifier extends StateNotifier<TasksState> {
     await load();
     final summary = result.trim().isEmpty
         ? '（无输出）'
-        : (result.length > 80 ? '${result.substring(0, 80)}…' : result);
+        : (result.characters.length > 80
+            ? '${result.characters.take(80).toString()}…'
+            : result);
     unawaited(_notifications.notifyTaskDone(
       title:
           '${status == 'ok' ? '✅' : '⚠️'} ${task.emoji} ${task.name} ${status == 'ok' ? '已完成' : '运行失败'}',

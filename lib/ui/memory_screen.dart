@@ -49,6 +49,7 @@ class _MemoryScreenState extends ConsumerState<MemoryScreen> {
                     final text = _addCtrl.text.trim();
                     if (text.isEmpty) return;
                     await memory.addNote(text);
+                    if (!mounted) return;
                     _addCtrl.clear();
                     setState(() {});
                   },
@@ -75,6 +76,7 @@ class _MemoryScreenState extends ConsumerState<MemoryScreen> {
                           icon: const Icon(Icons.delete_outline),
                           onPressed: () async {
                             await memory.removeNote(n.id);
+                            if (!mounted) return;
                             setState(() {});
                           },
                         ),

@@ -98,7 +98,9 @@ class RolesScreen extends ConsumerWidget {
       BuildContext context, WidgetRef ref, AgentRole? existing) async {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final promptCtrl = TextEditingController(text: existing?.prompt ?? '');
-    final saved = await showGlassDialog<bool>(
+    // 双输入框弹窗（人设指令为多行），不迁移 showGlassTextDialog；
+    // 输入值随 pop 带出 + whenComplete dispose（P2-6）。
+    final saved = await showGlassDialog<(String, String)>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(existing == null ? '新建角色' : '编辑角色'),
@@ -125,17 +127,21 @@ class RolesScreen extends ConsumerWidget {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
+              onPressed: () => Navigator.pop(ctx),
               child: const Text('取消')),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
+              onPressed: () =>
+                  Navigator.pop(ctx, (nameCtrl.text.trim(), promptCtrl.text.trim())),
               child: const Text('保存')),
         ],
       ),
-    );
-    if (saved != true) return;
-    final name = nameCtrl.text.trim();
-    final prompt = promptCtrl.text.trim();
+    ).whenComplete(() {
+      nameCtrl.dispose();
+      promptCtrl.dispose();
+    });
+    if (saved == null) return;
+    final name = saved.$1;
+    final prompt = saved.$2;
     if (name.isEmpty || prompt.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)

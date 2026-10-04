@@ -106,6 +106,7 @@ class _NotificationSettingsScreenState
                   await ref.read(notificationServiceProvider).requestPermission();
                   await _refreshPermission();
                 }
+                if (!mounted) return;
                 setState(() {});
               },
             ),

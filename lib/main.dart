@@ -59,7 +59,16 @@ Future<void> main() async {
       prefs.getString('theme_mode') == 'dark' ? Brightness.dark : Brightness.light);
 
   final db = AppDatabase();
-  final sessions = await StorageService(db).loadSessions();
+  final storage = StorageService(db);
+  // 会话数据是最常损坏的数据源（中途断电/磁盘满写半行），DB 故障时
+  // 降级为空列表启动，避免 runApp 之前裸 await 造成永久白屏。
+  List<ChatSession> sessions;
+  try {
+    sessions = await storage.loadSessions();
+  } catch (e) {
+    debugPrint('启动加载会话失败（${e.toString().split('\n').first}），已用空会话列表继续');
+    sessions = const [];
+  }
   final memory = MemoryService(db);
   final skills = SkillService(db);
   final roles = RoleService(db);

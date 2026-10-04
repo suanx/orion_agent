@@ -160,8 +160,9 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(
+                        // 语义色（P2-20）：固定浅色底在深色模式下刺眼
                         color: installed
-                            ? const Color(0xFFE6F4EA)
+                            ? Theme.of(context).colorScheme.primaryContainer
                             : onSurface(context, 0.05),
                         borderRadius: BorderRadius.circular(8),
                       ),
@@ -170,7 +171,9 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
                               color: installed
-                                  ? const Color(0xFF137333)
+                                  ? Theme.of(context)
+                                      .colorScheme
+                                      .onPrimaryContainer
                                   : onSurface(context, 0.45))),
                     ),
                   ],
@@ -190,8 +193,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           ),
           const SizedBox(width: 12),
           installed
-              ? const Icon(Icons.check_circle_rounded,
-                  color: Color(0xFF137333), size: 28)
+              ? Icon(Icons.check_circle_rounded,
+                  color: Theme.of(context).colorScheme.primary, size: 28)
               : FilledButton(
                   onPressed: _busy ? null : () => _install(d),
                   child: const Text('安装'),

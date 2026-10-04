@@ -191,6 +191,7 @@ class _ModelPickerSheetState extends ConsumerState<_ModelPickerSheet> {
 
   Future<void> _apply(String value) async {
     final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
     if (value.isEmpty) {
       await prefs.remove(widget.prefsKey);
     } else {

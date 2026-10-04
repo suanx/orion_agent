@@ -47,7 +47,9 @@ class _McpScreenState extends ConsumerState<McpScreen> {
   Future<void> _addServer() async {
     final nameCtrl = TextEditingController();
     final urlCtrl = TextEditingController(text: 'http://');
-    final saved = await showGlassDialog<bool>(
+    // 双输入框弹窗，不迁移 showGlassTextDialog；输入值随 pop 带出 +
+    // whenComplete dispose（P2-6）。
+    final saved = await showGlassDialog<(String, String)>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('添加 MCP 服务器'),
@@ -71,17 +73,21 @@ class _McpScreenState extends ConsumerState<McpScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
+              onPressed: () => Navigator.pop(ctx),
               child: const Text('取消')),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
+              onPressed: () =>
+                  Navigator.pop(ctx, (nameCtrl.text.trim(), urlCtrl.text.trim())),
               child: const Text('添加')),
         ],
       ),
-    );
-    if (saved != true) return;
-    final name = nameCtrl.text.trim();
-    final url = urlCtrl.text.trim();
+    ).whenComplete(() {
+      nameCtrl.dispose();
+      urlCtrl.dispose();
+    });
+    if (saved == null) return;
+    final name = saved.$1;
+    final url = saved.$2;
     if (name.isEmpty || !url.startsWith('http')) {
       if (mounted) {
         ScaffoldMessenger.of(context)

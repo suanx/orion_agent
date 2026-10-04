@@ -86,6 +86,7 @@ class _StorageSettingsScreenState
       ),
     );
     if (ok != true) return;
+    if (!mounted) return;
     setState(() => _busy = true);
     final freed = await action();
     await _scan();
@@ -418,7 +419,9 @@ class _WorkspaceDirCardState extends State<_WorkspaceDirCard> {
           ),
         ],
       ),
-    );
+    // 手动输入路径的 TextField 控制器由本方法创建（P2-6）：
+    // 值都随 pop 带出，弹窗关闭后统一 dispose。
+    ).whenComplete(controller.dispose);
     if (sel == null) return;
     if (sel.isEmpty) {
       await prefs.remove(WorkspaceStore.prefsKey);

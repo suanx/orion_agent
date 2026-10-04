@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:drift/drift.dart';
 import 'package:drift_flutter/drift_flutter.dart';
+import 'package:flutter/foundation.dart';
 
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
@@ -262,13 +263,33 @@ String uniqueId(String prefix) =>
 String encodeToolCalls(List<ToolCall> calls) =>
     jsonEncode(calls.map((t) => t.toJson()).toList());
 
-List<ToolCall> decodeToolCalls(String json) => (jsonDecode(json) as List? ?? [])
-    .whereType<Map<String, dynamic>>()
-    .map(ToolCall.fromJson)
-    .toList();
+/// 解码 toolCalls JSON。单行数据损坏（半行写入/手动改库）不应炸掉
+/// 整个会话加载链路——返回空列表并留痕，让坏行静默降级。
+List<ToolCall> decodeToolCalls(String json) {
+  try {
+    return (jsonDecode(json) as List? ?? [])
+        .whereType<Map<String, dynamic>>()
+        .map(ToolCall.fromJson)
+        .toList();
+  } catch (e) {
+    debugPrint('decodeToolCalls 容错：非法数据已降级为空列表 '
+        '(${e.toString().split('\n').first})');
+    return const [];
+  }
+}
 
-List<String> decodeStringList(String json) =>
-    (jsonDecode(json) as List? ?? const []).whereType<String>().toList();
+/// 同 [decodeToolCalls]：损坏数据降级为空列表。
+List<String> decodeStringList(String json) {
+  try {
+    return (jsonDecode(json) as List? ?? const [])
+        .whereType<String>()
+        .toList();
+  } catch (e) {
+    debugPrint('decodeStringList 容错：非法数据已降级为空列表 '
+        '(${e.toString().split('\n').first})');
+    return const [];
+  }
+}
 
 ChatMessage messageFromRow(MessageRow r) => ChatMessage(
       id: r.mid,

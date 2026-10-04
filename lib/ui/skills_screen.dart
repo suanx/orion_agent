@@ -330,7 +330,9 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
   Future<void> _addSkill(BuildContext context) async {
     final nameCtrl = TextEditingController();
     final tmplCtrl = TextEditingController();
-    final saved = await showGlassDialog<bool>(
+    // 双输入框弹窗（模板为多行），不迁移 showGlassTextDialog；输入值
+    // 随 pop 带出 + whenComplete dispose（P2-6）。
+    final saved = await showGlassDialog<(String, String)>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('新建快捷指令'),
@@ -358,17 +360,21 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
+              onPressed: () => Navigator.pop(ctx),
               child: const Text('取消')),
           TextButton(
-              onPressed: () => Navigator.pop(ctx, true),
+              onPressed: () =>
+                  Navigator.pop(ctx, (nameCtrl.text, tmplCtrl.text)),
               child: const Text('创建')),
         ],
       ),
-    );
-    if (saved != true) return;
-    final name = nameCtrl.text.trim().replaceAll(RegExp(r'[\s/]'), '');
-    final template = tmplCtrl.text.trim();
+    ).whenComplete(() {
+      nameCtrl.dispose();
+      tmplCtrl.dispose();
+    });
+    if (saved == null) return;
+    final name = saved.$1.trim().replaceAll(RegExp(r'[\s/]'), '');
+    final template = saved.$2.trim();
     if (name.isEmpty || template.isEmpty) {
       if (context.mounted) {
         ScaffoldMessenger.of(context)

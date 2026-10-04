@@ -13,6 +13,10 @@ class McpService {
   final AppDatabase _db;
   final ToolRegistry _registry;
 
+  /// 当前存活的连接，key 为服务器 id。重连/停用/删除前必须 close 旧 client
+  /// （其底层 Dio），否则每次重连都会泄漏一个持有打开连接的 Dio 实例。
+  final Map<String, McpClient> _clients = {};
+
   Future<List<McpServer>> listServers() async {
     final rows = await (_db.select(_db.mcpServers)
           ..orderBy([(s) => OrderingTerm.desc(s.createdAt)]))
@@ -39,11 +43,13 @@ class McpService {
 
   Future<void> removeServer(String id) async {
     await (_db.delete(_db.mcpServers)..where((s) => s.id.equals(id))).go();
+    _clients.remove(id)?.close();
   }
 
   Future<void> setEnabled(String id, bool enabled) async {
     await (_db.update(_db.mcpServers)..where((s) => s.id.equals(id)))
         .write(McpServersCompanion(enabled: Value(enabled)));
+    if (!enabled) _clients.remove(id)?.close();
   }
 
   /// 连接所有启用的服务器并注册其工具，返回新注册的工具数。
@@ -60,6 +66,8 @@ class McpService {
     // 用户明明关掉了它，Agent 却还在调用。
     for (final s in servers) {
       _registry.unregisterPrefix('${McpTool.sanitizePublic(s.name)}__');
+      // 旧连接先 close 再重建：不 close 的话，每次重连都会泄漏一个 Dio。
+      _clients.remove(s.id)?.close();
     }
 
     var count = 0;
@@ -76,14 +84,18 @@ class McpService {
           name: s.name,
           url: s.url,
         );
-        await client.initialize().timeout(timeout * 2);
-        final tools = await client.listTools().timeout(timeout);
+        // 超时由 Dio 自身负责（connectTimeout 8s + 各请求的 receiveTimeout，
+        // 见 McpClient），不再用 Future.timeout 包装——它不会取消底层请求，
+        // 还会把 30s 的 tools/list 硬砍成 8s。
+        await client.initialize();
+        final tools = await client.listTools();
         final prefix = '${McpTool.sanitizePublic(s.name)}__';
         for (final info in tools) {
           _registry
               .register(McpTool(client: client, info: info, prefix: prefix));
           count++;
         }
+        _clients[s.id] = client;
       } catch (e) {
         // 原来 catch (_) 把「URL 写错 / 鉴权失败 / DNS 失败 / 协议不兼容 / 超时」
         // 全部归为同一结果且不打日志，界面只能显示"没有连接到可用的 MCP 服务器"，

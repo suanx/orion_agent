@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:archive/archive.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -29,7 +31,11 @@ class DistroSpec {
 }
 
 class TerminalService {
-  TerminalService({Dio? dio}) : _dio = dio ?? Dio();
+  TerminalService({Dio? dio})
+      : _dio = dio ??
+            (Dio()
+              ..connectTimeout = const Duration(seconds: 30)
+              ..receiveTimeout = const Duration(minutes: 30));
 
   /// 与原生层的通道。
   ///
@@ -112,7 +118,12 @@ class TerminalService {
 
   final Dio _dio;
   final _rootfsCache = <TerminalDistro, String>{};
-  final _runningTasks = <String, Process>{};
+
+  /// key -> 进程；创建中的任务先以 null 占位，防止并发 startTask 重复拉起。
+  final _runningTasks = <String, Process?>{};
+
+  /// 进行中的 install()，用作互斥：非空时拒绝新的安装请求。
+  Future<void>? _installLock;
 
   /// 当前激活的发行版（由终端页设置并持久化，Agent 工具使用它）。
   TerminalDistro activeDistro = TerminalDistro.alpine;
@@ -129,13 +140,22 @@ class TerminalService {
   // ---------------- 自启动任务 ----------------
 
   /// 启动一个常驻任务（同一名字重复调用会忽略）。
+  ///
+  /// 先同步往任务 map 占位再异步创建进程：并发调用时第二次会命中
+  /// 占位直接返回，避免同一任务被拉起两份；创建失败时移除占位并
+  /// 原样抛出。
   Future<void> startTask(TerminalTask task) async {
     if (_runningTasks.containsKey(task.name)) return;
-    final proc =
-        await startOn(task.distro, '${task.command} 2>&1');
-    _runningTasks[task.name] = proc;
-    unawaited(proc.exitCode
-        .whenComplete(() => _runningTasks.remove(task.name)));
+    _runningTasks[task.name] = null;
+    try {
+      final proc = await startOn(task.distro, '${task.command} 2>&1');
+      _runningTasks[task.name] = proc;
+      unawaited(proc.exitCode
+          .whenComplete(() => _runningTasks.remove(task.name)));
+    } on Object {
+      _runningTasks.remove(task.name);
+      rethrow;
+    }
   }
 
   void stopTask(String name) {
@@ -317,7 +337,30 @@ class TerminalService {
   /// 下载并解压 rootfs，随后修正执行权限、DNS 与包管理镜像。
   /// 下载全部走国内：Alpine 用清华镜像；Debian 依次尝试国内 Docker 镜像代理，
   /// 全部失败时才回退到 GitHub 发布页。
+  ///
+  /// 安全顺序：先下载到临时压缩包 → 解压到全新 `rootfs.tmp` → 结构验证
+  /// → 权限/链接修复 → **全部成功后**才删旧 rootfs 并把 tmp 改名为正式
+  /// rootfs。镜像返回 HTML 错误页/截断时旧环境不会被破坏；无论成败，
+  /// finally 都会清理临时压缩包与残留的 tmp 目录。
+  ///
+  /// 互斥：同一时间只允许一个安装流程。
   Future<void> install(
+    TerminalDistro d, {
+    void Function(String progress)? onProgress,
+  }) async {
+    if (_installLock != null) {
+      throw Exception('正在安装中，请等待当前安装完成后再试');
+    }
+    final op = _doInstall(d, onProgress: onProgress);
+    _installLock = op;
+    try {
+      await op;
+    } finally {
+      if (identical(_installLock, op)) _installLock = null;
+    }
+  }
+
+  Future<void> _doInstall(
     TerminalDistro d, {
     void Function(String progress)? onProgress,
   }) async {
@@ -326,53 +369,150 @@ class TerminalService {
       throw Exception('终端环境未配置下载地址：${d.name}');
     }
     final rootfs = await rootfsDir(d);
+    final tmpRootfs = '$rootfs.tmp';
     final tmp = await getTemporaryDirectory();
     final archivePath = '${tmp.path}/${spec.dirName}.tar';
 
     void report(String msg) => onProgress?.call(msg);
 
     var isGz = spec.isGzip;
-    report('下载 ${spec.displayName} 基础系统…');
-    if (d == TerminalDistro.debian) {
-      var mirrorOk = false;
-      try {
-        await _downloadDebianFromMirror(report, archivePath);
-        isGz = true;
-        mirrorOk = true;
-      } catch (e) {
-        report('国内镜像不可用，改用备用源下载…');
-      }
-      if (!mirrorOk) {
+    var renamed = false;
+    try {
+      report('下载 ${spec.displayName} 基础系统…');
+      if (d == TerminalDistro.debian) {
+        var mirrorOk = false;
+        try {
+          await _downloadDebianFromMirror(report, archivePath);
+          isGz = true;
+          mirrorOk = true;
+        } catch (e) {
+          report('国内镜像不可用，改用备用源下载…');
+        }
+        if (!mirrorOk) {
+          await _dio.download(spec.downloadUrl, archivePath);
+          isGz = false;
+        }
+      } else {
         await _dio.download(spec.downloadUrl, archivePath);
-        isGz = false;
       }
-    } else {
-      await _dio.download(spec.downloadUrl, archivePath);
+
+      report('解压 rootfs…');
+      // 解压到全新 tmp 目录：旧 rootfs 在验证全部通过前保持原样。
+      final tmpHandle = Directory(tmpRootfs);
+      if (tmpHandle.existsSync()) tmpHandle.deleteSync(recursive: true);
+      tmpHandle.createSync(recursive: true);
+
+      // 解压在独立 isolate 内进行（大 tar 的解码 + 落盘会阻塞 UI 数十秒）。
+      // 进度回调不能跨 isolate：isolate 内只做纯 dart:io/archive 操作，
+      // 统计结果一次性带回，由主 isolate 统一打日志。
+      final stats =
+          await Isolate.run(() => _extractRootfs(archivePath, tmpRootfs, isGz));
+      if (stats.skippedUnsafe > 0) {
+        debugPrint('TerminalService: 解压时已拒绝并跳过 '
+            '${stats.skippedUnsafe} 个不安全/无法解析的 tar 条目');
+      }
+      report('  已创建 ${stats.createdLinks} 个符号链接'
+          '${stats.skippedUnsafe > 0 ? '（跳过 ${stats.skippedUnsafe} 个可疑条目）' : ''}');
+
+      // 结构验证：镜像返回 HTML 错误页/压缩包截断时这里会失败，
+      // 抛异常走 catch → finally 清理 tmp 目录，旧 rootfs 安然无恙。
+      // 期望结构与下载源对应（见 isInstalled/startOn）：
+      // alpine → bin/busybox；debian（usrmerge，/bin → usr/bin）→ bin/bash。
+      final marker = d == TerminalDistro.alpine
+          ? '$tmpRootfs/bin/busybox'
+          : '$tmpRootfs/bin/bash';
+      if (!File(marker).existsSync()) {
+        throw Exception('rootfs 结构校验失败：缺少 $marker，下载内容可能已损坏');
+      }
+
+      report('修正执行权限…');
+      // rootfs 内二进制需要 exec 位；dart:io 无 chmod，借用系统 toybox
+      await Process.run('/system/bin/chmod', ['-R', '755', tmpRootfs]);
+
+      report('修正符号链接…');
+      // Alpine/Debian 的 tar 里大量符号链接是**绝对目标**
+      // （如 /bin/sh → /bin/busybox，alpine-minirootfs-3.22 有 306 个）。
+      // 平铺解压后它们指向宿主文件系统，宿主没有 /bin/busybox，
+      // 于是 File.existsSync 报缺失、proot stat 报 ENOENT——
+      // 表现为「环境装好了但所有命令 not found」。
+      final fixedLinks = repairAbsoluteSymlinks(tmpRootfs);
+      if (fixedLinks > 0) report('  已将 $fixedLinks 个绝对路径链接转为相对');
+
+      // 全部成功：此刻才删旧 rootfs，再把 tmp 改名为正式 rootfs。
+      final rootfsHandle = Directory(rootfs);
+      if (rootfsHandle.existsSync()) rootfsHandle.deleteSync(recursive: true);
+      tmpHandle.renameSync(rootfs);
+      renamed = true;
+
+      report('配置 DNS 与镜像…');
+      await _postConfigure(d, rootfs);
+
+      report('完成');
+    } finally {
+      // 失败/成功路径都清理临时压缩包；改名成功后 tmp 已不存在，
+      // 失败时把解压残留一并清掉，不留垃圾。
+      final archive = File(archivePath);
+      if (archive.existsSync()) archive.deleteSync();
+      if (!renamed) {
+        final leftover = Directory(tmpRootfs);
+        if (leftover.existsSync()) leftover.deleteSync(recursive: true);
+      }
     }
+  }
 
-    report('解压 rootfs…');
-    final rootfsHandle = Directory(rootfs);
-    if (rootfsHandle.existsSync()) rootfsHandle.deleteSync(recursive: true);
-    rootfsHandle.createSync(recursive: true);
-
+  /// 在独立 isolate 中解压 rootfs 压缩包到 [destDir]。
+  ///
+  /// 只做纯 dart:io / package:archive 操作（无 Flutter、无回调），
+  /// 返回统计（链接数/文件数/被拒绝的条目数）。
+  ///
+  // 必须迭代 TarFile（而非 ArchiveFile）：符号链接的目标存在 tar
+  // 头的 linkname 字段（TarFile.nameOfLinkedFile），条目 content
+  // 恒为空——此前误用 content 当目标，300+ 个链接全部被创建成
+  // 「空目标」，guest 内一切命令 not found（V0.1.7 根因）。
+  // 只有 TarFile 保留 typeFlag 与 nameOfLinkedFile 原始信息。
+  static _ExtractStats _extractRootfs(
+      String archivePath, String destDir, bool isGz) {
     final compressed = File(archivePath).readAsBytesSync();
-    List<int> tarBytes;
+    final List<int> tarBytes;
     if (isGz) {
       tarBytes = GZipDecoder().decodeBytes(compressed);
     } else {
       tarBytes = XZDecoder().decodeBytes(compressed);
     }
-    // 必须迭代 TarFile（而非 ArchiveFile）：符号链接的目标存在 tar
-    // 头的 linkname 字段（TarFile.nameOfLinkedFile），条目 content
-    // 恒为空——此前误用 content 当目标，300+ 个链接全部被创建成
-    // 「空目标」，guest 内一切命令 not found（V0.1.7 根因）。
-    // 只有 TarFile 保留 typeFlag 与 nameOfLinkedFile 原始信息。
     final decoder = TarDecoder();
     decoder.decodeBytes(tarBytes);
     var createdLinks = 0;
+    var createdFiles = 0;
+    var skippedUnsafe = 0;
     final hardLinks = <String, String>{}; // 落盘路径 -> rootfs 内目标路径
     for (final tf in decoder.files) {
-      final path = '$rootfs/${tf.filename}';
+      // ---- Zip-Slip 校验 ----
+      // 拒绝绝对路径条目与含「..」段的条目；其余先按「.」/空段归一化，
+      // 拼接后再次确认仍在目标目录内，三重兜底防止逃逸写入。
+      final rawName = tf.filename;
+      if (rawName.isEmpty || rawName.startsWith('/')) {
+        skippedUnsafe++;
+        continue;
+      }
+      final cleanSegs = <String>[];
+      var unsafe = false;
+      for (final seg in rawName.split('/')) {
+        if (seg == '..') {
+          unsafe = true;
+          break;
+        }
+        if (seg.isEmpty || seg == '.') continue;
+        cleanSegs.add(seg);
+      }
+      if (unsafe || cleanSegs.isEmpty) {
+        skippedUnsafe++;
+        continue;
+      }
+      final path = '$destDir/${cleanSegs.join('/')}';
+      if (!path.startsWith('$destDir/')) {
+        skippedUnsafe++;
+        continue;
+      }
       switch (tf.typeFlag) {
         case TarFile.TYPE_SYMBOLIC_LINK:
           final target = tf.nameOfLinkedFile ?? '';
@@ -389,9 +529,9 @@ class TerminalService {
         case TarFile.TYPE_HARD_LINK:
           // 硬链接无独立内容，目标条目在 tar 中先于链接出现；
           // 主循环结束后从已落盘的目标复制内容（alpine 0 个、debian 2 个）
-          final target = tf.nameOfLinkedFile;
-          if (target != null && target.isNotEmpty) {
-            hardLinks[path] = '$rootfs/$target';
+          final target = _safeJoin(destDir, tf.nameOfLinkedFile);
+          if (target != null) {
+            hardLinks[path] = target;
           }
           break;
         case TarFile.TYPE_DIRECTORY:
@@ -403,6 +543,7 @@ class TerminalService {
           f.createSync(recursive: true);
           final bytes = tf.rawContent?.toUint8List();
           if (bytes != null && bytes.isNotEmpty) f.writeAsBytesSync(bytes);
+          createdFiles++;
           break;
       }
     }
@@ -414,26 +555,25 @@ class TerminalService {
         src.copySync(e.key);
       }
     }
-    File(archivePath).deleteSync();
-    report('  已创建 $createdLinks 个符号链接');
+    return _ExtractStats(
+      createdLinks: createdLinks,
+      createdFiles: createdFiles,
+      skippedUnsafe: skippedUnsafe,
+    );
+  }
 
-    report('修正执行权限…');
-    // rootfs 内二进制需要 exec 位；dart:io 无 chmod，借用系统 toybox
-    await Process.run('/system/bin/chmod', ['-R', '755', rootfs]);
-
-    report('修正符号链接…');
-    // Alpine/Debian 的 tar 里大量符号链接是**绝对目标**
-    // （如 /bin/sh → /bin/busybox，alpine-minirootfs-3.22 有 306 个）。
-    // 平铺解压后它们指向宿主文件系统，宿主没有 /bin/busybox，
-    // 于是 File.existsSync 报缺失、proot stat 报 ENOENT——
-    // 表现为「环境装好了但所有命令 not found」。
-    final fixedLinks = repairAbsoluteSymlinks(rootfs);
-    if (fixedLinks > 0) report('  已将 $fixedLinks 个绝对路径链接转为相对');
-
-    report('配置 DNS 与镜像…');
-    await _postConfigure(d, rootfs);
-
-    report('完成');
+  /// 把 tar 条目内的相对目标路径（硬链接的 linkname）安全拼到
+  /// [destDir] 下；绝对路径或含「..」段时返回 null（拒绝）。
+  static String? _safeJoin(String destDir, String? rel) {
+    if (rel == null || rel.isEmpty || rel.startsWith('/')) return null;
+    final segs = <String>[];
+    for (final seg in rel.split('/')) {
+      if (seg == '..') return null;
+      if (seg.isEmpty || seg == '.') continue;
+      segs.add(seg);
+    }
+    if (segs.isEmpty) return null;
+    return '$destDir/${segs.join('/')}';
   }
 
   /// 修复 rootfs 内「绝对路径符号链接」：指向 rootfs 内部的绝对目标
@@ -778,6 +918,20 @@ class TerminalService {
     final dir = Directory(await rootfsDir(d));
     if (dir.existsSync()) dir.deleteSync(recursive: true);
   }
+}
+
+/// 解压统计：由 `TerminalService._extractRootfs` 在 isolate 内完成后
+/// 一次性带回主 isolate（简单 int 字段，可安全跨 isolate 传递）。
+class _ExtractStats {
+  final int createdLinks;
+  final int createdFiles;
+  final int skippedUnsafe;
+
+  const _ExtractStats({
+    required this.createdLinks,
+    required this.createdFiles,
+    required this.skippedUnsafe,
+  });
 }
 
 /// 等待 stdout/stderr 两个订阅**结束**，带超时兜底。

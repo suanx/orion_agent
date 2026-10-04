@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'format_utils.dart';
 import 'glass.dart';
 import 'status_bar_area.dart';
 
@@ -230,6 +231,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ),
       ],
     );
+    if (!mounted) return; // 浮层关闭前的异步间隙里页面可能已被销毁
     if (sel == null || sel == current) return;
     // ConfigNotifier.upsert 是 void（同步更新内存并落库），不能 await
     ref
@@ -276,6 +278,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _scrollToBottom() {
+    // Future.delayed / post-frame 回调触发时 State 可能已销毁，
+    // 摸已 dispose 的 ScrollController 会抛异常。
+    if (!mounted) return;
     if (_scrollController.hasClients) {
       _scrollController.animateTo(
         _scrollController.position.maxScrollExtent,
@@ -289,6 +294,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget build(BuildContext context) {
     final chat = ref.watch(chatProvider);
     final session = chat.activeSession;
+    // 错误横幅的语义色：跟随主题明暗，不再硬编码浅粉底/红字。
+    final errorColor = Theme.of(context).colorScheme.onErrorContainer;
 
     // 原来无条件在 build 里注册 post-frame 回调。流式期间每个 AgentDelta
     // 都会 copyWith 触发一次 build，于是每秒注册几十个回调，每个都重启
@@ -310,11 +317,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         items.add(_MessageBubble(message: m));
       }
     }
-    if (chat.isStreaming) {
-      items.add(_StreamingBubble(
-          content: chat.streamingContent,
-          reasoning: chat.streamingReasoning,
-          steps: chat.steps));
+    // 流式状态是全局单份，streamingSessionId 标记流内容归属的会话：
+    // 仅当它正是当前会话时才渲染流式气泡，否则用户切到别的会话
+    // 会把别的会话的流式内容「串台」渲染进来。新建会话后
+    // activeSessionId 立即等于 streamingSessionId，行为不受影响。
+    if (chat.isStreaming &&
+        chat.streamingSessionId != null &&
+        chat.streamingSessionId == chat.activeSessionId) {
+      // RepaintBoundary 把流式气泡的重绘限制在气泡自身图层内，
+      // 每个 delta 不再连带顶栏/输入栏等整页重绘。
+      items.add(RepaintBoundary(
+        child: _StreamingBubble(
+            content: chat.streamingContent,
+            reasoning: chat.streamingReasoning,
+            steps: chat.steps),
+      ));
     }
     final empty = items.isEmpty;
 
@@ -379,24 +396,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: const Color(0xFFFEECEC),
+                color: Theme.of(context).colorScheme.errorContainer,
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.error_outline_rounded,
-                      size: 18, color: Color(0xFFD93025)),
+                  Icon(Icons.error_outline_rounded, size: 18, color: errorColor),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(chat.error!,
-                        style: const TextStyle(
-                            fontSize: 13, color: Color(0xFFD93025))),
+                        style: TextStyle(fontSize: 13, color: errorColor)),
                   ),
                   GestureDetector(
                     onTap: () =>
                         ref.read(chatProvider.notifier).clearError(),
-                    child: const Icon(Icons.close_rounded,
-                        size: 16, color: Color(0xFFD93025)),
+                    child:
+                        Icon(Icons.close_rounded, size: 16, color: errorColor),
                   ),
                 ],
               ),
@@ -443,10 +458,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     child: GestureDetector(
                       onTap: () => setState(() => _pendingImages.removeAt(i)),
                       child: Container(
-                        decoration: const BoxDecoration(
-                            color: Colors.white, shape: BoxShape.circle),
-                        child: const Icon(Icons.cancel_rounded,
-                            size: 18, color: Colors.black54),
+                        // 删除徽标用主题语义色：浅色下是浅灰底深字，
+                        // 深色下自动换为深底浅字，不再固定白底。
+                        decoration: BoxDecoration(
+                            color: Theme.of(context)
+                                .colorScheme
+                                .surfaceContainerHighest,
+                            shape: BoxShape.circle),
+                        child: Icon(Icons.cancel_rounded,
+                            size: 18,
+                            color:
+                                Theme.of(context).colorScheme.onSurfaceVariant),
                       ),
                     ),
                   ),
@@ -655,6 +677,29 @@ class _EmptyGreetingState extends State<_EmptyGreeting> {
   }
 }
 
+/// 已完结消息的 Markdown 渲染缓存。
+///
+/// 流式期间每个 delta 都会触发整页 rebuild，未缓存的 MarkdownBody 会被
+/// 重新解析全部消息文本。这里以文本为键缓存解析结果（Widget 实例复用后
+/// Flutter 会直接跳过该子树的 rebuild），上限 32 条，满了先移除最早条目。
+class _CachedMarkdown extends StatelessWidget {
+  const _CachedMarkdown({required this.text});
+
+  final String text;
+
+  static final Map<String, Widget> _cache = <String, Widget>{};
+
+  @override
+  Widget build(BuildContext context) {
+    final hit = _cache[text];
+    if (hit != null) return hit;
+    final body = MarkdownBody(data: text);
+    if (_cache.length >= 32) _cache.remove(_cache.keys.first);
+    _cache[text] = body;
+    return body;
+  }
+}
+
 class _MessageBubble extends StatelessWidget {
   const _MessageBubble({required this.message});
 
@@ -748,7 +793,7 @@ class _MessageBubble extends StatelessWidget {
                         fontSize: 12, color: onSurface(context, 0.45))),
               ),
             if (message.content.isNotEmpty)
-              MarkdownBody(data: message.content),
+              _CachedMarkdown(text: message.content),
           ],
         ),
       ),
@@ -1103,11 +1148,24 @@ Widget _ctxRow(BuildContext ctx, String label, String value) => Padding(
 ///
 /// 没有可用模型时整条置灰并提示，发送按钮同时禁用——避免用户
 /// 在未配置的情况下反复点发送却只看到「请先配置模型」。
-class _ComposerStatusBar extends ConsumerWidget {
+class _ComposerStatusBar extends ConsumerStatefulWidget {
   const _ComposerStatusBar();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ComposerStatusBar> createState() =>
+      _ComposerStatusBarState();
+}
+
+class _ComposerStatusBarState extends ConsumerState<_ComposerStatusBar> {
+  /// 上次全量估算 token 的时刻。流式期间每个 delta 都会 rebuild 状态条，
+  /// 不节流的话每次都对全部消息逐 rune 扫一遍，消息越多越卡。
+  DateTime? _lastTokenEstimate;
+
+  /// 上次估算结果，节流窗口内直接沿用（见 [_estimateSessionTokens]）。
+  int _cachedTokenEstimate = 0;
+
+  @override
+  Widget build(BuildContext context) {
     final config = ref.watch(configProvider);
     final active = config.activeConfig;
     final thinking = ref.watch(thinkingProvider);
@@ -1172,12 +1230,20 @@ class _ComposerStatusBar extends ConsumerWidget {
           // 状态条此前塞了五个元素，窄屏上模型选择被挤出可视区。
           if (hasModel)
             Builder(
-              builder: (bctx) => _ContextGauge(
-                used:
-                    _estimateSessionTokens(ref.watch(chatProvider).activeSession),
-                total: active!.chatModel!.contextWindow,
-                onTap: () => _showContextDialog(context, ref, anchor: bctx),
-              ),
+              builder: (bctx) {
+                final chat = ref.watch(chatProvider);
+                return _ContextGauge(
+                  used: _estimateSessionTokens(chat.activeSession,
+                      streaming: chat.isStreaming),
+                  total: active!.chatModel!.contextWindow,
+                  // 打开明细弹窗前清掉节流戳：压缩后消息已被替换，
+                  // 下次 build 强制重新全量估算一次。
+                  onTap: () {
+                    _lastTokenEstimate = null;
+                    _showContextDialog(context, ref, anchor: bctx);
+                  },
+                );
+              },
             ),
         ],
       ),
@@ -1185,12 +1251,26 @@ class _ComposerStatusBar extends ConsumerWidget {
   }
 
   /// 估算当前会话历史占用的 token（不含工具定义等固定开销）。
-  static int _estimateSessionTokens(session) {
+  ///
+  /// 流式期间每个 delta 都触发 rebuild，这里做 300ms 节流：距上次估算
+  /// 不足 300ms 且流未结束时直接沿用上次结果，不重扫全部消息。
+  /// 流结束（streaming=false）时强制估算一次，保证最终值准确；
+  /// 用量明细弹窗打开前会清掉 [_lastTokenEstimate]，同样强制估算一次。
+  int _estimateSessionTokens(session, {required bool streaming}) {
     if (session == null) return 0;
+    final now = DateTime.now();
+    final last = _lastTokenEstimate;
+    if (streaming &&
+        last != null &&
+        now.difference(last) < const Duration(milliseconds: 300)) {
+      return _cachedTokenEstimate;
+    }
+    _lastTokenEstimate = now;
     var est = 0;
     for (final m in session.messages) {
       est += estimateTokens(m.content) + 8;
     }
+    _cachedTokenEstimate = est;
     return est;
   }
 
@@ -1223,6 +1303,7 @@ class _ComposerStatusBar extends ConsumerWidget {
           ),
       ],
     );
+    if (!mounted) return; // 浮层关闭前的异步间隙里页面可能已被销毁
     if (sel == null) return;
     final on = sel.isNotEmpty;
     ref.read(thinkingProvider.notifier).state = on;
@@ -1256,6 +1337,7 @@ class _ComposerStatusBar extends ConsumerWidget {
           ),
       ],
     );
+    if (!mounted) return; // 浮层关闭前的异步间隙里页面可能已被销毁
     if (sel == null || sel == current) return;
     ref.read(agentPermissionProvider.notifier).state = sel;
     unawaited(prefs.setString('agent_permission', sel.name));
@@ -1268,14 +1350,9 @@ class _ComposerStatusBar extends ConsumerWidget {
       };
 
   /// 128000 → "128K"，1048576 → "1M"，避免长文本把状态条挤爆。
-  static String _compactTokens(int n) {
-    if (n >= 1000000) {
-      final v = n / 1000000;
-      return '${v.toStringAsFixed(v % 1 == 0 ? 0 : 1)}M';
-    }
-    if (n >= 1000) return '${(n / 1000).round()}K';
-    return '$n';
-  }
+  /// 统一委托 format_utils.compactTokens（P2-22：与 token_stats_screen
+  /// 原各维护一份，现口径一致）。
+  static String _compactTokens(int n) => compactTokens(n);
 }
 
 /// 状态条上的小圆角标签。
@@ -1378,8 +1455,9 @@ class _InputBar extends StatelessWidget {
                 width: 40,
                 height: 40,
                 child: IconButton(
-                  icon: const Icon(Icons.add_rounded,
-                      size: 24, color: Colors.black54),
+                  icon: Icon(Icons.add_rounded,
+                      size: 24,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant),
                   onPressed: () => onAddImage(bctx),
                 ),
               ),
