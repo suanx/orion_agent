@@ -2,11 +2,11 @@ import '../theme.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'format_utils.dart';
@@ -731,8 +731,10 @@ MarkdownStyleSheet _mdStyleSheet(BuildContext context) {
 MarkdownBody _mdBody(BuildContext context, String text) => MarkdownBody(
       data: text,
       styleSheet: _mdStyleSheet(context),
-      builders: {
-        'code': (context, element, _) {
+      // 参数类型显式标注：lambda 靠上下文推断会被推成 dynamic 三参函数，
+      // 无法赋给 Map<String, MarkdownElementBuilder>（CI run 37219882832）。
+      builders: <String, MarkdownElementBuilder>{
+        'code': (BuildContext context, md.Element element, Widget? child) {
           // 行内 `code` 与 ``` 围栏代码块共用 code 构建器：
           // 块级带 isCodeBlock 标记与 language 属性。
           final isBlock = element.attributes['isCodeBlock'] == 'true';
@@ -1130,7 +1132,6 @@ class _CodeBlockState extends State<_CodeBlock> {
 
   @override
   Widget build(BuildContext context) {
-    final on = onSurface(context, 0.85);
     final collapsible = widget.code.split('\n').length > 12;
     final capped = collapsible && !_unfolded;
     return Container(
