@@ -1516,27 +1516,37 @@ class CloudState {
   const CloudState({
     this.restoring = false,
     this.loggedIn = false,
+    this.email,
     this.plan = 'free',
     this.planExpiresAt,
     this.usageToday = const {},
+    this.licenses = const [],
     this.busy = false,
     this.error,
   });
 
   final bool restoring;
   final bool loggedIn;
+
+  /// 登录邮箱（登录时本地记录；后端响应不回传）。
+  final String? email;
   final String plan;
   final int? planExpiresAt;
   final Map<String, int> usageToday;
+
+  /// 已激活的卡密记录。
+  final List<CloudActivatedLicense> licenses;
   final bool busy;
   final String? error;
 
   CloudState copyWith({
     bool? restoring,
     bool? loggedIn,
+    String? email,
     String? plan,
     int? planExpiresAt,
     Map<String, int>? usageToday,
+    List<CloudActivatedLicense>? licenses,
     bool? busy,
     String? error,
     bool clearError = false,
@@ -1544,9 +1554,11 @@ class CloudState {
       CloudState(
         restoring: restoring ?? this.restoring,
         loggedIn: loggedIn ?? this.loggedIn,
+        email: email ?? this.email,
         plan: plan ?? this.plan,
         planExpiresAt: planExpiresAt ?? this.planExpiresAt,
         usageToday: usageToday ?? this.usageToday,
+        licenses: licenses ?? this.licenses,
         busy: busy ?? this.busy,
         error: clearError ? null : (error ?? this.error),
       );
@@ -1588,7 +1600,12 @@ class CloudNotifier extends StateNotifier<CloudState> {
     state = state.copyWith(busy: true, clearError: true);
     try {
       await _cloud.login(email, password);
-      state = state.copyWith(busy: false, loggedIn: true, plan: _cloud.plan);
+      state = state.copyWith(
+        busy: false,
+        loggedIn: true,
+        email: _cloud.email,
+        plan: _cloud.plan,
+      );
       await refreshStatus();
       // 登录成功后自动配置云端 MCP（幂等）
       await _ensureCloudMcp();
@@ -1605,7 +1622,12 @@ class CloudNotifier extends StateNotifier<CloudState> {
     state = state.copyWith(busy: true, clearError: true);
     try {
       await _cloud.register(email, password);
-      state = state.copyWith(busy: false, loggedIn: true, plan: 'free');
+      state = state.copyWith(
+        busy: false,
+        loggedIn: true,
+        email: _cloud.email,
+        plan: 'free',
+      );
       await refreshStatus();
       await _ensureCloudMcp();
       return true;
@@ -1643,9 +1665,11 @@ class CloudNotifier extends StateNotifier<CloudState> {
       final info = await _cloud.fetchAccountInfo();
       state = state.copyWith(
         loggedIn: true,
+        email: _cloud.email,
         plan: info.plan,
         planExpiresAt: info.planExpiresAt,
         usageToday: info.usageToday,
+        licenses: info.licenses,
       );
     } catch (_) {
       // 状态刷新失败保持现状（可能是离线），下次再试

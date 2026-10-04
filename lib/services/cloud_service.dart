@@ -22,6 +22,7 @@ class CloudService {
   static const _deviceIdKey = 'cloud_device_id';
   static const _tokensKey = 'cloud_tokens';
   static const _deviceTokenKey = 'cloud_device_token';
+  static const _emailKey = 'cloud_email';
 
   final SharedPreferences _prefs;
   final FlutterSecureStorage _secure;
@@ -49,6 +50,13 @@ class CloudService {
   bool get isLoggedIn => _tokens != null;
 
   String get userId => _tokens?.userId ?? '';
+
+  /// 登录邮箱。后端登录/注册响应不回传邮箱，成功时本地记录一份
+  /// （个人中心展示用），登出时清除。
+  String? get email {
+    final v = _prefs.getString(_emailKey)?.trim();
+    return (v == null || v.isEmpty) ? null : v;
+  }
 
   /// 当前套餐（来自最近一次登录/注册响应；精确值以 fetchAccountInfo 为准）。
   String get plan => _tokens?.plan ?? 'free';
@@ -114,6 +122,7 @@ class CloudService {
       'deviceName': _deviceName,
     });
     await _saveTokens(CloudTokens.fromJson(data));
+    await _prefs.setString(_emailKey, email.trim().toLowerCase());
   }
 
   Future<void> login(String email, String password) async {
@@ -124,6 +133,7 @@ class CloudService {
       'deviceName': _deviceName,
     });
     await _saveTokens(CloudTokens.fromJson(data));
+    await _prefs.setString(_emailKey, email.trim().toLowerCase());
   }
 
   /// 登出：尽力通知服务端吊销 refresh token，无论成败本地令牌都清掉。
@@ -133,6 +143,7 @@ class CloudService {
     _deviceToken = null;
     await _secure.delete(key: _tokensKey);
     await _secure.delete(key: _deviceTokenKey);
+    await _prefs.remove(_emailKey);
     if (rt != null && baseUrl != null) {
       try {
         await _dio.post('$baseUrl/api/auth/logout',
@@ -149,7 +160,7 @@ class CloudService {
     await _authedPost('/api/license/activate', {'code': code.trim()});
   }
 
-  /// 账号 + 套餐 + 今日用量（云端账号页展示用）。
+  /// 账号 + 套餐 + 今日用量 + 激活记录（云端个人中心展示用）。
   Future<CloudAccountInfo> fetchAccountInfo() async {
     final data = await _authedGet('/api/license/status');
     final usage = <String, int>{};
@@ -157,11 +168,16 @@ class CloudService {
     if (today is Map) {
       today.forEach((k, v) => usage[k.toString()] = (v as num?)?.toInt() ?? 0);
     }
+    final licenses = (data['licenses'] as List? ?? const [])
+        .whereType<Map>()
+        .map((m) => CloudActivatedLicense.fromJson(Map<String, dynamic>.from(m)))
+        .toList();
     return CloudAccountInfo(
       userId: data['userId']?.toString() ?? '',
       plan: data['plan']?.toString() ?? 'free',
       planExpiresAt: (data['planExpiresAt'] as num?)?.toInt(),
       usageToday: usage,
+      licenses: licenses,
     );
   }
 
@@ -396,12 +412,39 @@ class CloudAccountInfo {
     required this.plan,
     required this.planExpiresAt,
     required this.usageToday,
+    this.licenses = const [],
   });
 
   final String userId;
   final String plan;
   final int? planExpiresAt;
   final Map<String, int> usageToday;
+
+  /// 已激活的卡密记录（按激活时间排序）。
+  final List<CloudActivatedLicense> licenses;
+}
+
+/// 一条已激活的卡密记录。
+class CloudActivatedLicense {
+  const CloudActivatedLicense({
+    required this.code,
+    required this.plan,
+    this.durationDays,
+    this.boundAt,
+  });
+
+  final String code;
+  final String plan;
+  final int? durationDays;
+  final int? boundAt;
+
+  factory CloudActivatedLicense.fromJson(Map<String, dynamic> json) =>
+      CloudActivatedLicense(
+        code: json['code']?.toString() ?? '',
+        plan: json['plan']?.toString() ?? '',
+        durationDays: (json['durationDays'] as num?)?.toInt(),
+        boundAt: (json['boundAt'] as num?)?.toInt(),
+      );
 }
 
 class CloudDevice {
@@ -409,16 +452,22 @@ class CloudDevice {
     required this.deviceId,
     required this.deviceName,
     required this.isCurrent,
+    this.activatedAt,
+    this.lastSeenAt,
   });
 
   final String deviceId;
   final String deviceName;
   final bool isCurrent;
+  final int? activatedAt;
+  final int? lastSeenAt;
 
   factory CloudDevice.fromJson(Map<String, dynamic> json) => CloudDevice(
         deviceId: json['deviceId']?.toString() ?? '',
         deviceName: json['deviceName']?.toString() ?? '',
         isCurrent: json['current'] == true,
+        activatedAt: (json['activatedAt'] as num?)?.toInt(),
+        lastSeenAt: (json['lastSeenAt'] as num?)?.toInt(),
       );
 }
 
