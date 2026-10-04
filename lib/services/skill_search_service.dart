@@ -112,7 +112,9 @@ class SkillSearchService {
       }
     }
 
-    if (hits.isEmpty) {
+    // 仅当确实发生过拉取异常且无任何结果时才抛出；源正常返回但
+    // 解析/过滤后为空是合法状态（如条目全部被静默过滤），返回空列表。
+    if (hits.isEmpty && lastErr != null) {
       _lastError = '全部技能源拉取失败：$lastErr';
       throw Exception(_lastError);
     }
