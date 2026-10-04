@@ -224,7 +224,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             value: m.name,
             title: m.name,
             subtitle: m.contextWindow > 0
-                ? '上下文 ${_ComposerStatusBar._compactTokens(m.contextWindow)}'
+                ? '上下文 ${compactTokens(m.contextWindow)}'
                 : null,
             icon: Icons.auto_awesome_outlined,
             checked: m.name == current,
@@ -1038,7 +1038,7 @@ class _ContextGauge extends StatelessWidget {
             const SizedBox(width: 5),
             Text(
               hasTotal
-                  ? '${_ComposerStatusBar._compactTokens(used)} / ${_ComposerStatusBar._compactTokens(total)}'
+                  ? '${compactTokens(used)} / ${compactTokens(total)}'
                   : '上下文不限',
               style: TextStyle(fontSize: 11, color: onSurface(context, 0.5)),
             ),
@@ -1096,8 +1096,8 @@ void _showContextDialog(BuildContext context, WidgetRef ref,
           ],
           _ctxRow(ctx, '上下文窗口',
               total > 0
-                  ? '${_ComposerStatusBar._compactTokens(est)} / '
-                      '${_ComposerStatusBar._compactTokens(total)} tokens'
+                  ? '${compactTokens(est)} / '
+                      '${compactTokens(total)} tokens'
                       '（${(pct! * 100).toStringAsFixed(1)}%，估算）'
                   : '该模型未设置窗口大小，不启用自动压缩'),
           _ctxRow(ctx, '会话 Token',
@@ -1348,11 +1348,6 @@ class _ComposerStatusBarState extends ConsumerState<_ComposerStatusBar> {
         'high' => '高',
         _ => '中',
       };
-
-  /// 128000 → "128K"，1048576 → "1M"，避免长文本把状态条挤爆。
-  /// 统一委托 format_utils.compactTokens（P2-22：与 token_stats_screen
-  /// 原各维护一份，现口径一致）。
-  static String _compactTokens(int n) => compactTokens(n);
 }
 
 /// 状态条上的小圆角标签。

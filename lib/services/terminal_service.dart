@@ -32,10 +32,13 @@ class DistroSpec {
 
 class TerminalService {
   TerminalService({Dio? dio})
+      // dio 5.x 移除了 Dio 实例级 connectTimeout/receiveTimeout setter，
+      // 超时只能配在 BaseOptions 上（大包下载 30 分钟上限）。
       : _dio = dio ??
-            (Dio()
-              ..connectTimeout = const Duration(seconds: 30)
-              ..receiveTimeout = const Duration(minutes: 30));
+            Dio(BaseOptions(
+              connectTimeout: const Duration(seconds: 30),
+              receiveTimeout: const Duration(minutes: 30),
+            ));
 
   /// 与原生层的通道。
   ///

@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'models/chat_session.dart';
 import 'providers/providers.dart';
 import 'services/database.dart';
 import 'services/memory_service.dart';
