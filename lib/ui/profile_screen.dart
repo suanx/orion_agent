@@ -7,6 +7,7 @@ import 'status_bar_area.dart';
 import '../providers/providers.dart';
 import 'about_screen.dart';
 import 'appearance_screen.dart';
+import 'cloud_account_screen.dart';
 import 'default_models_screen.dart';
 import 'knowledge_screen.dart';
 import 'mcp_screen.dart';
@@ -52,15 +53,15 @@ class ProfileScreen extends ConsumerWidget {
         _Group(
           title: 'AI 配置',
           children: [
-            // 登录：为后续后端账号体系预留的入口，当前仅占位提示，
-            // 不做成点了没反应的假功能。
+            // 云端服务：登录/注册、卡密激活、设备管理。
+            // 未登录只影响云功能（搜索中继/云端任务/云端 MCP），本地功能不受影响。
             _Row(
               icon: Icons.login_rounded,
-              label: '登录',
-              value: '暂未开放',
-              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('登录功能即将上线，敬请期待')),
-              ),
+              label: '云端服务',
+              value: ref.watch(cloudProvider).loggedIn
+                  ? cloudPlanLabel(ref.watch(cloudProvider).plan)
+                  : '未登录',
+              onTap: () => _push(context, const CloudAccountScreen()),
             ),
             _Row(
               icon: Icons.cloud_outlined,

@@ -17,6 +17,7 @@ import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 import '../models/llm_config.dart';
 import '../services/agent_orchestrator.dart';
+import '../services/cloud_service.dart';
 import '../services/database.dart';
 import '../services/llm_client.dart';
 import '../services/mcp_service.dart';
@@ -74,6 +75,7 @@ final toolRegistryProvider = Provider<ToolRegistry>((ref) => ToolRegistry(
       terminalService: ref.watch(terminalServiceProvider),
       skillService: ref.watch(skillServiceProvider),
       skillSearchService: ref.watch(skillSearchServiceProvider),
+      cloudService: ref.watch(cloudServiceProvider),
     ));
 
 final llmClientProvider = Provider<LlmClient>(
@@ -101,8 +103,9 @@ final notificationServiceProvider =
 final permissionServiceProvider =
     Provider<PermissionService>((ref) => PermissionService());
 
-/// 应用内更新检查。
-final updateServiceProvider = Provider<UpdateService>((ref) => UpdateService());
+/// 应用内更新检查（云端优先，GitHub Releases 兜底）。
+final updateServiceProvider = Provider<UpdateService>((ref) =>
+    UpdateService(cloud: ref.watch(cloudServiceProvider)));
 
 /// 启动自动检查发现的可用更新（null = 无）。
 /// HomeShell 弹窗展示；用户点「去更新」后清除。
@@ -1492,3 +1495,193 @@ final tasksProvider =
   );
   return notifier;
 });
+
+// ---------------- 云端服务（orion_agent_cloud 后端） ----------------
+
+/// 套餐显示名。
+String cloudPlanLabel(String plan) {
+  switch (plan) {
+    case 'trial':
+      return '试用版';
+    case 'pro':
+      return '专业版';
+    case 'lifetime':
+      return '永久授权';
+    default:
+      return '免费版';
+  }
+}
+
+class CloudState {
+  const CloudState({
+    this.restoring = false,
+    this.loggedIn = false,
+    this.plan = 'free',
+    this.planExpiresAt,
+    this.usageToday = const {},
+    this.busy = false,
+    this.error,
+  });
+
+  final bool restoring;
+  final bool loggedIn;
+  final String plan;
+  final int? planExpiresAt;
+  final Map<String, int> usageToday;
+  final bool busy;
+  final String? error;
+
+  CloudState copyWith({
+    bool? restoring,
+    bool? loggedIn,
+    String? plan,
+    int? planExpiresAt,
+    Map<String, int>? usageToday,
+    bool? busy,
+    String? error,
+    bool clearError = false,
+  }) =>
+      CloudState(
+        restoring: restoring ?? this.restoring,
+        loggedIn: loggedIn ?? this.loggedIn,
+        plan: plan ?? this.plan,
+        planExpiresAt: planExpiresAt ?? this.planExpiresAt,
+        usageToday: usageToday ?? this.usageToday,
+        busy: busy ?? this.busy,
+        error: clearError ? null : (error ?? this.error),
+      );
+}
+
+class CloudNotifier extends StateNotifier<CloudState> {
+  CloudNotifier(this._cloud, this._mcp) : super(const CloudState());
+
+  static const _cloudMcpName = 'orion-cloud';
+
+  final CloudService _cloud;
+  final McpService _mcp;
+
+  /// 启动时恢复登录态（只读本地，静默失败）。联网刷新延迟到首个请求的
+  /// 401 路径，避免拖慢启动。
+  Future<void> bootstrap() async {
+    if (!_cloud.isConfigured) return;
+    state = state.copyWith(restoring: true);
+    await _cloud.restore();
+    if (!mounted) return;
+    state = state.copyWith(
+      restoring: false,
+      loggedIn: _cloud.isLoggedIn,
+    );
+    if (_cloud.isLoggedIn) {
+      // 静默刷新套餐/用量，失败不打扰
+      await refreshStatus();
+    }
+  }
+
+  Future<void> setBaseUrl(String url) async {
+    state = state.copyWith(busy: true, clearError: true);
+    await _cloud.setBaseUrl(url);
+    if (!mounted) return;
+    state = state.copyWith(busy: false);
+  }
+
+  Future<bool> login(String email, String password) async {
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      await _cloud.login(email, password);
+      state = state.copyWith(busy: false, loggedIn: true, plan: _cloud.plan);
+      await refreshStatus();
+      // 登录成功后自动配置云端 MCP（幂等）
+      await _ensureCloudMcp();
+      return true;
+    } on CloudException catch (e) {
+      state = state.copyWith(busy: false, error: e.message);
+    } catch (e) {
+      state = state.copyWith(busy: false, error: '登录失败：$e');
+    }
+    return false;
+  }
+
+  Future<bool> register(String email, String password) async {
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      await _cloud.register(email, password);
+      state = state.copyWith(busy: false, loggedIn: true, plan: 'free');
+      await refreshStatus();
+      await _ensureCloudMcp();
+      return true;
+    } on CloudException catch (e) {
+      state = state.copyWith(busy: false, error: e.message);
+    } catch (e) {
+      state = state.copyWith(busy: false, error: '注册失败：$e');
+    }
+    return false;
+  }
+
+  Future<void> logout() async {
+    await _cloud.logout();
+    state = const CloudState();
+  }
+
+  Future<bool> activate(String code) async {
+    state = state.copyWith(busy: true, clearError: true);
+    try {
+      await _cloud.activate(code);
+      await refreshStatus();
+      state = state.copyWith(busy: false, error: null);
+      return true;
+    } on CloudException catch (e) {
+      state = state.copyWith(busy: false, error: e.message);
+    } catch (e) {
+      state = state.copyWith(busy: false, error: '激活失败：$e');
+    }
+    return false;
+  }
+
+  /// 刷新套餐与今日用量。静默失败（不打扰 UI）。
+  Future<void> refreshStatus() async {
+    try {
+      final info = await _cloud.fetchAccountInfo();
+      state = state.copyWith(
+        loggedIn: true,
+        plan: info.plan,
+        planExpiresAt: info.planExpiresAt,
+        usageToday: info.usageToday,
+      );
+    } catch (_) {
+      // 状态刷新失败保持现状（可能是离线），下次再试
+    }
+  }
+
+  /// 登录成功后确保云端 MCP 服务器已配置（幂等）：
+  /// 设备令牌编进 URL（orion 的 MCP 配置只有 URL 字段），名称固定
+  /// 「orion-cloud」，已有配置则只在 URL 变化时替换。
+  Future<void> _ensureCloudMcp() async {
+    try {
+      final base = _cloud.baseUrl;
+      if (base == null || !_cloud.isLoggedIn) return;
+      final token = await _cloud.getOrCreateDeviceToken();
+      if (token.isEmpty) return;
+      final url = '$base/api/mcp?token=$token';
+      final servers = await _mcp.listServers();
+      McpServer? existing;
+      for (final s in servers) {
+        if (s.name == _cloudMcpName) existing = s;
+      }
+      if (existing != null && existing.url == url) return;
+      if (existing != null) await _mcp.removeServer(existing.id);
+      await _mcp.addServer(_cloudMcpName, url);
+      await _mcp.connectAll();
+    } catch (e) {
+      debugPrint('云端 MCP 自动配置失败（不影响登录）：$e');
+    }
+  }
+}
+
+final cloudServiceProvider = Provider<CloudService>((ref) =>
+    CloudService(ref.watch(sharedPreferencesProvider), const FlutterSecureStorage()));
+
+final cloudProvider = StateNotifierProvider<CloudNotifier, CloudState>((ref) =>
+    CloudNotifier(
+      ref.watch(cloudServiceProvider),
+      ref.watch(mcpServiceProvider),
+    ));

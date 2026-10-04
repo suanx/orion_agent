@@ -1,23 +1,58 @@
 import 'package:dio/dio.dart';
 
-/// 应用内更新检查（GitHub Releases latest）。
+import 'cloud_service.dart';
+
+/// 应用内更新检查。
 ///
+/// 优先走自建云端（orion_agent_cloud 的 /update/check，国内可达、APK 下载快），
+/// 未配置云端或云端检查失败时回退 GitHub Releases latest。
 /// 弹窗与「关于」页共用同一实现，避免两套解析将来改岔。
 /// 版本号比较规则：逐段数字比较，段数不足补 0。
 class UpdateService {
+  UpdateService({CloudService? cloud}) : _cloud = cloud;
+
   static const _latestApi =
       'https://api.github.com/repos/suanx/orion_agent/releases/latest';
 
-  /// 复用单个 Dio 实例：每次检查都 new Dio 会泄漏底层 HttpClient 连接。
-  UpdateService() : _dio = Dio(BaseOptions(connectTimeout: _defaultTimeout));
-
   static const _defaultTimeout = Duration(seconds: 15);
 
-  final Dio _dio;
+  final CloudService? _cloud;
+  Dio? _dioInstance;
+  Dio get _dio => _dioInstance ??= Dio(BaseOptions(connectTimeout: _defaultTimeout));
 
   /// 检查结果：null 表示已是最新或检查失败（自动检查应当静默）。
   Future<UpdateInfo?> checkForUpdate(String currentVersion,
       {Duration timeout = _defaultTimeout}) async {
+    // 云端优先：国内网络下 GitHub API 与 Releases 下载都不可靠
+    final viaCloud = await _checkViaCloud(currentVersion);
+    if (viaCloud != null) return viaCloud;
+    return _checkViaGithub(currentVersion, timeout: timeout);
+  }
+
+  Future<UpdateInfo?> _checkViaCloud(String currentVersion) async {
+    final cloud = _cloud;
+    if (cloud == null || !cloud.isConfigured) return null;
+    try {
+      final data = await cloud.checkUpdate(currentVersion);
+      if (data == null || data['updateAvailable'] != true) return null;
+      final latest = data['latest']?.toString() ?? '';
+      if (latest.isEmpty || !isNewer(latest, currentVersion)) return null;
+      return UpdateInfo(
+        version: latest,
+        changelog: (data['notes']?.toString() ?? '').trim().isEmpty
+            ? null
+            : data['notes']?.toString(),
+        apkUrl: (data['apkUrl']?.toString() ?? '').isEmpty
+            ? null
+            : data['apkUrl']?.toString(),
+      );
+    } catch (_) {
+      return null; // 云端失败静默回退 GitHub
+    }
+  }
+
+  Future<UpdateInfo?> _checkViaGithub(String currentVersion,
+      {required Duration timeout}) async {
     try {
       // 超时交给 Dio 的 connect/receiveTimeout 配置：原来的 Future.timeout
       // 只是放弃等待，底层请求仍会继续跑，连接无法取消。

@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 
 import 'package:characters/characters.dart';
 
+import 'cloud_service.dart';
 import 'memory_service.dart';
 import 'rag_service.dart';
 import 'skill_search_service.dart';
@@ -318,10 +319,16 @@ class _Parser {
 }
 
 /// 网页抓取工具。
+/// 网页抓取工具。
 class WebFetchTool extends Tool {
-  WebFetchTool(this._dio);
+  WebFetchTool(this._dio, [this._cloud]);
 
   final Dio _dio;
+
+  /// 云端中继（orion_agent_cloud）。已配置且已登录时优先走中继——
+  /// 国内网络直连目标站点经常超时，边缘节点两侧都可达。
+  /// 中继返回 null（未配置/网络失败）时回退本机直连。
+  final CloudService? _cloud;
 
   @override
   String get name => 'web_fetch';
@@ -348,6 +355,11 @@ class WebFetchTool extends Tool {
     final uri = Uri.tryParse(url);
     if (uri == null || uri.host.isEmpty || _isPrivateHost(uri.host)) {
       return '错误：不允许访问内网地址';
+    }
+    // 云端中继优先（返回 null = 走直连兜底）
+    final viaCloud = await _cloud?.relayFetch(url);
+    if (viaCloud != null) {
+      return _wrapExternal(_truncate(viaCloud, 4000));
     }
     try {
       final resp = await _dio.get<ResponseBody>(
@@ -391,9 +403,13 @@ class WebFetchTool extends Tool {
 
 /// 联网搜索工具（DuckDuckGo HTML 版，无需 API Key）。
 class WebSearchTool extends Tool {
-  WebSearchTool(this._dio);
+  WebSearchTool(this._dio, [this._cloud]);
 
   final Dio _dio;
+
+  /// 云端中继：国内网络直连 DuckDuckGo 基本不可达，配置了云端服务时
+  /// 优先经边缘节点搜索；null（未配置/未登录/网络失败）回退直连。
+  final CloudService? _cloud;
 
   @override
   String get name => 'web_search';
@@ -414,6 +430,11 @@ class WebSearchTool extends Tool {
   Future<String> execute(Map<String, dynamic> args) async {
     final query = args['query']?.toString() ?? '';
     if (query.trim().isEmpty) return '错误：搜索词为空';
+    // 云端中继优先（返回 null = 走直连兜底）
+    final viaCloud = await _cloud?.relaySearch(query);
+    if (viaCloud != null) {
+      return _wrapExternal(_truncate(viaCloud, 4000));
+    }
     try {
       final resp = await _dio.get<String>(
         'https://html.duckduckgo.com/html/',
@@ -812,6 +833,7 @@ class ToolRegistry {
     TerminalService? terminalService,
     SkillService? skillService,
     SkillSearchService? skillSearchService,
+    CloudService? cloudService,
   }) {
     final dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 20),
@@ -820,8 +842,8 @@ class ToolRegistry {
     _tools = [
       DateTimeTool(),
       CalculatorTool(),
-      WebSearchTool(dio),
-      WebFetchTool(dio),
+      WebSearchTool(dio, cloudService),
+      WebFetchTool(dio, cloudService),
       SaveMemoryTool(memoryService),
       if (ragService != null && batchEmbed != null)
         SearchKnowledgeTool(ragService, batchEmbed),

@@ -101,6 +101,10 @@ Future<void> main() async {
   // MCP 服务器后台连接（不阻塞启动），工具注册进 ToolRegistry
   unawaited(container.read(mcpServiceProvider).connectAll());
 
+  // 云端服务：恢复登录态（只读本地令牌，静默失败，不阻塞启动）。
+  // 套餐/用量的联网刷新由 bootstrap 内部静默进行。
+  unawaited(container.read(cloudProvider.notifier).bootstrap());
+
   // 本地通知：初始化渠道（不请求权限，权限由设置页显式触发）
   //
   // 必须在这里就传入 onTap：通知回调只注册一次，若用无参 init() 占位，
