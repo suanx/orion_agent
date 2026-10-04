@@ -70,8 +70,8 @@ Widget _buildErrorCard(String message) {
       child: Text(
         '组件渲染出错：$message',
         style: const TextStyle(
-            fontSize: 12.5, height: 1.4, color: Color(0xFFB71C1C)),
-        maxLines: 8,
+            fontSize: 11.5, height: 1.4, color: Color(0xFFB71C1C)),
+        maxLines: 12,
         overflow: TextOverflow.ellipsis,
       ),
     ),
@@ -86,8 +86,15 @@ Future<void> main() async {
   // FlutterError.onError 不覆盖——debug 默认 presentError 已打日志，
   // release 的可视化由下面的 ErrorWidget.builder 负责。
   if (kReleaseMode) {
-    ErrorWidget.builder =
-        (details) => _buildErrorCard(details.exceptionAsString());
+    ErrorWidget.builder = (details) {
+      final sb = StringBuffer(details.exceptionAsString());
+      final st = details.stack?.toString();
+      if (st != null && st.isNotEmpty) {
+        sb.write('\n');
+        sb.write(st.split('\n').take(8).join('\n'));
+      }
+      return _buildErrorCard(sb.toString());
+    };
   }
   ui.PlatformDispatcher.instance.onError = (error, stack) {
     debugPrint('Uncaught async error: $error\n$stack');

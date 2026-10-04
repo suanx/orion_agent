@@ -697,7 +697,14 @@ MarkdownStyleSheet _mdStyleSheet(BuildContext context) {
   final on = onSurface(context, 0.88);
   final onStrong = onSurface(context, 0.95);
   final primary = Theme.of(context).colorScheme.primary;
-  return MarkdownStyleSheet(
+  // ⚠️ 必须以 fromTheme 为基底再 copyWith，不能用裸构造 MarkdownStyleSheet(...)：
+  // 裸构造下 listBulletPadding / checkbox / listIndent / blockquote 等字段为 null，
+  // 而 flutter_markdown 内部对它们做非空断言（listBulletPadding! / checkbox! /
+  // listIndent!）——消息里出现列表或待办清单即抛
+  // "Null check operator used on a null value"，正是 v0.2.1~v0.2.4 白屏根因
+  // （docs/PROJECT.md §11.18）。fromTheme 基底保证全字段有默认值。
+  final base = MarkdownStyleSheet.fromTheme(Theme.of(context));
+  return base.copyWith(
     p: TextStyle(fontSize: 15.5, height: 1.6, color: on),
     h1: TextStyle(
         fontSize: 21, height: 1.35, fontWeight: FontWeight.w700, color: onStrong),
@@ -710,7 +717,6 @@ MarkdownStyleSheet _mdStyleSheet(BuildContext context) {
     strong: TextStyle(fontWeight: FontWeight.w700, color: onStrong),
     em: TextStyle(fontStyle: FontStyle.italic, color: on),
     listBullet: TextStyle(fontSize: 15.5, height: 1.6, color: on),
-    listIndent: 22,
     blockquote: TextStyle(fontSize: 14.5, height: 1.55, color: onSurface(context, 0.6)),
     blockquoteDecoration: BoxDecoration(
       color: onSurface(context, 0.05),

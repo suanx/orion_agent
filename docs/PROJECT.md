@@ -1528,6 +1528,22 @@ R8 配置（注入的第二个 buildTypes 块）实际未生效，是无效防�
 未捕获异常打日志；② `_mdSafe` 降级：自定义 Markdown 管线抛异常时回退
 默认 MarkdownBody。若 v0.2.4 仍异常，按屏幕上的报错卡片内容定位。
 
+**最终根因（v0.2.4 错误卡片定位，v0.2.5 修复）**：错误卡片显示
+「Null check operator used on a null value」。对照 flutter_markdown 0.7.7
+源码：`builder.dart` 对 `styleSheet.listBulletPadding!`（499-503 行）、
+`styleSheet.checkbox!`（710 行）、`styleSheet.listIndent!` 做非空断言；
+而 v0.2.1 的 `_mdStyleSheet` 用**裸构造** `MarkdownStyleSheet(...)`，
+这些字段未赋值即为 null → 消息里出现**列表/待办清单**即崩
+（AI 回复几乎必带列表 → 有历史消息的会话首帧必崩 → 白屏）。
+
+**修复**：样式表改为 `MarkdownStyleSheet.fromTheme(theme)` 全字段基底 +
+`copyWith` 覆盖（§ chat_screen._mdStyleSheet）；新增
+`test/markdown_style_test.dart` 回归测试（9 类消息片段，裸构造会红、
+fromTheme 基底全绿）；错误卡片附带堆栈前 8 行。
+
+**教训（第三次重申）**：第三方库的"可空参数"不等于"可以不传"——
+使用前查其内部对 `!` 断言的字段；带 UI 的组件改动必须有 widget 测试兜底。
+
 ## 12. 待修复的问题
 
 按建议优先级排序。**均未实现**。
