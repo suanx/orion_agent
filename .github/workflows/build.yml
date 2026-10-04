@@ -265,6 +265,9 @@ jobs:
           # flutter_local_notifications：定时/已展示通知的回调接收器，缺失会在部分 ROM 上崩溃
           sed -i 's|</application>|<receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n                <action android:name="android.intent.action.QUICKBOOT_POWERON" />\n                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>\n            </intent-filter>\n        </receiver>\n        <service android:name="com.example.orion_agent.AgentAccessibilityService" android:exported="false" android:label="Orion Agent 无障碍服务" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">\n            <intent-filter>\n                <action android:name="android.accessibilityservice.AccessibilityService"/>\n            </intent-filter>\n            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config"/>\n        </service>\n    </application>|' "$MANIFEST"
           grep -n "INTERNET\|RECORD_AUDIO\|POST_NOTIFICATIONS\|ScheduledNotification\|AgentAccessibilityService" "$MANIFEST"
+          # 桌面（启动器）显示名：flutter create 默认用项目名 orion_agent，改为正式名
+          sed -i 's|android:label="orion_agent"|android:label="Orion Agent"|' "$MANIFEST"
+          grep -n 'android:label' "$MANIFEST"
 
       - name: Add accessibility service files
         # 应用授权页的「无障碍权限」需要真实存在的服务才可授予。
