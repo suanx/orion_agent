@@ -770,6 +770,17 @@ class _MdCodeBuilder extends MarkdownElementBuilder {
   }
 }
 
+/// 带样式与代码块构建器的 Markdown 安全入口：自定义渲染管线抛异常时
+/// 降级为默认 MarkdownBody（v0.2.4 白屏排障：自定义 builder/styleSheet
+/// 是 v0.2.1 起唯一进入启动渲染路径的大改，降级保证消息列表永不白屏）。
+Widget _mdSafe(BuildContext context, String text) {
+  try {
+    return _mdBody(context, text);
+  } catch (_) {
+    return MarkdownBody(data: text);
+  }
+}
+
 /// 已完结消息的 Markdown 渲染缓存。
 ///
 /// 流式期间每个 delta 都会触发整页 rebuild，未缓存的 MarkdownBody 会被
@@ -787,7 +798,7 @@ class _CachedMarkdown extends StatelessWidget {
     final key = '${Theme.of(context).brightness.name}|$text';
     final hit = _cache[key];
     if (hit != null) return hit;
-    final body = _mdBody(context, text);
+    final body = _mdSafe(context, text);
     if (_cache.length >= 32) _cache.remove(_cache.keys.first);
     _cache[key] = body;
     return body;
@@ -958,7 +969,7 @@ class _StreamingBubble extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2),
             )
           else if (content.isNotEmpty)
-            _mdBody(context, content),
+            _mdSafe(context, content),
         ],
       ),
     );

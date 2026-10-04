@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -50,8 +52,47 @@ void _applyImmersiveUI(Brightness brightness) {
   ));
 }
 
+/// 启动期异常可见化卡片（v0.2.2/v0.2.3 白屏排障用）。
+///
+/// 发布版里 build 异常的默认 ErrorWidget 是空组件——用户看到的就是白屏。
+/// 换成红色错误卡片后：单个组件挂掉不再拖垮整屏，且报错内容直接可见、可截图反馈。
+Widget _buildErrorCard(String message) {
+  return Directionality(
+    textDirection: TextDirection.ltr,
+    child: Container(
+      margin: const EdgeInsets.all(10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFEBEE),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFD93025)),
+      ),
+      child: Text(
+        '组件渲染出错：$message',
+        style: const TextStyle(
+            fontSize: 12.5, height: 1.4, color: Color(0xFFB71C1C)),
+        maxLines: 8,
+        overflow: TextOverflow.ellipsis,
+      ),
+    ),
+  );
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ---- 启动异常可见化（必须在任何异步逻辑之前安装）----
+  // 只在发布版替换：debug 版保留默认红屏，开发排障体验不变。
+  // FlutterError.onError 不覆盖——debug 默认 presentError 已打日志，
+  // release 的可视化由下面的 ErrorWidget.builder 负责。
+  if (kReleaseMode) {
+    ErrorWidget.builder =
+        (details) => _buildErrorCard(details.exceptionAsString());
+  }
+  ui.PlatformDispatcher.instance.onError = (error, stack) {
+    debugPrint('Uncaught async error: $error\n$stack');
+    return true;
+  };
 
   final prefs = await SharedPreferences.getInstance();
 
