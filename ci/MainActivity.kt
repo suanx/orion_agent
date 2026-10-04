@@ -1,5 +1,6 @@
 package com.example.orion_agent
 
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -125,7 +126,7 @@ class MainActivity : FlutterActivity() {
             // 「可见包数>50」启发式。getEnabledAccessibilityServiceList 与
             // FEEDBACK_ALL_MASK 均 API 14+ 可用，兼容 targetSdk 28，无额外依赖。
             val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
-            am?.getEnabledAccessibilityServiceList(AccessibilityManager.FEEDBACK_ALL_MASK)
+            am?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
                 ?.any { it.resolveInfo?.serviceInfo?.packageName == packageName } ?: false
         } catch (_: Exception) { false }
         // a11yServiceEnabled 保留：区分「系统里有无此服务」与「服务已开启」
