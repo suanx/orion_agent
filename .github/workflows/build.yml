@@ -402,15 +402,11 @@ jobs:
               buildTypes {
                   release {
                       signingConfig = signingConfigs.getByName("release")
-                      // R8 代码压缩 + 资源收缩（防反编译第二层；
-                      // Dart 层由 flutter build --obfuscate 负责，
-                      // 规则文件见本步骤落盘的 proguard-rules.pro）。
-                      isMinifyEnabled = true
-                      isShrinkResources = true
-                      proguardFiles(
-                          getDefaultProguardFile("proguard-android-optimize.txt"),
-                          "proguard-rules.pro"
-                      )
+                      // v0.2.2 首开 R8（isMinifyEnabled/isShrinkResources）：
+                      // APK 取证显示 R8 实际未压缩/未混淆任何类（dex 内插件
+                      // 类名原样、arsc 无变化），却伴随装机白屏，已回退。
+                      // 未来若重新启用：先真机验证 + 用 mapping.txt 确认
+                      // 混淆确实生效，规则文件见本步骤落盘的 proguard-rules.pro。
                   }
               }
           }
@@ -425,10 +421,11 @@ jobs:
           set +e
           VN=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
           echo "versionName=$VN versionCode=$GITHUB_RUN_NUMBER"
-          # --obfuscate + --split-debug-info：Dart 符号混淆并从 libapp.so 剥离
-          # 调试信息（防反编译第一层）。符号文件单独上传 artifact 留档，
-          # 崩溃堆栈用 `flutter symbolize -i stack.txt -d app.android-arm64.symbols` 还原。
-          flutter build apk --release --obfuscate --split-debug-info=build/symbols \
+          # ⚠️ v0.2.2 曾启用 --obfuscate --split-debug-info，装机白屏（启动失败）。
+          # APK 取证：R8 未生效（dex 内插件类名原样）、libapp.so 缩 1.4MB（混淆生效）
+          # → 判定 --obfuscate 为白屏主因，已回退。重新引入前必须单独出测试版
+          # 真机验证（见 docs/PROJECT.md §11.18）。
+          flutter build apk --release \
             --target-platform android-arm64 \
             --build-name="$VN" --build-number="$GITHUB_RUN_NUMBER" 2>&1 \
             | tee /tmp/build.txt
@@ -453,15 +450,6 @@ jobs:
         with:
           name: orion-agent-apk
           path: build/app/outputs/flutter-apk/app-release.apk
-
-      - name: Upload debug symbols artifact
-        # 混淆后的崩溃符号化凭据：发版时与 APK 一起留档，勿删。
-        # 还原示例：flutter symbolize -i stack.txt -d app.android-arm64.symbols
-        uses: actions/upload-artifact@v4
-        with:
-          name: orion-agent-symbols
-          path: build/symbols
-          if-no-files-found: error
 
       - name: Publish to GitHub Releases
         # 正式发布：APK 上传到 Releases（tag = 版本号），更新说明取

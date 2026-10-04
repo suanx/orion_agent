@@ -832,11 +832,13 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 
 **唯一工作流**：`.github/workflows/build.yml`（push to main +手动触发）
 
-**防反编译**（2026-10-05 起）：release 构建启用 `--obfuscate --split-debug-info=build/symbols`
-（Dart 符号混淆并从 libapp.so 剥离，崩溃堆栈用 `flutter symbolize` + 符号文件还原，
-符号单独上传为 `orion-agent-symbols` artifact）+ R8 `isMinifyEnabled` /
-`isShrinkResources`（Kotlin 层压缩，规则由 workflow 落盘 `proguard-rules.pro`）。
-首次开启 R8 后需真机回归一轮，确认反射类未被误删。
+**防反编译**（2026-10-05，v0.2.2 首开后白屏，已于 v0.2.3 回退）：v0.2.2 曾启用
+`--obfuscate --split-debug-info` + R8 minify/shrink，装机启动白屏（见 §11.18）。
+APK 取证结论：R8 实际未生效（dex 内插件类名原样、arsc 无变化）；libapp.so
+符号剥离（--obfuscate）为白屏主因。**当前构建已回退为 v0.2.1 的纯 release**。
+workflow 里保留 `proguard-rules.pro` 落盘逻辑供未来重新启用；重新引入任何
+混淆前必须：单独出测试版 → 真机验证启动与工具调用 → 用 mapping.txt /
+so 符号表确认混淆确实生效，再进正式版。
 
 **18 个步骤**：
 
@@ -1490,6 +1492,29 @@ v0.2.0 发版只升了 `pubspec.yaml` 的 `version`，忘升 `kAppVersion`（停
 强制 pubspec 与 `kAppVersion` 同步。
 
 **教训**：版本号必须单一事实来源；发版 checklist 要覆盖所有自报版本的位置。
+
+### 11.18 v0.2.2 装机白屏（--obfuscate 启动失败，R8 实际未生效）
+
+**现象**：v0.2.2 安装后打开一直白屏（v0.2.1 同机正常）。
+
+**取证**（下载两版 release APK 对比）：
+- `libapp.so`：8.72MB → 7.34MB（-1.4MB）——`--obfuscate --split-debug-info`
+  明确生效，Dart 符号被剥离
+- `classes.dex`：插件类名（flutter_local_notifications / speech_to_text /
+  audioplayers 等）与 GeneratedPluginRegistrant、MainActivity **两版完全一致**
+  ——R8 开了但**没有混淆/删除任何类**（dex 反而变大 1.34→1.86MB，
+  arsc 无变化，shrinkResources 同样未生效）
+- 白屏 = Flutter 引擎启动失败（release 下 build 异常无红屏，直接白）
+
+**结论**：白屏主因是 **Dart `--obfuscate`**（本应用启动路径上被混淆破坏）；
+R8 配置（注入的第二个 buildTypes 块）实际未生效，是无效防护。
+
+**处置**：v0.2.3 整体回退两个构建开关（恢复 v0.2.1 构建管线），
+保留 v0.2.2 的 UI 改进；防护能力后续以「测试版真机验证 + mapping.txt/符号表
+确认生效」的流程分步重新引入。
+
+**教训**：① 混淆类改动必须先测试版真机验证，不能直接进正式版；
+②「开了某开关」不等于「该开关生效」——要用产物取证（mapping/dex/so）验证。
 
 ## 12. 待修复的问题
 
