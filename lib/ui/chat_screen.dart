@@ -703,7 +703,17 @@ MarkdownStyleSheet _mdStyleSheet(BuildContext context) {
   // listIndent!）——消息里出现列表或待办清单即抛
   // "Null check operator used on a null value"，正是 v0.2.1~v0.2.4 白屏根因
   // （docs/PROJECT.md §11.18）。fromTheme 基底保证全字段有默认值。
-  final base = MarkdownStyleSheet.fromTheme(Theme.of(context));
+  //
+  // fromTheme 内部 assert bodyMedium.fontSize != null，且 release 下会解引用
+  // bodyMedium!.fontSize!——个别平台排版组合可能为 null，这里兜底补一个字号。
+  final theme = Theme.of(context);
+  final mdTheme = theme.textTheme.bodyMedium?.fontSize != null
+      ? theme
+      : theme.copyWith(
+          textTheme: theme.textTheme
+              .merge(const TextTheme(bodyMedium: TextStyle(fontSize: 14))),
+        );
+  final base = MarkdownStyleSheet.fromTheme(mdTheme);
   return base.copyWith(
     p: TextStyle(fontSize: 15.5, height: 1.6, color: on),
     h1: TextStyle(

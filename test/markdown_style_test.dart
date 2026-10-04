@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orion_agent/theme.dart';
 
 /// Markdown 渲染回归测试（v0.2.5）。
 ///
@@ -8,8 +9,9 @@ import 'package:flutter_test/flutter_test.dart';
 /// listBulletPadding / checkbox / listIndent 为 null，而 flutter_markdown
 /// 内部对它们非空断言（listBulletPadding! / checkbox! / listIndent!）——
 /// 消息里出现列表即抛 "Null check operator used on a null value"。
-/// 本测试用与线上一致的「fromTheme 基底」样式表渲染各类消息片段，
-/// 任何 null 断言都会让 testWidgets 抛出并让 CI 变红。
+///
+/// 本测试用与线上一致的路径（buildAppTheme 应用主题 → fromTheme 基底）
+/// 渲染各类消息片段，任何 null 断言都会让 testWidgets 抛出并让 CI 变红。
 void main() {
   final samples = <String>[
     '普通段落，没有任何格式。',
@@ -25,14 +27,21 @@ void main() {
 
   for (final s in samples) {
     testWidgets('Markdown 渲染不抛异常: ${s.split('\n').first}', (tester) async {
-      // 与 chat_screen._mdStyleSheet 同构：fromTheme 基底 + 覆盖字段。
-      final sheet =
-          MarkdownStyleSheet.fromTheme(ThemeData(useMaterial3: true)).copyWith(
+      // 与 chat_screen._mdStyleSheet 同构：应用主题 → fromTheme 基底。
+      final theme = buildAppTheme(themeById('classic'));
+      final mdTheme = theme.textTheme.bodyMedium?.fontSize != null
+          ? theme
+          : theme.copyWith(
+              textTheme: theme.textTheme
+                  .merge(const TextTheme(bodyMedium: TextStyle(fontSize: 14))),
+            );
+      final sheet = MarkdownStyleSheet.fromTheme(mdTheme).copyWith(
         p: const TextStyle(fontSize: 15.5, height: 1.6),
         codeblockDecoration: const BoxDecoration(),
         codeblockPadding: EdgeInsets.zero,
       );
       await tester.pumpWidget(MaterialApp(
+        theme: theme,
         home: Scaffold(body: MarkdownBody(data: s, styleSheet: sheet)),
       ));
       expect(tester.takeException(), isNull);

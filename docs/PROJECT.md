@@ -1537,9 +1537,12 @@ R8 配置（注入的第二个 buildTypes 块）实际未生效，是无效防�
 （AI 回复几乎必带列表 → 有历史消息的会话首帧必崩 → 白屏）。
 
 **修复**：样式表改为 `MarkdownStyleSheet.fromTheme(theme)` 全字段基底 +
-`copyWith` 覆盖（§ chat_screen._mdStyleSheet）；新增
-`test/markdown_style_test.dart` 回归测试（9 类消息片段，裸构造会红、
-fromTheme 基底全绿）；错误卡片附带堆栈前 8 行。
+`copyWith` 覆盖（§ chat_screen._mdStyleSheet）；fromTheme 内部另有
+`assert(bodyMedium.fontSize != null)` 且 release 下解引用 `fontSize!`，
+兜底：bodyMedium 无字号时先 merge 一个 14 号字再进 fromTheme；
+新增 `test/markdown_style_test.dart` 回归测试（9 类消息片段走
+buildAppTheme→fromTheme 真实链路，裸构造会红、修复后全绿）；
+错误卡片附带堆栈前 8 行。
 
 **教训（第三次重申）**：第三方库的"可空参数"不等于"可以不传"——
 使用前查其内部对 `!` 断言的字段；带 UI 的组件改动必须有 widget 测试兜底。
