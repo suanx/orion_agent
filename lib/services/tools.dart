@@ -8,6 +8,7 @@ import 'package:characters/characters.dart';
 
 import 'memory_service.dart';
 import 'rag_service.dart';
+import 'skill_search_service.dart';
 import 'skill_service.dart';
 import 'terminal_service.dart';
 import 'package:flutter/foundation.dart';
@@ -557,6 +558,105 @@ class UseSkillTool extends Tool {
   }
 }
 
+/// 技能搜索工具：在内置技能库中检索新技能。
+/// 默认优先查中文技能库（kPrimarySkillSource），查不到再查英文兜底库。
+class SearchSkillsTool extends Tool {
+  SearchSkillsTool(this._search);
+
+  final SkillSearchService _search;
+
+  @override
+  String get name => 'search_skills';
+
+  @override
+  String get description =>
+      '在技能库中搜索用户还没有的技能/角色提示词（如「我想找一个做 PPT 的技能」）。'
+      '默认优先搜索内置中文技能库，未命中时自动扩展到英文技能库。'
+      '找到合适的技能后，向用户确认再用 install_skill 安装为快捷指令。';
+
+  @override
+  Map<String, dynamic> get parameters => {
+        'type': 'object',
+        'properties': {
+          'query': {
+            'type': 'string',
+            'description': '搜索关键词，可多个（空格分隔），如「写作 面试」',
+          },
+        },
+        'required': ['query'],
+      };
+
+  @override
+  Future<String> execute(Map<String, dynamic> args) async {
+    final query = args['query']?.toString().trim() ?? '';
+    if (query.isEmpty) return '错误：搜索词为空';
+    try {
+      final hits = await _search.search(query);
+      if (hits.isEmpty) {
+        return '技能库中没有与「$query」相关的技能。'
+            '可以换个关键词再试，或建议用户在技能页手动创建。';
+      }
+      final buf = StringBuffer()
+        ..writeln('找到 ${hits.length} 条技能（来自：${hits.first.source}）：');
+      for (var i = 0; i < hits.length; i++) {
+        final h = hits[i];
+        final brief = h.prompt.length > 160 ? '${h.prompt.substring(0, 160)}…' : h.prompt;
+        buf
+          ..writeln('${i + 1}. ${h.title}')
+          ..writeln('   模板预览: ${brief.replaceAll(RegExp(r'\s+'), ' ')}')
+          ..writeln();
+      }
+      buf.write('用户确认后，用 install_skill 工具（传技能名与完整模板）安装，'
+          '安装后即可用「/技能名」或 use_skill 调用。');
+      return buf.toString();
+    } catch (e) {
+      return '错误：技能库拉取失败（${_search.lastError ?? e}）。'
+          '可建议用户检查网络后重试。';
+    }
+  }
+}
+
+/// 技能安装工具：把搜索到的技能落库为快捷指令（与手动安装等价）。
+class InstallSkillTool extends Tool {
+  InstallSkillTool(this._skills);
+
+  final SkillService _skills;
+
+  @override
+  String get name => 'install_skill';
+
+  @override
+  String get description =>
+      '把一个技能安装为用户的快捷指令（之后用「/技能名」触发或 use_skill 调用）。'
+      '技能名与模板通常来自 search_skills 的搜索结果；安装前必须先向用户确认。'
+      '不要安装用户没有要求保存的内容。';
+
+  @override
+  Map<String, dynamic> get parameters => {
+        'type': 'object',
+        'properties': {
+          'name': {'type': 'string', 'description': '技能名称（将作为 /指令名），尽量简短'},
+          'template': {'type': 'string', 'description': '完整技能模板（提示词），可包含 {input} 占位符接收调用参数'},
+        },
+        'required': ['name', 'template'],
+      };
+
+  @override
+  Future<String> execute(Map<String, dynamic> args) async {
+    final name = args['name']?.toString().trim() ?? '';
+    final template = args['template']?.toString() ?? '';
+    if (name.isEmpty) return '错误：技能名为空';
+    if (template.trim().isEmpty) return '错误：模板为空';
+    if (name.startsWith('/')) return '错误：技能名不要带「/」前缀，直接写名字即可';
+    await _skills.load();
+    if (_skills.findByName(name) != null) {
+      return '已存在同名技能「$name」，未重复安装。可用其他名字，或提示用户到技能页管理。';
+    }
+    await _skills.addSkill(name, template);
+    return '技能「$name」已安装，用户输入「/$name」即可触发。';
+  }
+}
+
 /// Agent 权限模式（聊天状态条的「权限」选择）。
 ///
 /// 三档由松到紧：完全访问 > 工作区读写 > 只读。
@@ -583,13 +683,13 @@ extension AgentPermissionX on AgentPermission {
   /// 只读档可用的内置工具白名单。
   static const _readOnlyTools = <String>{
     'current_time', 'calculator', 'web_search', 'web_fetch', 'search_knowledge',
-    'use_skill',
+    'use_skill', 'search_skills',
   };
 
-  /// 工作区读写档 = 只读 + 记忆写入 + 终端命令。
+  /// 工作区读写档 = 只读 + 记忆写入 + 终端命令 + 技能安装。
   static const _workspaceTools = <String>{
     ..._readOnlyTools,
-    'save_memory', 'run_command',
+    'save_memory', 'run_command', 'install_skill',
   };
 
   /// 是否允许使用 [toolName]。内置名单之外的名字（MCP 扩展工具）
@@ -614,6 +714,7 @@ class ToolRegistry {
     BatchEmbed? batchEmbed,
     TerminalService? terminalService,
     SkillService? skillService,
+    SkillSearchService? skillSearchService,
   }) {
     final dio = Dio(BaseOptions(
       connectTimeout: const Duration(seconds: 20),
@@ -629,6 +730,8 @@ class ToolRegistry {
         SearchKnowledgeTool(ragService, batchEmbed),
       if (terminalService != null) RunCommandTool(terminalService),
       if (skillService != null) UseSkillTool(skillService),
+      if (skillSearchService != null) SearchSkillsTool(skillSearchService),
+      if (skillService != null) InstallSkillTool(skillService),
     ];
   }
 

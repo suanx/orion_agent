@@ -26,6 +26,7 @@ import '../services/permission_service.dart';
 import '../services/rag_service.dart';
 import '../services/role_service.dart';
 import '../services/token_stats_service.dart';
+import '../services/skill_search_service.dart';
 import '../services/skill_service.dart';
 import '../services/storage_service.dart';
 import '../services/terminal_service.dart';
@@ -72,6 +73,7 @@ final toolRegistryProvider = Provider<ToolRegistry>((ref) => ToolRegistry(
       batchEmbed: ref.watch(batchEmbedProvider),
       terminalService: ref.watch(terminalServiceProvider),
       skillService: ref.watch(skillServiceProvider),
+      skillSearchService: ref.watch(skillSearchServiceProvider),
     ));
 
 final llmClientProvider = Provider<LlmClient>(
@@ -196,6 +198,10 @@ final notifySilentProvider = StateProvider<bool>((ref) {
 
 final skillServiceProvider =
     Provider<SkillService>((ref) => SkillService(ref.watch(databaseProvider)));
+
+/// 远程技能搜索服务（内置默认源：中文技能库优先）。
+final skillSearchServiceProvider =
+    Provider<SkillSearchService>((ref) => SkillSearchService());
 
 final roleServiceProvider =
     Provider<RoleService>((ref) => RoleService(ref.watch(databaseProvider)));
