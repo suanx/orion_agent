@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import '../services/terminal_service.dart';
 import '../services/ssh_terminal_service.dart';
 import '../theme.dart';
 
@@ -101,7 +102,8 @@ class _SshTerminalScreenState extends ConsumerState<SshTerminalScreen> {
     });
     try {
       if (!await _svc.isSshdInstalled()) {
-        _log('沙箱内未安装 sshd，正在安装（$(_terminalDistroHint)）…');
+        final hint = _terminalDistroHint;
+        _log('沙箱内未安装 sshd，正在安装（$hint）…');
         final r = await ref.read(terminalServiceProvider).runOn(
               ref.read(terminalServiceProvider).activeDistro,
               _svc.installCommand,
@@ -278,7 +280,7 @@ class _SshTerminalScreenState extends ConsumerState<SshTerminalScreen> {
                         isDense: true,
                         hintText: connected ? '输入命令…（回车执行）' : '未连接',
                         border: const OutlineInputBorder(),
-                        prefixIcon: const Icon(Icons.prompt, size: 18),
+                        prefixIcon: const Icon(Icons.terminal_rounded, size: 18),
                       ),
                     ),
                   ),
