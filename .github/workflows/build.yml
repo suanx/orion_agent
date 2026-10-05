@@ -527,10 +527,21 @@ jobs:
           set -e
           VN=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
           TAG="v$VN"
+          # beta 分支 → 预发布；main 分支 → 正式发布。
+          # 两个分支共用这一个 workflow（push.branches 同时列 main/beta），
+          # 所以发布口径必须靠分支判断，不能写死。
+          IS_BETA=false
+          if [ "$GITHUB_REF" = "refs/heads/beta" ]; then IS_BETA=true; fi
+          PRERELEASE_FLAG="--prerelease=false"
+          TITLE="Orion Agent v$VN"
+          if [ "$IS_BETA" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease=true"
+            TITLE="Orion Agent v$VN (Beta)"
+          fi
           APK=build/app/outputs/flutter-apk/app-release.apk
           test -s "$APK" || { echo "APK 不存在"; exit 1; }
           test -s RELEASE_NOTES.md || { echo "RELEASE_NOTES.md 缺失"; exit 1; }
-          echo "发布 $TAG（versionCode=$GITHUB_RUN_NUMBER）"
+          echo "发布 $TAG（versionCode=$GITHUB_RUN_NUMBER, beta=$IS_BETA）"
           # 提取顶部当前版本段落（从含 vX.Y.Z 的 "# Orion Agent" 标题
           # 到下一个 "# Orion Agent" 标题或文件结束）；提取不到就退回整文件。
           awk -v ver="$TAG" 'BEGIN{p=0} /^# Orion Agent /{if(p)exit; if(index($0,ver)>0)p=1} p' \
@@ -540,17 +551,19 @@ jobs:
           cp "$APK" "orion-agent-v$VN.apk"
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" "orion-agent-v$VN.apk" --clobber -R "$GITHUB_REPOSITORY"
-            gh release edit "$TAG" --notes-file /tmp/rel_notes.md -R "$GITHUB_REPOSITORY"
-            # beta 分支可能先以 pre-release 占用了同版本 tag；稳定版覆盖
-            # 同 tag 时必须取消预发布标记，否则 releases/latest（排除
-            # pre-release）会跳过它，稳定通道用户收不到该版更新
-            gh release edit "$TAG" --prerelease=false -R "$GITHUB_REPOSITORY"
+            gh release edit "$TAG" --notes-file /tmp/rel_notes.md --title "$TITLE" \
+              $PRERELEASE_FLAG -R "$GITHUB_REPOSITORY"
             # 清理历史遗留的未重命名资产
             gh release delete-asset "$TAG" app-release.apk -y -R "$GITHUB_REPOSITORY" || true
           else
+            # --target 必须显式给本次构建的 commit：gh 对不存在的 tag 会
+            # 默认从【默认分支】(main) 打标，导致 beta 发布物的 tag 指向
+            # main 提交（v0.2.18-beta 实测踩过）。
             gh release create "$TAG" "orion-agent-v$VN.apk" \
               -R "$GITHUB_REPOSITORY" \
-              --title "Orion Agent v$VN" \
-              --notes-file /tmp/rel_notes.md
+              --target "$GITHUB_SHA" \
+              --title "$TITLE" \
+              --notes-file /tmp/rel_notes.md \
+              $PRERELEASE_FLAG
           fi
-          echo "已发布 $TAG"
+          echo "已发布 $TAG（beta=$IS_BETA）"
