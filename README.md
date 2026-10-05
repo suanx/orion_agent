@@ -47,6 +47,8 @@ MCP 工具扩展，数据全部留在本机。
 
 - **内置 Linux 环境**——通过 proot 运行 Alpine 3.22 / Debian 12，
   可安装 nodejs、python3、git、uv 等组件；已配置国内镜像（清华源、npmmirror）
+- **应用内交互式终端**——点「打开终端」通过 SSH 连到沙箱内的 sshd，
+  持续会话（cd / top / 连续输入），沙箱未装 openssh 时自动安装并拉起
 
 ### 数据与诊断
 

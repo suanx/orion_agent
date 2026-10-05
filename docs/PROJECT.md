@@ -179,6 +179,7 @@ orion_agent/
 │       ├── storage_settings_screen.dart     存储管理 + 工作区目录选择
 │       ├── about_screen.dart           关于页（软件介绍 + 在线更新 + 日志入口；启动更新的下载/安装已迁至 update_dialog）
 │       ├── log_screen.dart             诊断日志查看/导出
+│       ├── ssh_terminal_screen.dart     交互式 SSH 终端（连沙箱 sshd，持续会话）
 │       ├── backup_screen.dart          备份与恢复（数据域开关 + 导出/导入）
 │       ├── profile_screen.dart         我的
 │       ├── cloud_account_screen.dart   云端服务（Hero 登录页 + 多功能个人中心）
@@ -504,13 +505,28 @@ apk add / apt install 改变，旧结果会骗人；IndexedStack 保活导致
 initState 只跑一次，故必须挂生命周期）。终端页是 push 页面，每次进入
 本身即 initState 检测。
 
+**交互式终端（SSH）**（2026-10-06）：`ssh_terminal_service.dart` +
+`ssh_terminal_screen.dart`。链路 = **App → SSH(127.0.0.1:8022) → proot
+内的 OpenSSH**（proot 不隔离网络，guest 监听端口宿主可直接连，无需端口
+转发）。要点：
+- `ensureSshd()`：探测端口 → 没有则 `ssh-keygen -A` + `chpasswd`（root
+  密码 `orion`）+ 追加 `PermitRootLogin yes` 等配置的**幂等片段**（靠
+  `orion_agent_managed` 标记行去重），再 `startOn('exec /usr/sbin/sshd -D -e')`
+  常驻；沙箱没装 openssh 时页面自动 `apk add` / `apt install`
+- 会话用 dartssh2（**纯 Dart，无原生代码**，不影响 compileSdk）：
+  `SSHSocket.connect` → `SSHClient(onPasswordRequest)` → `client.shell()`
+  拿 pty；`shell.stdout/stderr` 持续收，`shell.write` 发输入
+- 渲染是「等宽日志 + 输入行 + 快捷键（^C / Tab / ↑↓ 历史）」，**不是**
+  全屏 ANSI 模拟器：pty 控制序列经 `stripAnsi` 清理；全屏 curses 程序
+  （vim/htop）显示会异常，建议用「命令控制台」跑
+- 输出缓冲上限 200K 字符，超限从中间截断（长时间挂着会无限增长）
+
 **组件自动检测 + 「打开终端」**（2026-10-06）：①每次进入页面即自动检测
 （已安装时 initState 直接跑 `_checkTools`，用户不必点「检测组件」）；安装
 完成后再自动跑一次；页面在前台时每次 `AppLifecycleState.resumed` 重测。
 ②「打开终端」按钮在终端页**「自启动任务」区块标题右侧**（空态时与「+ 新增
-任务」并排，**不是**「自动任务」Tab）→ `Scrollable.ensureVisible` 滚到
-「命令控制台」并延迟 100ms 请求焦点（滚动中直接 focus 会被手势打断，键盘
-弹不出），配合 `_consoleKey` / `_cmdFocus`。
+任务」并排，**不是**「自动任务」Tab）→ push `SshTerminalScreen`（交互式
+SSH 终端）。
 
 **组件检测** (`terminal_screen.dart:15-25`)：nodejs / npm / git / python / uv / pip / ssh / sshd
 （OpenCode CLI 组件已于 2026-10-05 按用户要求移除：检测项与安装脚本中的

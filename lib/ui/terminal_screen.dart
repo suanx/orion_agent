@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import '../theme.dart';
+import 'ssh_terminal_screen.dart';
 import 'glass.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -120,20 +121,15 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     super.dispose();
   }
 
-  /// 「打开终端」：滚动到命令控制台并聚焦输入框（键盘直接弹出）。
+  /// 「打开终端」：进入**交互式 SSH 终端**全屏页。
   ///
-  /// 先滚后聚焦：滚动动画进行中立刻 requestFocus 会被滚动手势打断，
-  /// 键盘偶尔弹不出来，因此延后一个短周期再请求焦点。
+  /// 与上方「命令控制台」的区别：控制台是敲一条命令看一次输出，这里是通过
+  /// SSH(127.0.0.1:8022) 连到沙箱里的 pty 持续会话——可以 cd、跑 top、
+  /// 连续输入，用法和 Termux 里 `ssh localhost` 一致。沙箱没装 sshd 时
+  /// 页面会自动装并拉起服务。
   void _openConsole() {
-    final ctx = _consoleKey.currentContext;
-    if (ctx != null) {
-      Scrollable.ensureVisible(ctx,
-          duration: const Duration(milliseconds: 320),
-          curve: Curves.easeOutCubic);
-    }
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) _cmdFocus.requestFocus();
-    });
+    Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const SshTerminalScreen()));
   }
 
   /// 显式刷新 Workspace 目录（需要时调用并触发重建）。
