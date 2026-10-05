@@ -507,9 +507,12 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                 ),
               ),
             _sectionTitle('命令控制台'),
-            _card(
+            // KeyedSubtree 承载锚点：_card(Widget) 没有 key 参数，
+            // 直接传 key 会编译不过（v0.2.12 analyze 报错）
+            KeyedSubtree(
               key: _consoleKey,
-              Row(
+              child: _card(
+                Row(
                 children: [
                   Expanded(
                     child: TextField(
@@ -530,9 +533,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
                     onPressed: _busy ? null : _runCommand,
                     icon: const Icon(Icons.play_arrow_rounded),
                   ),
-                ],
+                    ],
+                  ),
+                ),
               ),
-            ),
             _sectionTitleWithAction(
               '自启动任务',
               // 「打开终端」：跳到上面的命令控制台并直接唤起键盘——
