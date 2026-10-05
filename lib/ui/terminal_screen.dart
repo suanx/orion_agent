@@ -57,6 +57,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
   /// 与「环境正常但组件没装」区分开，避免用户白费力气反复安装。
   bool _envBroken = false;
   final _log = StringBuffer();
+
+  /// 与 [_log] 同步的逐行副本（用于按行裁剪；重复行折叠时以本列表为准）
+  final List<String> _logLines = <String>[];
   final _checks = <String, (bool, String?)>{}; // name -> (ready, version)
   final _cmdCtrl = TextEditingController();
   /// 命令控制台输入框焦点：「打开终端」按钮用它把键盘直接顶起来
@@ -168,8 +171,46 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     _refreshInstalled();
   }
 
+  /// 日志行数上限：安装/诊断的输出可能上千行（并发 proot 探测时尤其），
+  /// 超出后丢最旧的，避免 Text 越来越长把渲染拖慢。
+  static const _maxLogLines = 400;
+
+  /// 上一行写入的内容与重复次数（用于折叠连续重复行）。
+  String? _lastLogLine;
+  int _lastLogRepeat = 1;
+
+  /// 收尾上一组重复行：连续相同内容只写一行，出现过多次时补一条「×N」。
+  void _flushRepeat() {
+    if (_lastLogRepeat > 1) {
+      final note = '  ↳ 上行重复 $_lastLogRepeat 次';
+      _log.writeln(note);
+      _logLines.add(note);
+    }
+    _lastLogRepeat = 1;
+  }
+
   void _appendLog(String s) {
-    _log.writeln(s);
+    final line = s.trimRight();
+    if (line.isNotEmpty && line == _lastLogLine) {
+      // 重复行：先不写，等下一条不同内容到来时收尾成「×N」
+      _lastLogRepeat++;
+    } else {
+      _flushRepeat();
+      _lastLogLine = line;
+      _lastLogRepeat = 1;
+      // 超上限：一次性丢一半（比每行裁剪便宜），保证日志不会无限膨胀
+      if (_logLines.length > _maxLogLines) {
+        final kept = _logLines.sublist(_logLines.length - _maxLogLines ~/ 2);
+        _log
+          ..clear()
+          ..writeln(kept.join('\n'));
+        _logLines
+          ..clear()
+          ..addAll(kept);
+      }
+      _log.writeln(s);
+      _logLines.add(s);
+    }
     if (!mounted) return;
     // 只标脏 + 100ms 合帧（P2-5）：安装输出每行一次 setState，
     // 长输出时整页 rebuild 频率过高，合并到定时器里统一刷。
@@ -283,23 +324,36 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
       // 为什么单项短超时（20s 而非默认 120s）：某个组件的探测命令若在
       // guest 里挂住（组件的 --version 可能尝试联网），
       // 串行下会拖住整轮检测。并发 + 短超时把最坏情况压到 20 秒。
-      final results = await Future.wait<String?>([
-        for (final t in _toolChecks)
-          _terminal
-              .runOn(
-                _distro,
-                'if command -v ${t.binary} >/dev/null 2>&1; '
-                'then ${t.probe} 2>&1; '
-                'else echo __missing__; fi',
-                timeout: const Duration(seconds: 20),
-              )
-              .then<String?>((r) => r.output.trim())
-              // 单个组件失败不该中断整轮
-              .catchError((Object e) {
-            _appendLog('${t.name} 探测异常：${_clip(e.toString())}');
-            return null;
-          }),
-      ]);
+      // 分批并发（每批 3 个），而不是 9 个 proot 同时起：
+      // proot 启动时会对 /dev、/tmp 做路径重写与修复，多个实例并发操作
+      // 同一份 rootfs/临时目录会互相踩（实测刷出成片的
+      // "Deletion failed, path = '/data/utmp'" 噪声，甚至互相删对方的
+      // 临时文件）。3 个一批既保留并行提速（9×2s → 3×2s），又避免竞争。
+      const batchSize = 3;
+      final results = <String?>[];
+      for (var start = 0; start < _toolChecks.length; start += batchSize) {
+        final batch = _toolChecks.skip(start).take(batchSize).toList();
+        final part = await Future.wait<String?>([
+          for (final t in batch)
+            _terminal
+                .runOn(
+                  _distro,
+                  'if command -v ${t.binary} >/dev/null 2>&1; '
+                  'then ${t.probe} 2>&1; '
+                  'else echo __missing__; fi',
+                  timeout: const Duration(seconds: 20),
+                )
+                .then<String?>((r) => r.output.trim())
+                // 单个组件失败不该中断整轮
+                .catchError((Object e) {
+              _appendLog('${t.name} 探测异常：${_clip(e.toString())}');
+              return null;
+            }),
+        ]);
+        results.addAll(part);
+        // 每批完成刷一次，用户能看到进度在走
+        if (mounted) setState(() {});
+      }
 
       for (var i = 0; i < _toolChecks.length; i++) {
         final t = _toolChecks[i];
