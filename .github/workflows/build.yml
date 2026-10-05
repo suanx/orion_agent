@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      obfuscate:
+        description: '混淆测试版（--obfuscate，产物仅存 artifact 不发 Release）'
+        type: boolean
+        required: false
+        default: false
 
 # 发布 terminal-env Release（Debian rootfs）需要写权限
 permissions:
@@ -423,11 +429,22 @@ jobs:
           echo "versionName=$VN versionCode=$GITHUB_RUN_NUMBER"
           # ⚠️ v0.2.2 曾启用 --obfuscate --split-debug-info，装机白屏（启动失败）。
           # APK 取证：R8 未生效（dex 内插件类名原样）、libapp.so 缩 1.4MB（混淆生效）
-          # → 判定 --obfuscate 为白屏主因，已回退。重新引入前必须单独出测试版
-          # 真机验证（见 docs/PROJECT.md §11.18）。
+          # → 判定 --obfuscate 为白屏主因，已回退。重新引入走分步协议（§11.18）：
+          # 第一步 = 手动触发（inputs.obfuscate=true）出【混淆测试版】，artifact
+          #   命名 orion-agent-apk-test，不发布 Release；真机验证启动/对话/工具调用
+          #   全部正常后，第二步才把正式发布构建切到混淆。
+          # 当时导致白屏的两个 release-only 崩溃（Markdown 样式表空断言、
+          # AnimatedContainer clip 无 decoration）已在 v0.2.5/v0.2.6 修复，
+          # 且发布版有红色错误卡片兜底（异常可见），本次重试有判据。
+          OBF=""
+          if [ "${{ inputs.obfuscate }}" = "true" ]; then
+            OBF="--obfuscate --split-debug-info=build/app/symbols"
+            echo "混淆测试版：$OBF"
+          fi
           flutter build apk --release \
             --target-platform android-arm64 \
-            --build-name="$VN" --build-number="$GITHUB_RUN_NUMBER" 2>&1 \
+            --build-name="$VN" --build-number="$GITHUB_RUN_NUMBER" \
+            $OBF 2>&1 \
             | tee /tmp/build.txt
           RC=${PIPESTATUS[0]}
           if [ "$RC" -ne 0 ]; then
@@ -448,14 +465,28 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: orion-agent-apk
+          # 混淆测试版用独立 artifact 名，避免与正式包混淆误装
+          name: ${{ inputs.obfuscate == true && 'orion-agent-apk-test' || 'orion-agent-apk' }}
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload obfuscation symbols
+        # 混淆产物的符号表（--split-debug-info 输出）：崩溃堆栈用
+        # `flutter symbolize -d <libapp.so> -i <trace.txt> -o out.txt` 还原。
+        # 必须与 APK 同 run 归档留档，缺失则该版崩溃无法解析。
+        if: ${{ inputs.obfuscate == true }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: orion-agent-symbols
+          path: build/app/symbols/
 
       - name: Publish to GitHub Releases
         # 正式发布：APK 上传到 Releases（tag = 版本号），更新说明取
         # 仓库根的 RELEASE_NOTES.md 顶部**当前版本段落**（整文件贴会把
         # 历史版本说明全部带进每个 Release 正文）。
         # 应用内「关于 → 检查更新」读取的就是这里的 latest release。
+        # 仅 push 触发时发布——手动触发的混淆测试版【不发 Release】，
+        # 避免 test 包进入应用内更新通道（关于页 latest release 校验）。
+        if: ${{ github.event_name == 'push' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

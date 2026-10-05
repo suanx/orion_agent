@@ -12,7 +12,9 @@ import { readFileSync } from "node:fs";
 
 const REPO = "suanx/orion_agent";
 const API = "https://api.github.com";
-const BRANCH = "main";
+// 目标分支：默认 main；PUSH_BRANCH 环境变量可推到其它分支（须已存在，
+// 用 git refs API 先建分支再推送）。
+const BRANCH = process.env.PUSH_BRANCH || "main";
 
 // 凭据: 优先环境变量 GITHUB_TOKEN（git credential fill 在部分 Windows
 // 沙箱下 spawnSync 会报 EBUSY），否则走 credential manager（永不回显）。
