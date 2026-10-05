@@ -9,6 +9,7 @@ import 'about_screen.dart';
 import 'appearance_screen.dart';
 import 'cloud_account_screen.dart';
 import 'default_models_screen.dart';
+import 'font_settings_screen.dart';
 import 'knowledge_screen.dart';
 import 'mcp_screen.dart';
 import 'memory_screen.dart';
@@ -156,6 +157,13 @@ class ProfileScreen extends ConsumerWidget {
               label: '外观主题',
               value: _modeLabel(mode),
               onTap: () => _push(context, const AppearanceScreen()),
+            ),
+            _Row(
+              icon: Icons.format_size_rounded,
+              label: '对话字体',
+              value: FontSettingsScreen.labelOf(
+                  ref.watch(chatFontScaleProvider)),
+              onTap: () => _push(context, const FontSettingsScreen()),
             ),
             _Row(
               icon: Icons.notifications_none_rounded,

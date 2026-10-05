@@ -11,12 +11,14 @@
       应用自报版本落后，装了最新版也会一直提示更新同版本（见 docs/PROJECT.md §11.17）。
    2. `RELEASE_NOTES.md` 顶部新增本版更新说明
    3. 推送到 main → 等 CI（flutter analyze/test/build）全绿
-   4. 用 GitHub API 下载最新 run 的 Artifacts → 解压出 APK，
-      改名 `orion-agent-vX.Y.Z.apk`；同 run 的 `orion-agent-symbols`
-      artifact（混淆符号文件）留档，供崩溃堆栈 `flutter symbolize` 还原
-   5. 创建 GitHub Release：tag `vX.Y.Z`，名称 `Orion Agent vX.Y.Z`，
-      正文与 `RELEASE_NOTES.md` 一致，上传 APK 附件
-      （`ci_check/make_release.mjs` 可一键完成 4-5 步）
+      **注意：build.yml 已内置自动发版**——CI 绿了之后 GitHub Actions bot
+      会自动创建 tag `vX.Y.Z` 的 Release（正文取 RELEASE_NOTES.md 顶部段落）
+      并上传 `orion-agent-vX.Y.Z.apk`，无需手动发版；
+   4. （兜底）若 CI 没自动发版，用 `ci_check/make_release.mjs <run_id> <版本>`
+      手动完成：下载 APK artifact → 创建 Release → 上传 APK。
+      推送用 `ci_check/push_update.mjs`（Git Data API 单 commit 快进 main，
+      支持 GITHUB_TOKEN 环境变量或 credential manager 凭据，
+      永远不要回显密码）
 
 注意：本机 git 直连 github.com 不通，推送/发版一律走 GitHub REST API
 （可复用工作区的 `push_update.mjs` 与 credential manager 中的凭据，

@@ -781,6 +781,14 @@ State，只有 `HomeShell` 知道怎么切；navigatorKey 只能 push/pop。
 Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 —— 与 `HomeTab` 常量一一对应。
 
+**对话字体缩放**：`我的 → 外观 → 对话字体`（`FontSettingsScreen`，四档预设
+小/标准/大/特大 → 0.85/1.0/1.15/1.3，SharedPreferences key
+`chat_font_scale`，provider `chatFontScaleProvider`）。实现方式：chat_screen
+消息区外层包 `MediaQuery.copyWith(textScaler: TextScaler.linear(scale))`——
+只缩放消息内容（用户气泡 / Markdown 正文 / 思考面板），顶栏与输入栏不受影响；
+`scale == 1.0` 时与默认渲染完全等价。刻意不开放任意滑杆：极端缩放下行高、
+气泡宽度与代码块排版需人工校验，只保留验证过的四档。
+
 `ref.listen(navIntentProvider)` 注册在 `initState`（**不能放 build**：
 每次重建会新增监听，且回调里改 provider 会触发「build 期间不可修改 provider」断言）。
 
@@ -830,6 +838,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | `terminal_screen` | ✅ 安装/卸载/组件检测/自启任务 |
 | `settings_screen` | ✅ 多模型服务 CRUD |
 | `appearance_screen` | ✅ 6 主题 + 3 明暗模式 |
+| `font_settings_screen` | ✅ 对话字体四档缩放（带实时预览） |
 | `notification_settings_screen` | ✅ 4 项设置 + 权限申请 |
 | `storage_settings_screen` | ✅ 统计 + 2 项清理 |
 | `tasks_screen` | ⚠️ **M3 占位页，无任何实现** |
@@ -939,6 +948,7 @@ grep -qE 'jvmTarget\s*=\s*.*(JVM_17|VERSION_17)' "$F" || exit 1
 | `notify_silent` | bool | `false` | 静音通知 |
 | `theme_id` | String | `classic` | 配色主题 |
 | `theme_mode` | String | `system` | `system`/`light`/`dark` |
+| `chat_font_scale` | double | `1.0` | 对话字体缩放（0.85/1.0/1.15/1.3，`chatFontScaleProvider`，入口：我的→对话字体→`FontSettingsScreen`） |
 | `terminal_setup_done` | bool | `false` | 首次运行引导是否已完成 |
 | `terminal_tasks` | String(JSON) | `[]` | 终端自启动任务数组 |
 | `cloud_base_url` | String | 无 | 云端服务器地址（空 = 云功能降级，本地不受影响） |

@@ -248,6 +248,18 @@ final themeModeProvider = StateProvider<ThemeMode>((ref) {
   }
 });
 
+/// 对话字体缩放系数（持久化，默认 1.0 标准字号）。
+///
+/// 只作用于对话页的【消息区域】（用户气泡 / Markdown 正文 / 思考面板），
+/// 通过 MediaQuery textScaler 实现，顶栏与输入栏不受影响。
+/// 取值来自 FontSettingsScreen 的四档预设（0.85 / 1.0 / 1.15 / 1.3），
+/// 不开放任意滑杆——文字排版在极端缩放下（行高/气泡宽度）需要人工校验。
+final chatFontScaleProvider = StateProvider<double>((ref) {
+  return ref.watch(sharedPreferencesProvider)
+          .getDouble('chat_font_scale') ??
+      1.0;
+});
+
 final mcpServiceProvider = Provider<McpService>((ref) =>
     McpService(ref.watch(databaseProvider), ref.watch(toolRegistryProvider)));
 

@@ -432,22 +432,30 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ),
         // ------- 消息区 -------
+        // 对话字体缩放（我的 → 对话字体）：通过 MediaQuery textScaler
+        // 只缩放消息区域的文字（气泡/正文/思考面板），顶栏与输入栏保持
+        // 标准字号；scale == 1.0 时与系统默认渲染完全等价。
         Expanded(
-          child: empty
-              ? _EmptyGreeting(
-                  onSuggestion: (text) {
-                    ref.read(chatProvider.notifier).send(text);
-                    Future.delayed(
-                        const Duration(milliseconds: 300), _scrollToBottom);
-                  },
-                )
-              : ListView.builder(
-                  controller: _scrollController,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  itemCount: items.length,
-                  itemBuilder: (_, i) => items[i],
-                ),
+          child: MediaQuery(
+            data: MediaQuery.of(context).copyWith(
+              textScaler: TextScaler.linear(ref.watch(chatFontScaleProvider)),
+            ),
+            child: empty
+                ? _EmptyGreeting(
+                    onSuggestion: (text) {
+                      ref.read(chatProvider.notifier).send(text);
+                      Future.delayed(
+                          const Duration(milliseconds: 300), _scrollToBottom);
+                    },
+                  )
+                : ListView.builder(
+                    controller: _scrollController,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    itemCount: items.length,
+                    itemBuilder: (_, i) => items[i],
+                  ),
+          ),
         ),
         // ------- 待发送图片 -------
         if (_pendingImages.isNotEmpty)

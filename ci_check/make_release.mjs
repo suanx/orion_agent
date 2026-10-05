@@ -15,11 +15,16 @@ const REPO = "suanx/orion_agent";
 const API = "https://api.github.com";
 const UPLOAD = "https://uploads.github.com";
 
-const cred = execFileSync("git", ["credential", "fill"], {
-  input: "protocol=https\nhost=github.com\n",
-  encoding: "utf8",
-});
-const token = /^password=(.*)$/m.exec(cred)?.[1];
+// 凭据: 优先环境变量 GITHUB_TOKEN（git credential fill 在部分 Windows
+// 沙箱下 spawnSync 会报 EBUSY），否则走 credential manager（永不回显）。
+let token = process.env.GITHUB_TOKEN;
+if (!token) {
+  const cred = execFileSync("git", ["credential", "fill"], {
+    input: "protocol=https\nhost=github.com\n",
+    encoding: "utf8",
+  });
+  token = /^password=(.*)$/m.exec(cred)?.[1];
+}
 if (!token) { console.error("无凭据"); process.exit(1); }
 const headers = {
   Authorization: `Bearer ${token}`,
