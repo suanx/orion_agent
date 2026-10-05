@@ -154,6 +154,8 @@ orion_agent/
 │   │   ├── mcp_client.dart            MCP 协议客户端
 │   │   ├── mcp_service.dart           MCP 连接管理
 │   │   ├── cloud_service.dart         云端后端客户端（账号/卡密/中继/更新，国内可达）
+│   │   ├── app_log.dart               诊断日志（内存环形缓冲 + 导出）
+│   │   ├── backup_service.dart        备份与恢复（供应商/历史/MCP/设置 → JSON）
 │   │   ├── skill_service.dart         技能（18 个内置）
 │   │   ├── role_service.dart          角色（无预置）
 │   │   ├── file_storage_service.dart  存储统计与清理
@@ -174,7 +176,9 @@ orion_agent/
 │       ├── appearance_screen.dart      主题/明暗模式
 │       ├── notification_settings_screen.dart  通知设置
 │       ├── storage_settings_screen.dart     存储管理 + 工作区目录选择
-│       ├── about_screen.dart           关于页（软件介绍 + 在线更新）
+│       ├── about_screen.dart           关于页（软件介绍 + 在线更新 + 日志入口）
+│       ├── log_screen.dart             诊断日志查看/导出
+│       ├── backup_screen.dart          备份与恢复（数据域开关 + 导出/导入）
 │       ├── profile_screen.dart         我的
 │       ├── cloud_account_screen.dart   云端服务（Hero 登录页 + 多功能个人中心）
 │       └── setup_screen.dart           首次运行引导
@@ -835,6 +839,10 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
   流式 delta 不重复解析历史消息
 - 输入栏：发送/停止按钮切换、图片附件（`image_picker` 拍照或相册，1600px/quality80）
 - 语音输入（麦克风按钮）、技能调用（`/技能名`）
+- **文件附件**（2026-10-05）：「+」菜单第三项「文件（文本类）」走
+  FilePicker（SAF，免存储权限）；仅支持 512KB 内可 UTF-8 解码的文本类
+  文件（二进制/超限明确提示），发送时以「【附件：名称】+ text 代码块」
+  并入消息正文；待发送文件在输入框上方以行条展示可移除
 - **发送前拦截**（`:112-119`）：流式期间必须**先拦截再清空输入框**，
   否则用户刚输入的文字和已选图片会被静默销毁
 - **自动滚动**（`:214-221`）：按 `streamingContent` 长度去重后才注册
@@ -854,14 +862,16 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | `skills_screen` | ✅ 18 内置 + 自定义 |
 | `roles_screen` | ✅ CRUD（无预置） |
 | `knowledge_screen` | ⚠️ 仅文本粘贴，无文件导入 |
-| `mcp_screen` | ✅ 添加/启用/删除 + 重连 |
+| `mcp_screen` | ✅ 添加/编辑/启用/删除 + 重连（2026-10-05 增编辑） |
+| `log_screen` | ✅ 诊断日志：AppLog 环形缓冲查看/复制/导出（入口：关于→日志） |
+| `backup_screen` | ✅ 备份与恢复：四类数据域开关 + 导出/导入 JSON |
 | `terminal_screen` | ✅ 安装/卸载/组件检测/自启任务 |
 | `settings_screen` | ✅ 多模型服务 CRUD |
 | `appearance_screen` | ✅ 6 主题 + 3 明暗模式 |
 | `font_settings_screen` | ✅ 对话字体四档缩放（带实时预览） |
 | `notification_settings_screen` | ✅ 4 项设置 + 权限申请 |
 | `storage_settings_screen` | ✅ 统计 + 2 项清理 |
-| `tasks_screen` | ⚠️ **M3 占位页，无任何实现** |
+| `tasks_screen` | ✅ 自动任务（每日/手动 + 启动补跑 + 存活期调度） |
 
 ---
 
@@ -986,6 +996,10 @@ grep -qE 'jvmTarget\s*=\s*.*(JVM_17|VERSION_17)' "$F" || exit 1
 | `theme_id` | String | `classic` | 配色主题 |
 | `theme_mode` | String | `system` | `system`/`light`/`dark` |
 | `chat_font_scale` | double | `1.0` | 对话字体缩放（0.85/1.0/1.15/1.3，`chatFontScaleProvider`，入口：我的→对话字体→`FontSettingsScreen`） |
+| `backup_inc_configs` | bool | `true` | 备份包含 AI 供应商（含 API Key） |
+| `backup_inc_history` | bool | `true` | 备份包含聊天历史 |
+| `backup_inc_mcp` | bool | `true` | 备份包含 MCP 服务器 |
+| `backup_inc_settings` | bool | `true` | 备份包含应用设置 |
 | `beta_opt_in` | bool | `false` | 加入 Beta 测试（`betaOptInProvider`，入口：关于页开关）。开启后更新检查走 GitHub releases 列表（含 pre-release、跳过 draft），云端 /update/check 被旁路；关闭后恢复「云端优先 → GitHub latest」。Beta 发布的 tag 仍须是纯 vX.Y.Z 数字（预发布语义用 GitHub pre-release 勾选表达），带 `-beta.1` 后缀会破坏逐段数字比较 |
 | `terminal_setup_done` | bool | `false` | 首次运行引导是否已完成 |
 | `terminal_tasks` | String(JSON) | `[]` | 终端自启动任务数组 |

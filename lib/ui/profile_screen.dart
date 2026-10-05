@@ -7,6 +7,7 @@ import 'status_bar_area.dart';
 import '../providers/providers.dart';
 import 'about_screen.dart';
 import 'appearance_screen.dart';
+import 'backup_screen.dart';
 import 'cloud_account_screen.dart';
 import 'default_models_screen.dart';
 import 'font_settings_screen.dart';
@@ -182,6 +183,19 @@ class ProfileScreen extends ConsumerWidget {
               icon: Icons.notifications_none_rounded,
               label: '通知',
               onTap: () => _push(context, const NotificationSettingsScreen()),
+            ),
+          ],
+        ),
+
+        // ------- 备份与恢复 -------
+        _Group(
+          title: '备份与恢复',
+          children: [
+            _Row(
+              icon: Icons.backup_outlined,
+              label: '备份与恢复',
+              value: '导出 / 导入',
+              onTap: () => _push(context, const BackupScreen()),
             ),
           ],
         ),

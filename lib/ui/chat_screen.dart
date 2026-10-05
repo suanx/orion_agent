@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'format_utils.dart';
 import 'glass.dart';
@@ -83,6 +84,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final _pendingImages = <String>[]; // data URL
+
+  /// 待发送的文本类文件附件（名称 + UTF-8 文本内容）。
+  /// 发送时以「【附件：名称】+ 代码块」形式并入消息正文。
+  final _pendingFiles = <({String name, String content})>[];
   bool _hasText = false;
   bool _listening = false;
   /// 上次触发自动滚动的流式内容长度，避免每帧都注册 post-frame 回调。
@@ -124,7 +129,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _send() {
     var text = _inputController.text.trim();
-    if (text.isEmpty && _pendingImages.isEmpty) return;
+    if (text.isEmpty && _pendingImages.isEmpty && _pendingFiles.isEmpty) {
+      return;
+    }
 
     // 没有可用模型时直接拦下并说明原因。ChatNotifier.send() 里也有
     // 同样的守卫，但那时用户已经按下发送、看到按钮无反应，
@@ -161,6 +168,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       text = SkillService.expand(skill, args);
     }
 
+    // 文本类文件附件并入消息正文：模型对纯文本的兼容性远好于
+    // 自定义文件协议，代码块包裹保留缩进与换行。
+    for (final f in _pendingFiles) {
+      text = '$text\n\n【附件：${f.name}】\n```text\n${f.content}\n```';
+    }
+
     if (text.isEmpty && _pendingImages.isEmpty) return;
     // 必须在清空输入框【之前】拦截。并发守卫在 ChatNotifier.send() 里，
     // 而那时输入框和图片列表已经被清空了：流式期间按回车，用户刚输入的文字
@@ -173,7 +186,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     final images = List<String>.of(_pendingImages);
     _inputController.clear();
-    setState(_pendingImages.clear);
+    setState(() {
+      _pendingImages.clear();
+      _pendingFiles.clear();
+    });
     ref.read(chatProvider.notifier).send(text, images: images);
     Future.delayed(const Duration(milliseconds: 300), _scrollToBottom);
   }
@@ -240,28 +256,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         .upsert(active.copyWith(defaultChatModel: sel));
   }
 
-  /// 添加图片——锚定在输入栏加号图标上方的浮层。
-  Future<void> _addImage(BuildContext anchor) async {
-    final source = await showGlassAnchoredMenu<ImageSource>(
+  /// 添加附件——锚定在输入栏加号图标上方的浮层。
+  /// 拍照 / 相册走 ImagePicker（图片），「文件」走 FilePicker（文本类附件）。
+  Future<void> _addAttachment(BuildContext anchor) async {
+    final source = await showGlassAnchoredMenu<String>(
       context: context,
       anchor: anchor,
       options: const [
         GlassMenuOption(
-          value: ImageSource.camera,
+          value: 'camera',
           title: '拍照',
           icon: Icons.photo_camera_outlined,
         ),
         GlassMenuOption(
-          value: ImageSource.gallery,
+          value: 'gallery',
           title: '从相册选择',
           icon: Icons.photo_outlined,
+        ),
+        GlassMenuOption(
+          value: 'file',
+          title: '文件（文本类）',
+          icon: Icons.description_outlined,
         ),
       ],
     );
     if (source == null) return;
+    if (source == 'file') {
+      await _pickFile();
+      return;
+    }
     try {
-      final picked = await ImagePicker()
-          .pickImage(source: source, imageQuality: 80, maxWidth: 1600);
+      final picked = await ImagePicker().pickImage(
+          source: source == 'camera'
+              ? ImageSource.camera
+              : ImageSource.gallery,
+          imageQuality: 80,
+          maxWidth: 1600);
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
       // readAsBytes 是异步间隙，widget 可能已被销毁（路由被pop、热重载、
@@ -275,6 +305,48 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('获取图片失败：$e')));
+    }
+  }
+
+  /// 选择文本类文件附件：仅支持 512KB 内可按 UTF-8 解码的文件
+  /// （代码 / Markdown / 配置等），二进制文件明确提示不支持。
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        withData: true,
+      );
+      if (!mounted) return;
+      final file = result?.files.singleOrNull;
+      if (file == null) return;
+      final bytes = file.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('读取文件失败：内容为空')));
+        return;
+      }
+      if (bytes.length > 512 * 1024) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('文件过大（上限 512KB），请摘取相关内容后粘贴')));
+        return;
+      }
+      final String content;
+      try {
+        content = utf8.decode(bytes, allowMalformed: false);
+      } catch (_) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('仅支持文本类文件（代码 / Markdown / 配置等），'
+                '二进制文件无法作为附件发送')));
+        return;
+      }
+      setState(() => _pendingFiles.add((
+            name: file.name,
+            content: content.trim().isEmpty ? '（空文件）' : content,
+          )));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('选择文件失败：$e')));
     }
   }
 
@@ -457,6 +529,46 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
           ),
         ),
+        // ------- 待发送文件附件 -------
+        if (_pendingFiles.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Column(
+              children: [
+                for (var i = 0; i < _pendingFiles.length; i++)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: surface(context),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.description_outlined,
+                            size: 16, color: Colors.blueGrey),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            _pendingFiles[i].name,
+                            style: const TextStyle(fontSize: 12.5),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () =>
+                              setState(() => _pendingFiles.removeAt(i)),
+                          child: Icon(Icons.close_rounded,
+                              size: 16, color: onSurface(context, 0.4)),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
         // ------- 待发送图片 -------
         if (_pendingImages.isNotEmpty)
           SizedBox(
@@ -503,12 +615,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _InputBar(
           controller: _inputController,
           hasText: _hasText,
-          hasImages: _pendingImages.isNotEmpty,
+          hasImages: _pendingImages.isNotEmpty || _pendingFiles.isNotEmpty,
           isStreaming: chat.isStreaming,
           isListening: _listening,
           onSend: _send,
           onStop: () => ref.read(chatProvider.notifier).stop(),
-          onAddImage: _addImage,
+          onAddImage: _addAttachment,
           onMic: _toggleMic,
           // 模型选择：麦克风旁的调音图标，点击居中弹窗选择当前模型
           modelName: ref.watch(configProvider).activeConfig?.chatModel?.name,

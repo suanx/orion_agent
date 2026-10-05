@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'models/chat_session.dart';
 import 'providers/providers.dart';
+import 'services/app_log.dart';
 import 'services/database.dart';
 import 'services/memory_service.dart';
 import 'services/navigation_service.dart';
@@ -17,6 +18,7 @@ import 'services/skill_service.dart';
 import 'services/storage_service.dart';
 import 'services/terminal_service.dart';
 import 'theme.dart';
+import 'ui/about_screen.dart' show kAppVersion;
 import 'ui/home_shell.dart';
 
 /// 开启沉浸式状态栏：内容延伸到状态栏与手势导航条下方。
@@ -95,13 +97,19 @@ Future<void> main() async {
         // 行数太少会把关键帧截掉（v0.2.5 的 8 行就没截到业务帧）。
         sb.write(st.split('\n').take(14).join('\n'));
       }
+      // 组件渲染错误同步进诊断日志（关于 → 日志 可查看/导出）
+      AppLog.e('组件渲染出错', sb.toString());
       return _buildErrorCard(sb.toString());
     };
   }
   ui.PlatformDispatcher.instance.onError = (error, stack) {
     debugPrint('Uncaught async error: $error\n$stack');
+    // 未捕获异步错误进诊断日志（只取堆栈前 10 行，防止刷爆环形缓冲）
+    AppLog.e('未捕获异步错误', '$error\n${stack.toString().split('\n').take(10).join('\n')}');
     return true;
   };
+
+  AppLog.i('应用启动 v$kAppVersion');
 
   final prefs = await SharedPreferences.getInstance();
 

@@ -17,6 +17,7 @@ import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 import '../models/llm_config.dart';
 import '../services/agent_orchestrator.dart';
+import '../services/backup_service.dart';
 import '../services/cloud_service.dart';
 import '../services/database.dart';
 import '../services/llm_client.dart';
@@ -52,6 +53,13 @@ final storageServiceProvider =
 
 final memoryServiceProvider =
     Provider<MemoryService>((ref) => MemoryService(ref.watch(databaseProvider)));
+
+/// 备份与恢复：读写四类数据域（供应商 / 聊天历史 / MCP / 应用设置）。
+final backupServiceProvider = Provider<BackupService>((ref) => BackupService(
+      ref.watch(databaseProvider),
+      ref.watch(sharedPreferencesProvider),
+      const FlutterSecureStorage(),
+    ));
 
 /// 长期记忆条数（响应式）。
 ///
