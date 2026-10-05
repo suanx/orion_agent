@@ -154,6 +154,8 @@ orion_agent/
 │   │   ├── mcp_client.dart            MCP 协议客户端
 │   │   ├── mcp_service.dart           MCP 连接管理
 │   │   ├── cloud_service.dart         云端后端客户端（账号/卡密/中继/更新，国内可达）
+│   │   ├── app_log.dart               诊断日志（内存环形缓冲 + 导出）
+│   │   ├── backup_service.dart        备份与恢复（供应商/历史/MCP/设置 → JSON）
 │   │   ├── skill_service.dart         技能（18 个内置）
 │   │   ├── role_service.dart          角色（无预置）
 │   │   ├── file_storage_service.dart  存储统计与清理
@@ -162,6 +164,7 @@ orion_agent/
 │   │
 │   └── ui/                界面层
 │       ├── home_shell.dart             4 Tab 外壳 + 抽屉 + 底部导航
+│       ├── update_dialog.dart          应用内更新弹窗（进度条 + 实时速度 + 弹窗内安装）
 │       ├── chat_screen.dart            对话页（1867 行，最大文件；无气泡正文版式）
 │       ├── sessions_drawer.dart        会话抽屉
 │       ├── tasks_screen.dart           自动任务（M3 占位页）
@@ -174,7 +177,9 @@ orion_agent/
 │       ├── appearance_screen.dart      主题/明暗模式
 │       ├── notification_settings_screen.dart  通知设置
 │       ├── storage_settings_screen.dart     存储管理 + 工作区目录选择
-│       ├── about_screen.dart           关于页（软件介绍 + 在线更新）
+│       ├── about_screen.dart           关于页（软件介绍 + 在线更新 + 日志入口；启动更新的下载/安装已迁至 update_dialog）
+│       ├── log_screen.dart             诊断日志查看/导出
+│       ├── backup_screen.dart          备份与恢复（数据域开关 + 导出/导入）
 │       ├── profile_screen.dart         我的
 │       ├── cloud_account_screen.dart   云端服务（Hero 登录页 + 多功能个人中心）
 │       └── setup_screen.dart           首次运行引导
@@ -439,6 +444,9 @@ abstract class Tool {
 - **加载语义** (`load()` `:28-48`)：`_loaded` 只在查询**成功后**置位，
   并发调用共享同一个 `Future`。失败后允许重试
 - 淘汰时**先 insert 后 delete**，否则新记录可能被当最旧的删掉
+- **「我的」页记忆计数**（2026-10-05）：走响应式 `memoryCountProvider`
+  （FutureProvider，watch 即 load；曾直读 notes 恒显示 0 条——懒加载
+  未触发且普通 Provider 不通知）。刷新点：记忆页返回、切「我的」Tab
 
 ### 5.6 终端环境 (`terminal_service.dart`)
 
@@ -489,6 +497,20 @@ $nativeLibraryDir/libproot.so \
 **挂载点**：`/dev`、`/proc`、`/sys`、`<宿主 workspace>:/workspace`
 
 **安装标记**：Alpine 看 `bin/busybox`，Debian 看 `usr/bin/apt-get`
+
+**组件自动检测**（2026-10-05）：安装完成后自动跑一次检测；页面在前台时
+每次 `AppLifecycleState.resumed` 重新检测（组件会在 App 存活期内被
+apk add / apt install 改变，旧结果会骗人；IndexedStack 保活导致
+initState 只跑一次，故必须挂生命周期）。终端页是 push 页面，每次进入
+本身即 initState 检测。
+
+**组件自动检测 + 「打开终端」**（2026-10-06）：①每次进入页面即自动检测
+（已安装时 initState 直接跑 `_checkTools`，用户不必点「检测组件」）；安装
+完成后再自动跑一次；页面在前台时每次 `AppLifecycleState.resumed` 重测。
+②「打开终端」按钮在终端页**「自启动任务」区块标题右侧**（空态时与「+ 新增
+任务」并排，**不是**「自动任务」Tab）→ `Scrollable.ensureVisible` 滚到
+「命令控制台」并延迟 100ms 请求焦点（滚动中直接 focus 会被手势打断，键盘
+弹不出），配合 `_consoleKey` / `_cmdFocus`。
 
 **组件检测** (`terminal_screen.dart:15-25`)：nodejs / npm / git / python / uv / pip / ssh / sshd
 （OpenCode CLI 组件已于 2026-10-05 按用户要求移除：检测项与安装脚本中的
@@ -630,6 +652,9 @@ sanitize: replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')
 - **重连前先按服务器名前缀注销旧工具** —— 否则旧 `McpTool`（持有旧 client/Dio）
   被永久保留，新连接被丢弃
 - 每个服务器独立 Dio，失败 `close(force: true)`，失败打日志不静默
+- **编辑服务器**（`updateServer`，2026-10-05）：改名称/URL 落库并断开旧
+  client，由界面触发 `connectAll` 重连——改名会换工具注册前缀、改 URL
+  换端点，两处失效都由重连兜底
 
 ### 5.10 技能系统 (`skill_service.dart`)
 
@@ -829,6 +854,14 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
   流式 delta 不重复解析历史消息
 - 输入栏：发送/停止按钮切换、图片附件（`image_picker` 拍照或相册，1600px/quality80）
 - 语音输入（麦克风按钮）、技能调用（`/技能名`）
+- **文件附件（任意格式）**（2026-10-05）：「+」菜单第三项「文件（任意
+  格式）」走 FilePicker（SAF，免存储权限），上限 200MB。文件先复制到
+  **工作区 uploads/**（proot 内固定挂载为 `/workspace`），然后二分：
+  - ≤256KB 且可 UTF-8 解码 → 内容以代码块并入消息（代码/配置/日志）
+  - 其余（zip / apk / pdf / docx / 图片…）→ 消息里只给
+    `/workspace/uploads/<名>` 路径 + 「用终端工具（unzip / tar / cat /
+    python3）处理」的提示——App 侧不做任何二进制解包，proot 才是正确工具
+  - 待发送附件在输入框上方以行条展示（名称 + 大小 + 是否文本），可移除
 - **发送前拦截**（`:112-119`）：流式期间必须**先拦截再清空输入框**，
   否则用户刚输入的文字和已选图片会被静默销毁
 - **自动滚动**（`:214-221`）：按 `streamingContent` 长度去重后才注册
@@ -848,20 +881,36 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | `skills_screen` | ✅ 18 内置 + 自定义 |
 | `roles_screen` | ✅ CRUD（无预置） |
 | `knowledge_screen` | ⚠️ 仅文本粘贴，无文件导入 |
-| `mcp_screen` | ✅ 添加/启用/删除 + 重连 |
+| `mcp_screen` | ✅ 添加/编辑/启用/删除 + 重连（2026-10-05 增编辑） |
+| `log_screen` | ✅ 诊断日志：AppLog 环形缓冲查看/复制/导出（入口：关于→日志） |
+| `backup_screen` | ✅ 备份与恢复：四类数据域开关 + 导出/导入 JSON |
 | `terminal_screen` | ✅ 安装/卸载/组件检测/自启任务 |
 | `settings_screen` | ✅ 多模型服务 CRUD |
 | `appearance_screen` | ✅ 6 主题 + 3 明暗模式 |
 | `font_settings_screen` | ✅ 对话字体四档缩放（带实时预览） |
 | `notification_settings_screen` | ✅ 4 项设置 + 权限申请 |
 | `storage_settings_screen` | ✅ 统计 + 2 项清理 |
-| `tasks_screen` | ⚠️ **M3 占位页，无任何实现** |
+| `tasks_screen` | ✅ 自动任务（每日/手动 + 启动补跑 + 存活期调度） |
 
 ---
 
 ## 8. 构建与 CI
 
-**唯一工作流**：`.github/workflows/build.yml`（push to main +手动触发）
+**Actions housekeeping**（2026-10-06）：artifact 只是发版中间产物（APK 已进
+Releases），每次构建 12MB+，三天就堆到 469MB。清理口径：**只留最近 2 个
+artifact + 最近 5 条 run**，其余用 REST API 批量删（`DELETE
+/actions/artifacts/{id}`、`DELETE /actions/runs/{id}`）。
+
+**唯一工作流**：`.github/workflows/build.yml`
+（`push` 触发分支 **[main, beta]** + 手动 workflow_dispatch）
+
+⚠️ **两个分支必须共用同一份 workflow，且 `push.branches` 要同时列出
+main 与 beta**（2026-10-06 实测事故）：把 main 分支的 workflow 文件推到
+beta 会把 beta 的触发器悄悄改回 `[main]`，此后 beta 推送**不再触发 CI**，
+表现为「push 成功但没有 run」，容易误判成 GitHub 抖动。修复方式是把
+分支列表改回 `[main, beta]` 并重新推送；发布步骤按
+`github.ref == 'refs/heads/beta'` 决定 pre-release 与 target 分支，
+同一份文件服务两条通道。
 
 **防反编译**（2026-10-05，v0.2.2 首开后白屏，已于 v0.2.3 回退）：v0.2.2 曾启用
 `--obfuscate --split-debug-info` + R8 minify/shrink，装机启动白屏（见 §11.18）。
@@ -980,6 +1029,10 @@ grep -qE 'jvmTarget\s*=\s*.*(JVM_17|VERSION_17)' "$F" || exit 1
 | `theme_id` | String | `classic` | 配色主题 |
 | `theme_mode` | String | `system` | `system`/`light`/`dark` |
 | `chat_font_scale` | double | `1.0` | 对话字体缩放（0.85/1.0/1.15/1.3，`chatFontScaleProvider`，入口：我的→对话字体→`FontSettingsScreen`） |
+| `backup_inc_configs` | bool | `true` | 备份包含 AI 供应商（含 API Key） |
+| `backup_inc_history` | bool | `true` | 备份包含聊天历史 |
+| `backup_inc_mcp` | bool | `true` | 备份包含 MCP 服务器 |
+| `backup_inc_settings` | bool | `true` | 备份包含应用设置 |
 | `beta_opt_in` | bool | `false` | 加入 Beta 测试（`betaOptInProvider`，入口：关于页开关）。开启后更新检查走 GitHub releases 列表（含 pre-release、跳过 draft），云端 /update/check 被旁路；关闭后恢复「云端优先 → GitHub latest」。Beta 发布的 tag 仍须是纯 vX.Y.Z 数字（预发布语义用 GitHub pre-release 勾选表达），带 `-beta.1` 后缀会破坏逐段数字比较 |
 | `terminal_setup_done` | bool | `false` | 首次运行引导是否已完成 |
 | `terminal_tasks` | String(JSON) | `[]` | 终端自启动任务数组 |
@@ -1061,7 +1114,17 @@ class ToolCall {
 | 模型 | `models` / `defaultChatModel` / `defaultEmbeddingModel` |
 
 **`ProviderModel`（模型）字段**：`name` / `kind` / `contextWindow` /
-`maxOutputTokens` / `temperature`。温度范围 **0–1.5**，默认 **0.7**。
+`maxOutputTokens` / `temperature` / `modalities`（多模态，2026-10-05 新增，
+`['text']` 恒在 + 编辑器勾选 `image` / `video`；旧数据无字段 → 聊天模型
+视为 `text+image`、向量模型 `text`，与旧行为一致）。温度范围 **0–1.5**，
+默认 **0.7**。
+
+**拉取模型自动填充元数据**（2026-10-05）：`listModels` 返回
+`FetchedModel`（name + 可选 contextWindow / maxOutputTokens），解析
+`context_length` / `context_window` / `context_size`、`max_output_tokens` /
+`max_completion_tokens` / `max_tokens` 及嵌套 `top_provider.max_completion_tokens`
+（OpenRouter）；网关没给的字段留 0（不限制），`listModelNames` 保留为
+仅取名字的兼容入口。
 
 **关键派生属性**
 

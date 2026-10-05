@@ -46,7 +46,8 @@ class TerminalScreen extends ConsumerStatefulWidget {
   ConsumerState<TerminalScreen> createState() => _TerminalScreenState();
 }
 
-class _TerminalScreenState extends ConsumerState<TerminalScreen> {
+class _TerminalScreenState extends ConsumerState<TerminalScreen>
+    with WidgetsBindingObserver {
   bool _busy = false;
   bool _installed = false;
   bool _checked = false;
@@ -57,6 +58,10 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   final _log = StringBuffer();
   final _checks = <String, (bool, String?)>{}; // name -> (ready, version)
   final _cmdCtrl = TextEditingController();
+  /// 命令控制台输入框焦点：「打开终端」按钮用它把键盘直接顶起来
+  final _cmdFocus = FocusNode();
+  /// 控制台卡片锚点：用于滚动定位（页面是 ListView，控制台在中部）
+  final _consoleKey = GlobalKey();
   late TerminalDistro _distro;
 
   // Workspace 目录 future 只在 initState 建一次（P1-16）：
@@ -82,14 +87,53 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     _distro = keys.isEmpty ? TerminalDistro.alpine : keys.first;
     _tasks = _loadTasks();
     _wsDirFuture = _terminal.workspaceDir();
-    _restoreDistroAndRefresh();
+    // 每次进入页面自动检测组件：先刷新安装状态，装好就直接跑检测，
+    // 用户不必再点「检测组件」（2026-10-06 用户反馈：进页面什么都没发生）。
+    _restoreDistroAndRefresh().then((_) {
+      if (mounted && _installed) _checkTools();
+    });
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  /// 每次回到前台自动重新检测组件（2026-10-05 用户要求）。
+  ///
+  /// HomeShell 用 IndexedStack 保留四个 Tab，终端页 State 只在首次进入时
+  /// 创建——initState 里那一次检测之后，用户反复进出页面看到的都是旧结果。
+  /// 组件装在 App 存活期内确实会变（在终端里 apk add / apt install），
+  /// 所以「每次进入界面自动检测」是必要的，而不是只在安装后跑一次。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    if (_busy || !_installed) return;
+    if (_checked) {
+      _appendLog('—— 重新进入页面，自动刷新组件检测 ——');
+      _checkTools();
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _logFlushTimer?.cancel();
     _cmdCtrl.dispose();
+    _cmdFocus.dispose();
     super.dispose();
+  }
+
+  /// 「打开终端」：滚动到命令控制台并聚焦输入框（键盘直接弹出）。
+  ///
+  /// 先滚后聚焦：滚动动画进行中立刻 requestFocus 会被滚动手势打断，
+  /// 键盘偶尔弹不出来，因此延后一个短周期再请求焦点。
+  void _openConsole() {
+    final ctx = _consoleKey.currentContext;
+    if (ctx != null) {
+      Scrollable.ensureVisible(ctx,
+          duration: const Duration(milliseconds: 320),
+          curve: Curves.easeOutCubic);
+    }
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) _cmdFocus.requestFocus();
+    });
   }
 
   /// 显式刷新 Workspace 目录（需要时调用并触发重建）。
@@ -148,6 +192,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       await _terminal.install(_distro, onProgress: _appendLog);
       await _refreshInstalled();
       _refreshWorkspace();
+      // 安装完立即自动检测组件（用户要求：装完就能看到 node/git/python
+      // 装没装上，不用再手点一次「检测」）
+      await _checkTools();
     } catch (e) {
       // 终端依赖 proot 才能跑。proot 起不来时 rootfs 下载完成但环境不可用，
       // 这里把proot 相关的原因单独拎出来，否则用户只会看到
@@ -461,11 +508,13 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
               ),
             _sectionTitle('命令控制台'),
             _card(
+              key: _consoleKey,
               Row(
                 children: [
                   Expanded(
                     child: TextField(
                       controller: _cmdCtrl,
+                      focusNode: _cmdFocus,
                       style:
                           const TextStyle(fontFamily: 'monospace', fontSize: 13),
                       decoration: const InputDecoration(
@@ -484,7 +533,17 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                 ],
               ),
             ),
-            _sectionTitle('自启动任务'),
+            _sectionTitleWithAction(
+              '自启动任务',
+              // 「打开终端」：跳到上面的命令控制台并直接唤起键盘——
+              // 用户的要求是「新增任务旁加打开终端按钮」：自启动任务本质
+              // 是启动后要跑的命令，配置时往往要立刻手动跑一遍验证。
+              TextButton.icon(
+                onPressed: _openConsole,
+                icon: const Icon(Icons.terminal_rounded, size: 18),
+                label: const Text('打开终端'),
+              ),
+            ),
             _card(_buildTasksSection()),
             _sectionTitle('Workspace 挂载'),
             _card(
@@ -559,10 +618,20 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                   height: 1.4,
                   color: onSurface(context, 0.45))),
           const SizedBox(height: 10),
-          FilledButton.tonalIcon(
-            onPressed: _busy ? null : () => _editTask(null),
-            icon: const Icon(Icons.add_rounded, size: 18),
-            label: const Text('新增任务'),
+          Row(
+            children: [
+              FilledButton.tonalIcon(
+                onPressed: _busy ? null : () => _editTask(null),
+                icon: const Icon(Icons.add_rounded, size: 18),
+                label: const Text('新增任务'),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: _openConsole,
+                icon: const Icon(Icons.terminal_rounded, size: 18),
+                label: const Text('打开终端'),
+              ),
+            ],
           ),
         ],
       );
@@ -735,6 +804,23 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
                 fontSize: 13,
                 fontWeight: FontWeight.w500,
                 color: onSurface(context, 0.4))),
+      );
+
+  /// 标题 + 右侧操作按钮（用于「自启动任务 → 打开终端」）。
+  Widget _sectionTitleWithAction(String s, Widget action) => Padding(
+        padding: const EdgeInsets.fromLTRB(4, 16, 4, 0),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(s,
+                  style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                      color: onSurface(context, 0.4))),
+            ),
+            action,
+          ],
+        ),
       );
 
   Widget _card(Widget child) => Container(

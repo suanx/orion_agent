@@ -1,6 +1,7 @@
 import '../theme.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'format_utils.dart';
 import 'glass.dart';
@@ -83,6 +85,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   final _pendingImages = <String>[]; // data URL
+
+  /// 待发送的附件。文件已复制到工作区 uploads 目录；[text] 非空表示
+  /// 是小体积文本类文件（内容直接并入消息），否则只给模型路径 +
+  /// 「用终端工具处理」的提示（zip/apk/办公文档等二进制一律走这条）。
+  final _pendingFiles =
+      <({String name, String path, String guestPath, int size, String? text})>[];
   bool _hasText = false;
   bool _listening = false;
   /// 上次触发自动滚动的流式内容长度，避免每帧都注册 post-frame 回调。
@@ -124,7 +132,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   void _send() {
     var text = _inputController.text.trim();
-    if (text.isEmpty && _pendingImages.isEmpty) return;
+    if (text.isEmpty && _pendingImages.isEmpty && _pendingFiles.isEmpty) {
+      return;
+    }
 
     // 没有可用模型时直接拦下并说明原因。ChatNotifier.send() 里也有
     // 同样的守卫，但那时用户已经按下发送、看到按钮无反应，
@@ -161,6 +171,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       text = SkillService.expand(skill, args);
     }
 
+    // 附件并入消息正文：
+    // - 文本类（小文件能按 UTF-8 解码）：内容直接贴进代码块，模型直接可读
+    // - 其它一切格式（zip / apk / pdf / docx / 图片…）：只给工作区路径 +
+    //   工具提示。App 侧不解包二进制，而 proot 终端里的 unzip / tar /
+    //   python / file 才是处理它们的正确工具（用户 2026-10-05 明确要求）。
+    for (final f in _pendingFiles) {
+      final sizeMb = (f.size / (1024 * 1024)).toStringAsFixed(
+          f.size < 1024 * 1024 ? 2 : 1);
+      text = f.text != null
+          ? '$text\n\n【附件：${f.name}】\n```text\n${f.text}\n```'
+          : '$text\n\n【已上传文件】${f.name}（$sizeMb MB）\n'
+              '已上传到工作区（终端内可见）：${f.guestPath}\n'
+              '如需查看或处理，请使用终端工具（如 unzip / tar -xf / '
+              'cat / python3 读取该路径），不要臆测文件内容。';
+    }
+
     if (text.isEmpty && _pendingImages.isEmpty) return;
     // 必须在清空输入框【之前】拦截。并发守卫在 ChatNotifier.send() 里，
     // 而那时输入框和图片列表已经被清空了：流式期间按回车，用户刚输入的文字
@@ -173,7 +199,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     final images = List<String>.of(_pendingImages);
     _inputController.clear();
-    setState(_pendingImages.clear);
+    setState(() {
+      _pendingImages.clear();
+      _pendingFiles.clear();
+    });
     ref.read(chatProvider.notifier).send(text, images: images);
     Future.delayed(const Duration(milliseconds: 300), _scrollToBottom);
   }
@@ -240,28 +269,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         .upsert(active.copyWith(defaultChatModel: sel));
   }
 
-  /// 添加图片——锚定在输入栏加号图标上方的浮层。
-  Future<void> _addImage(BuildContext anchor) async {
-    final source = await showGlassAnchoredMenu<ImageSource>(
+  /// 添加附件——锚定在输入栏加号图标上方的浮层。
+  /// 拍照 / 相册走 ImagePicker（图片），「文件」走 FilePicker（文本类附件）。
+  Future<void> _addAttachment(BuildContext anchor) async {
+    final source = await showGlassAnchoredMenu<String>(
       context: context,
       anchor: anchor,
       options: const [
         GlassMenuOption(
-          value: ImageSource.camera,
+          value: 'camera',
           title: '拍照',
           icon: Icons.photo_camera_outlined,
         ),
         GlassMenuOption(
-          value: ImageSource.gallery,
+          value: 'gallery',
           title: '从相册选择',
           icon: Icons.photo_outlined,
+        ),
+        GlassMenuOption(
+          value: 'file',
+          title: '文件（任意格式）',
+          icon: Icons.description_outlined,
         ),
       ],
     );
     if (source == null) return;
+    if (source == 'file') {
+      await _pickFile();
+      return;
+    }
     try {
-      final picked = await ImagePicker()
-          .pickImage(source: source, imageQuality: 80, maxWidth: 1600);
+      final picked = await ImagePicker().pickImage(
+          source: source == 'camera'
+              ? ImageSource.camera
+              : ImageSource.gallery,
+          imageQuality: 80,
+          maxWidth: 1600);
       if (picked == null) return;
       final bytes = await picked.readAsBytes();
       // readAsBytes 是异步间隙，widget 可能已被销毁（路由被pop、热重载、
@@ -275,6 +318,85 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('获取图片失败：$e')));
+    }
+  }
+
+  /// 选择附件：**任意格式**都收（zip / apk / pdf / docx / 图片 / 代码…）。
+  ///
+  /// 处理策略（2026-10-05 用户要求：不是有终端吗，各种格式交给终端
+  /// 的解压/查看命令处理）：
+  /// 1. 文件复制到【工作区 uploads/ 目录】——proot 终端与内置文件读写
+  ///    工具都以此为根，模型拿到的路径可直接被 unzip / tar / cat 读取；
+  /// 2. ≤256KB 且能按 UTF-8 解码 → 内容直接并入消息（代码/配置/日志
+  ///    这类最常见，也最省 token）；
+  /// 3. 其余（压缩包、安装包、办公文档、二进制…）→ 消息里只给路径 +
+  ///    工具提示，不在 App 侧做任何解包。
+  Future<void> _pickFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        // 不强制读进内存：Android 返回 SAF 缓存路径，copy 是流式的，
+        // 大文件不会把内存打爆；只有极少数无路径的平台才落到 bytes。
+        withData: false,
+      );
+      if (!mounted) return;
+      final file = result?.files.singleOrNull;
+      if (file == null) return;
+      if (file.size > 200 * 1024 * 1024) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('文件过大（上限 200MB）')));
+        return;
+      }
+      final ws = await ref.read(terminalServiceProvider).workspaceDir();
+      final dir = Directory('$ws/uploads');
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      // 文件名做基本清洗（去掉路径分隔符与控制字符），重名加时间戳
+      var safe = file.name.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_');
+      if (safe.isEmpty) safe = 'file.bin';
+      var dest = File('${dir.path}/$safe');
+      if (dest.existsSync()) {
+        final dot = safe.lastIndexOf('.');
+        final stem = dot > 0 ? safe.substring(0, dot) : safe;
+        final ext = dot > 0 ? safe.substring(dot) : '';
+        safe = '${stem}_${DateTime.now().millisecondsSinceEpoch}$ext';
+        dest = File('${dir.path}/$safe');
+      }
+      final src = file.path;
+      if (src != null) {
+        await File(src).copy(dest.path);
+      } else if (file.bytes != null) {
+        await dest.writeAsBytes(file.bytes!, flush: true);
+      } else {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('读取文件失败')));
+        return;
+      }
+
+      // 尝试按文本解码：成功则内容并入消息，失败保持二进制路径模式
+      String? asText;
+      final len = await dest.length();
+      if (len <= 256 * 1024) {
+        try {
+          asText = utf8.decode(await dest.readAsBytes(), allowMalformed: false);
+          if (asText.trim().isEmpty) asText = '（空文件）';
+        } catch (_) {
+          asText = null; // 二进制
+        }
+      }
+      if (!mounted) return;
+      setState(() => _pendingFiles.add((
+            name: safe,
+            path: dest.path,
+            // guest 内工作区固定挂载在 /workspace（见 terminal_service
+            // startOn 的 -b 绑定）——给模型/终端的必须是这个路径
+            guestPath: '/workspace/uploads/$safe',
+            size: len,
+            text: asText,
+          )));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('添加附件失败：$e')));
     }
   }
 
@@ -457,6 +579,49 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   ),
           ),
         ),
+        // ------- 待发送文件附件 -------
+        if (_pendingFiles.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Column(
+              children: [
+                for (var i = 0; i < _pendingFiles.length; i++)
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 4),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: surface(context),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.description_outlined,
+                            size: 16, color: Colors.blueGrey),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            // 附大小：二进制文件消息里只给路径，大小很关键
+                            '${_pendingFiles[i].name}'
+                            '（${(_pendingFiles[i].size / 1024).round()} KB'
+                            '${_pendingFiles[i].text != null ? ' · 文本' : ''}）',
+                            style: const TextStyle(fontSize: 12.5),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: () =>
+                              setState(() => _pendingFiles.removeAt(i)),
+                          child: Icon(Icons.close_rounded,
+                              size: 16, color: onSurface(context, 0.4)),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
         // ------- 待发送图片 -------
         if (_pendingImages.isNotEmpty)
           SizedBox(
@@ -503,12 +668,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         _InputBar(
           controller: _inputController,
           hasText: _hasText,
-          hasImages: _pendingImages.isNotEmpty,
+          hasImages: _pendingImages.isNotEmpty || _pendingFiles.isNotEmpty,
           isStreaming: chat.isStreaming,
           isListening: _listening,
           onSend: _send,
           onStop: () => ref.read(chatProvider.notifier).stop(),
-          onAddImage: _addImage,
+          onAddImage: _addAttachment,
           onMic: _toggleMic,
           // 模型选择：麦克风旁的调音图标，点击居中弹窗选择当前模型
           modelName: ref.watch(configProvider).activeConfig?.chatModel?.name,
@@ -1434,13 +1599,9 @@ class _ContextGauge extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 5),
-            Text(
-              hasTotal
-                  ? '${compactTokens(used)} / ${compactTokens(total)}'
-                  : '上下文不限',
-              style: TextStyle(fontSize: 11, color: onSurface(context, 0.5)),
-            ),
+            // 「647 / 1.0M」数字文本已按用户要求移除（2026-10-05 截图
+            // 红框标注「删除」）：只保留圆形进度图标（环 + 百分比），
+            // 点击展开用量明细弹窗的行为不变。
           ],
         ),
       ),

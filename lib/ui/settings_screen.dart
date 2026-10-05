@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/llm_config.dart';
 import '../providers/providers.dart';
+import '../services/llm_client.dart' show FetchedModel;
 
 /// 「AI 提供商」列表页：一条卡片一个提供商，点进详情。
 class SettingsScreen extends ConsumerWidget {
@@ -919,9 +920,9 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
       return;
     }
     setState(() => _fetching = true);
-    List<String> names;
+    List<FetchedModel> fetched;
     try {
-      names = await ref.read(llmClientProvider).listModels(config: config);
+      fetched = await ref.read(llmClientProvider).listModels(config: config);
     } catch (e) {
       if (mounted) setState(() => _fetching = false);
       _toast('拉取失败：$e');
@@ -935,20 +936,34 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
     final picked = await showGlassDialog<Set<String>>(
       context: context,
       builder: (ctx) => _FetchResultDialog(
-        names: names,
+        models: fetched,
         existing: existing,
       ),
     );
     if (picked == null || picked.isEmpty) return;
     widget.onChanged();
     final notifier = ref.read(configProvider.notifier);
+    // name -> 元数据：Dart 3 core 没有 firstWhereOrNull，用 map 直查
+    final metaByName = {for (final m in fetched) m.name: m};
+    var autoFilled = 0;
     for (final n in picked) {
+      // 网关若附带 context_length / max_output_tokens，自动填充，
+      // 省去逐个模型手填上下文与最大输出
+      final meta = metaByName[n];
+      if (meta?.hasMeta == true) autoFilled++;
       notifier.addModel(
         widget.configId,
-        ProviderModel(name: n, kind: _guessKind(n)),
+        ProviderModel(
+          name: n,
+          kind: _guessKind(n),
+          contextWindow: meta?.contextWindow ?? 0,
+          maxOutputTokens: meta?.maxOutputTokens ?? 0,
+        ),
       );
     }
-    _toast('已导入 ${picked.length} 个模型');
+    _toast(autoFilled > 0
+        ? '已导入 ${picked.length} 个模型（$autoFilled 个自动填充了上下文/最大输出）'
+        : '已导入 ${picked.length} 个模型（网关未返回上下文/最大输出，请手动填写）');
   }
 
   /// 从模型名猜用途。名字里带 embed / bge / rerank 的基本都是向量模型，
@@ -985,9 +1000,12 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
 }
 
 class _FetchResultDialog extends StatefulWidget {
-  const _FetchResultDialog({required this.names, required this.existing});
+  const _FetchResultDialog({
+    required this.models,
+    required this.existing,
+  });
 
-  final List<String> names;
+  final List<FetchedModel> models;
   final Set<String> existing;
 
   @override
@@ -995,16 +1013,29 @@ class _FetchResultDialog extends StatefulWidget {
 }
 
 class _FetchResultDialogState extends State<_FetchResultDialog> {
+  late final List<String> names = widget.models.map((m) => m.name).toList();
   late final Set<String> _checked = {
     // 默认只勾选还没导入过的；已存在的默认不勾，避免重复添加
-    for (final n in widget.names)
+    for (final n in names)
       if (!widget.existing.contains(n)) n,
   };
 
   @override
   Widget build(BuildContext context) {
-    final all = widget.names;
+    final all = names;
     final allChecked = _checked.length == all.length;
+    // 网关带回上下文/最大输出的模型数：0 = 该网关的 /models 只返回 id，
+    // 自动填充功能无从生效（弹窗内明确展示，避免用户以为功能失效）
+    final withMeta = widget.models.where((m) => m.hasMeta).length;
+    String? metaLabel(FetchedModel m) {
+      if (!m.hasMeta) return null;
+      final parts = <String>[
+        if (m.contextWindow != null) '上下文 ${m.contextWindow}',
+        if (m.maxOutputTokens != null) '输出 ${m.maxOutputTokens}',
+      ];
+      return parts.join(' · ');
+    }
+
     return AlertDialog(
       title: Text('发现 ${all.length} 个模型'),
       content: SizedBox(
@@ -1033,12 +1064,30 @@ class _FetchResultDialogState extends State<_FetchResultDialog> {
                         color: Theme.of(context).colorScheme.outline)),
               ],
             ),
+            if (withMeta == 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('该服务的 /models 未返回上下文/最大输出信息，导入后需手动填写',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.error)),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('其中 $withMeta 个模型带上下文/最大输出信息，导入时自动填充',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.outline)),
+              ),
             Expanded(
               child: ListView.builder(
                 itemCount: all.length,
                 itemBuilder: (ctx, i) {
                   final n = all[i];
+                  final m = widget.models[i];
                   final exists = widget.existing.contains(n);
+                  final meta = metaLabel(m);
                   return CheckboxListTile(
                     dense: true,
                     value: _checked.contains(n),
@@ -1048,7 +1097,12 @@ class _FetchResultDialogState extends State<_FetchResultDialog> {
                             style: TextStyle(
                                 fontSize: 11,
                                 color: Theme.of(ctx).colorScheme.outline))
-                        : null,
+                        : meta == null
+                            ? null
+                            : Text(meta,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: Theme.of(ctx).colorScheme.outline)),
                     onChanged: (v) => setState(() {
                       if (v == true) {
                         _checked.add(n);
@@ -1130,7 +1184,10 @@ class _ModelCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         '${model.kind.fullLabel} · 上下文 ${model.contextLabel}'
-                        ' · 输出 ${model.maxOutputLabel}',
+                        ' · 输出 ${model.maxOutputLabel}'
+                        // 图片是聊天模型的默认能力（旧数据即如此），不展示；
+                        // 只把较少见的视频能力标出来
+                        '${model.supportsVideo ? ' · 视频' : ''}',
                         style: TextStyle(
                             fontSize: 12, color: onSurface(context, 0.45)),
                         maxLines: 1,
@@ -1197,6 +1254,22 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
           : '${widget.existing!.maxOutputTokens}');
   late ModelKind _kind = widget.existing?.kind ?? ModelKind.chat;
   late double _temp = widget.existing?.temperature ?? 0.7;
+  // 多模态输入能力：'text' 恒在，仅勾选 image / video。
+  // 旧数据无字段时默认 text+image（与旧版「图片附件始终可用」一致）。
+  // 只增删元素不重新赋值，final 即可（late 因为要读 widget.existing）。
+  late final List<String> _modalities =
+      List.of(widget.existing?.modalities ?? const ['text', 'image']);
+
+  /// 勾选/取消一个模态；'text' 不允许取消（无意义的纯无输入模型）。
+  void _toggleModality(String m) {
+    setState(() {
+      if (_modalities.contains(m)) {
+        _modalities.remove(m);
+      } else {
+        _modalities.add(m);
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -1229,6 +1302,10 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
       contextWindow: ctxV,
       maxOutputTokens: outV,
       temperature: _temp,
+      // 'text' 恒在且排首位；向量模型不带多模态
+      modalities: _kind == ModelKind.embedding
+          ? const ['text']
+          : ['text', ..._modalities.where((m) => m != 'text')],
     );
     final notifier = ref.read(configProvider.notifier);
     final old = widget.existing;
@@ -1353,6 +1430,29 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
                 presets: const [1024, 2048, 4096, 8192, 16384, 32768],
                 onTap: (v) => setState(() => _out.text = '$v'),
               ),
+              // 多模态输入能力：文本恒支持，图片/视频按模型实际能力勾选
+              Row(
+                children: [
+                  const Text('多模态输入',
+                      style: TextStyle(fontSize: 13)),
+                  const SizedBox(width: 8),
+                  FilterChip(
+                    label: const Text('图片'),
+                    selected: _modalities.contains('image'),
+                    onSelected: (_) => _toggleModality('image'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilterChip(
+                    label: const Text('视频'),
+                    selected: _modalities.contains('video'),
+                    onSelected: (_) => _toggleModality('video'),
+                  ),
+                ],
+              ),
+              Text('勾选后该模型会出现在对应能力的候选列表（当前对话已支持发送图片）',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.outline)),
               Row(
                 children: [
                   const Text('温度'),

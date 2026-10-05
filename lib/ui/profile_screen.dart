@@ -7,6 +7,7 @@ import 'status_bar_area.dart';
 import '../providers/providers.dart';
 import 'about_screen.dart';
 import 'appearance_screen.dart';
+import 'backup_screen.dart';
 import 'cloud_account_screen.dart';
 import 'default_models_screen.dart';
 import 'font_settings_screen.dart';
@@ -31,9 +32,16 @@ class ProfileScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final memory = ref.watch(memoryServiceProvider);
     final config = ref.watch(configProvider);
     final mode = ref.watch(themeModeProvider);
+    // 记忆条数走响应式 FutureProvider：懒加载的 MemoryService 直读
+    // notes 恒为 0（见 memoryCountProvider 注释）。加载失败显示 '?'，
+    // 不阻塞整页渲染。
+    final memoryCount = ref.watch(memoryCountProvider);
+    final memoryCountLabel = memoryCount.maybeWhen(
+      data: (n) => '$n 条',
+      orElse: () => '…',
+    );
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
@@ -111,8 +119,14 @@ class ProfileScreen extends ConsumerWidget {
               // 通用视觉符号；原来的灯泡容易和「提示/想法」混淆。
               icon: Icons.memory_outlined,
               label: '长期记忆',
-              value: '${memory.notes.length} 条',
-              onTap: () => _push(context, const MemoryScreen()),
+              value: memoryCountLabel,
+              onTap: () async {
+                // 直接 Navigator（_push 返回 void 不能 await），
+                // 从记忆页返回时可能增删过，刷新计数
+                await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const MemoryScreen()));
+                ref.invalidate(memoryCountProvider);
+              },
             ),
             _Row(
               // 知识库用图书馆/阅读图标，与「书」相关但和记忆区分开。
@@ -169,6 +183,19 @@ class ProfileScreen extends ConsumerWidget {
               icon: Icons.notifications_none_rounded,
               label: '通知',
               onTap: () => _push(context, const NotificationSettingsScreen()),
+            ),
+          ],
+        ),
+
+        // ------- 备份与恢复 -------
+        _Group(
+          title: '备份与恢复',
+          children: [
+            _Row(
+              icon: Icons.backup_outlined,
+              label: '备份与恢复',
+              value: '导出 / 导入',
+              onTap: () => _push(context, const BackupScreen()),
             ),
           ],
         ),

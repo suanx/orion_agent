@@ -6,14 +6,12 @@ import 'package:path_provider/path_provider.dart';
 
 import '../theme.dart';
 import '../providers/providers.dart';
+import 'log_screen.dart';
 
 /// 当前版本号。发版时与 pubspec.yaml 的 `version` 同步更新
 /// （只升 pubspec 不升这里 → 应用自报版本落后，更新检查会一直
 /// 提示安装「新版本」，即使用户已经装上了最新包）。
-const String kAppVersion = '0.2.11';
-
-/// GitHub Releases 页面（检查逻辑在 UpdateService）。
-const _releasesPage = 'https://github.com/suanx/orion_agent/releases';
+const String kAppVersion = '0.2.12';
 
 /// 关于页：软件介绍 + 在线更新。
 class AboutScreen extends ConsumerStatefulWidget {
@@ -243,26 +241,22 @@ class _AboutScreenState extends ConsumerState<AboutScreen>
           _card(context, Column(children: _updateTiles(context))),
           const SizedBox(height: 20),
 
-          // ------- 项目信息 -------
-          _label('项目'),
+          // ------- 诊断 -------
+          _label('诊断'),
           _card(
             context,
             ListTile(
-              leading:
-                  const Icon(Icons.code_rounded, size: 20),
-              title: const Text('GitHub 仓库',
+              leading: const Icon(Icons.receipt_long_outlined, size: 20),
+              title: const Text('日志',
                   style: TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w500)),
-              subtitle: Text('github.com/suanx/orion_agent',
+              subtitle: Text('运行事件与错误记录，可复制或导出排查问题',
                   style: TextStyle(
                       fontSize: 12, color: onSurface(context, 0.4))),
-              trailing: Icon(Icons.open_in_new_rounded,
+              trailing: Icon(Icons.chevron_right_rounded,
                   size: 18, color: onSurface(context, 0.3)),
-              onTap: () async {
-                try {
-                  await OpenFilex.open(_releasesPage);
-                } catch (_) {}
-              },
+              onTap: () => Navigator.of(context)
+                  .push(MaterialPageRoute(builder: (_) => const LogScreen())),
             ),
           ),
           const SizedBox(height: 16),

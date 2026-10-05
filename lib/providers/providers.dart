@@ -17,6 +17,7 @@ import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 import '../models/llm_config.dart';
 import '../services/agent_orchestrator.dart';
+import '../services/backup_service.dart';
 import '../services/cloud_service.dart';
 import '../services/database.dart';
 import '../services/llm_client.dart';
@@ -52,6 +53,27 @@ final storageServiceProvider =
 
 final memoryServiceProvider =
     Provider<MemoryService>((ref) => MemoryService(ref.watch(databaseProvider)));
+
+/// 备份与恢复：读写四类数据域（供应商 / 聊天历史 / MCP / 应用设置）。
+final backupServiceProvider = Provider<BackupService>((ref) => BackupService(
+      ref.watch(databaseProvider),
+      ref.watch(sharedPreferencesProvider),
+      const FlutterSecureStorage(),
+    ));
+
+/// 长期记忆条数（响应式）。
+///
+/// 之前「我的」页直接读 `memory.notes.length`：MemoryService 是普通
+/// Provider（非响应式）且懒加载，profile 首次 build 时 load() 还没被
+/// 调过 → 恒显示 0 条（记忆页有记录也不刷新）。
+/// 改为 FutureProvider：watch 到它即触发 load()；任何增删后调用方
+/// `ref.invalidate(memoryCountProvider)` 刷新（load 幂等，已加载时
+/// 直接返回内存中的最新列表）。
+final memoryCountProvider = FutureProvider<int>((ref) async {
+  final memory = ref.watch(memoryServiceProvider);
+  await memory.load();
+  return memory.notes.length;
+});
 
 final ragServiceProvider =
     Provider<RagService>((ref) => RagService(ref.watch(databaseProvider)));

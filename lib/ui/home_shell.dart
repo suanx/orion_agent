@@ -15,6 +15,7 @@ import 'setup_screen.dart';
 import 'skills_screen.dart';
 import 'profile_screen.dart';
 import 'tasks_screen.dart';
+import 'update_dialog.dart';
 
 /// 应用外壳：4 个 Tab + 磨砂玻璃底部导航。
 class HomeShell extends ConsumerStatefulWidget {
@@ -66,56 +67,9 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     if (info == null || !mounted) return;
     ref.read(pendingUpdateProvider.notifier).state = info;
     if (!mounted) return;
-    await showGlassDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      builder: (ctx) => AlertDialog(
-        title: Text('发现新版本 V${info.version}'),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('当前版本 V$kAppVersion，建议更新以获得最新功能与修复。',
-                    style: TextStyle(
-                        fontSize: 13,
-                        height: 1.5,
-                        color: onSurface(ctx, 0.55))),
-                if (info.changelog != null) ...[
-                  const SizedBox(height: 12),
-                  Text('更新日志',
-                      style: TextStyle(
-                          fontSize: 12, color: onSurface(ctx, 0.4))),
-                  const SizedBox(height: 6),
-                  Text(info.changelog!,
-                      style: TextStyle(
-                          fontSize: 13,
-                          height: 1.55,
-                          color: onSurface(ctx, 0.7))),
-                ],
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('暂不'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.pop(ctx);
-              // 跳到关于页：那里有下载进度与安装授权引导
-              Navigator.of(ctx).push(MaterialPageRoute(
-                  builder: (_) => const AboutScreen()));
-            },
-            child: const Text('去更新'),
-          ),
-        ],
-      ),
-    );
+    // 统一更新弹窗（截图样式）：弹窗内直接下载（进度条 + 实时速度），
+    // 完成后自动拉起安装器；「稍后再说」随时可退出，下载中会取消。
+    await UpdateDownloadDialog.show(context, info);
   }
 
   /// 执行并清空导航意图。
@@ -228,7 +182,13 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                 height: _navHeight,
                 // 与 HomeTab 常量保持一致：HomeShell 的 children 顺序即 Tab 顺序，
                 // 两处都用常量，任一处调整顺序都会立刻暴露不一致。
-                onTap: (i) => setState(() => _tab = i),
+                // onTap 闭包引用了 ref（刷新记忆计数），不能保持 const。
+                onTap: (i) {
+                  setState(() => _tab = i);
+                  // Agent 在对话中可通过 save_memory 工具增删记忆，
+                  // IndexedStack 不重建子页，切到「我的」时强制刷新计数
+                  if (i == 3) ref.invalidate(memoryCountProvider);
+                },
               ),
       ),
     );
