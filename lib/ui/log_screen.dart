@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:open_filex/open_filex.dart';
 
 import '../services/app_log.dart';
+import '../theme.dart';
 
 /// 诊断日志页（关于 → 日志）：查看 App 存活期内捕获的日志
 /// （全局错误 + 关键事件），支持复制全部与导出为文本文件。

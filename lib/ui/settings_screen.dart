@@ -930,10 +930,6 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
     }
     if (!mounted) return;
     setState(() => _fetching = false);
-    final names = fetched.map((m) => m.name).toList();
-    // 带上下文/最大输出元数据的模型数：0 说明网关的 /models 只返回了
-    // id（大多数 OpenAI 兼容网关如此），自动填充无从谈起——弹窗会明示
-    final withMeta = fetched.where((m) => m.hasMeta).length;
 
     // 已存在的模型默认不勾选，避免重复导入
     final existing = {for (final m in config.models) m.name};
@@ -1260,7 +1256,8 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
   late double _temp = widget.existing?.temperature ?? 0.7;
   // 多模态输入能力：'text' 恒在，仅勾选 image / video。
   // 旧数据无字段时默认 text+image（与旧版「图片附件始终可用」一致）。
-  late List<String> _modalities =
+  // 只增删元素不重新赋值，final 即可（late 因为要读 widget.existing）。
+  late final List<String> _modalities =
       List.of(widget.existing?.modalities ?? const ['text', 'image']);
 
   /// 勾选/取消一个模态；'text' 不允许取消（无意义的纯无输入模型）。

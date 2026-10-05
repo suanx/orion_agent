@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:drift/drift.dart' show NativeDatabase;
+import 'package:drift/native.dart' show NativeDatabase;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orion_agent/services/app_log.dart';
