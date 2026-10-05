@@ -5,27 +5,32 @@ import 'package:orion_agent/services/update_service.dart';
 ///
 /// 纯函数：直接构造 GitHub releases API 的 JSON 断言，不发网络请求。
 void main() {
+  /// 构造一条 GitHub release JSON。apkName 传空字符串表示无附件
+  /// （不能用 null——null 在函数体内会被替换为默认 APK 名）。
   Map<String, dynamic> release({
     required String tag,
     bool draft = false,
     bool prerelease = false,
-    String? apkName = 'orion-agent-v$tag.apk',
+    String apkName = 'x',
     String body = '更新说明',
-  }) =>
-      {
-        'tag_name': 'v$tag',
-        'draft': draft,
-        'prerelease': prerelease,
-        'body': body,
-        'assets': [
-          if (apkName != null)
-            {
-              'name': apkName,
-              'browser_download_url':
-                  'https://github.com/suanx/orion_agent/releases/download/v$tag/$apkName',
-            },
-        ],
-      };
+  }) {
+    // 默认 APK 名依赖 tag：默认值必须是编译期常量，只能在函数体内插值
+    if (apkName == 'x') apkName = 'orion-agent-v$tag.apk';
+    return {
+      'tag_name': 'v$tag',
+      'draft': draft,
+      'prerelease': prerelease,
+      'body': body,
+      'assets': [
+        if (apkName.isNotEmpty)
+          {
+            'name': apkName,
+            'browser_download_url':
+                'https://github.com/suanx/orion_agent/releases/download/v$tag/$apkName',
+          },
+      ],
+    };
+  }
 
   test('比当前新的稳定版：解析出版本、APK 地址与更新日志', () {
     final info = UpdateService.parseReleaseEntry(
@@ -72,7 +77,7 @@ void main() {
 
   test('无 APK 附件：仍返回版本信息（apkUrl 为 null，UI 引导去 releases 页）', () {
     final info = UpdateService.parseReleaseEntry(
-      release(tag: '0.3.0', apkName: null),
+      release(tag: '0.3.0', apkName: ''),
       currentVersion: '0.2.10',
     );
     expect(info, isNotNull);
