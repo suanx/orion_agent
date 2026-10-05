@@ -510,9 +510,19 @@ initState 只跑一次，故必须挂生命周期）。终端页是 push 页面�
 内的 OpenSSH**（proot 不隔离网络，guest 监听端口宿主可直接连，无需端口
 转发）。要点：
 - `ensureSshd()`：探测端口 → 没有则 `ssh-keygen -A` + `chpasswd`（root
-  密码 `orion`）+ 追加 `PermitRootLogin yes` 等配置的**幂等片段**（靠
-  `orion_agent_managed` 标记行去重），再 `startOn('exec /usr/sbin/sshd -D -e')`
-  常驻；沙箱没装 openssh 时页面自动 `apk add` / `apt install`
+  密码 `orion`）+ `mkdir -p /run/sshd /var/empty /etc/ssh /dev/pts`，再
+  `startOn('exec /usr/sbin/sshd -D -e -p 8022 -o ...')` 常驻；沙箱没装
+  openssh 时页面自动 `apk add` / `apt install`
+- **三个真实坑（都曾表现为「启动超时」，2026-10-06 修）**：
+  1. **不要往 `sshd_config` 追加指令**——同一关键字重复出现 sshd 直接
+     报 `Bad configuration option` 拒绝启动；参数改用 `sshd -o` 传，
+     天然幂等
+  2. **`UsePAM` 只有 Debian 系认**——Alpine 的 OpenSSH 未编译 PAM，
+     传 `-o UsePAM=no` 会 `Unsupported option` 直接退出；按发行版拼参数
+  3. **必须建 `/run/sshd`**（Debian 的 privilege separation 目录）与
+     `/dev/pts`（pty 分配），缺失时 sshd 启动即退
+- **必须把 sshd 的 stderr 回显到终端页**：它是唯一能说清失败原因的信息源；
+  同时监听进程退出码，退出即刻报错而不是干等超时（20s 上限，proot 冷启动慢）
 - 会话用 dartssh2（**纯 Dart，无原生代码**，不影响 compileSdk）：
   `SSHSocket.connect` → `SSHClient(onPasswordRequest)` → `client.shell()`
   拿 pty；`shell.stdout/stderr` 持续收，`shell.write` 发输入

@@ -1,3 +1,24 @@
+# Orion Agent v0.2.14 更新说明
+
+## 修复：交互式终端「sshd 启动超时」
+
+上一版（v0.2.13）新引入的 SSH 终端在部分环境下连不上，根因是 sshd **启动即退出**，
+而失败日志没有被接出来，只表现为「启动超时」。三个已修的致命点：
+
+1. **不再修改 `sshd_config`**——同一关键字重复出现时 sshd 直接报
+   `Bad configuration option` 拒绝启动；端口与认证参数改用 `sshd -o`
+   命令行传入，天然幂等
+2. **`UsePAM` 按发行版处理**——Alpine 的 OpenSSH 未编译 PAM 支持，
+   传入该选项会报 `Unsupported option` 立即退出
+3. **补齐运行目录**——启动前创建 `/run/sshd`、`/var/empty`、`/dev/pts`
+   （缺失时 sshd 或无法启动、或无法分配 pty）
+
+同时改善诊断：sshd 的 stderr 实时显示在终端页（每行前缀 `sshd:`），
+进程一退出立刻报错并附退出码，不再干等超时；等待上限放宽到 20 秒
+（proot 冷启动需加载运行时并挂载 /dev、/proc、/sys）。
+
+---
+
 # Orion Agent v0.2.13 更新说明
 
 ## 应用内交互式终端（SSH）

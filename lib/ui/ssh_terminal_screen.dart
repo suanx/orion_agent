@@ -137,6 +137,8 @@ class _SshTerminalScreenState extends ConsumerState<SshTerminalScreen> {
       if (mounted) {
         setState(() => _status = '连接失败');
         _log('连接失败：$e');
+        _log('提示：上方若有 sshd: 开头的日志，那是服务端自己给的失败原因；'
+            '也可先用终端页的「命令控制台」执行 /usr/sbin/sshd -D -e 手动查看。');
       }
     } finally {
       if (mounted) setState(() => _busy = false);

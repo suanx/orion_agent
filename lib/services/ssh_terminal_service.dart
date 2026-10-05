@@ -32,7 +32,6 @@ class SshTerminalService {
   /// 断开 App 的后门）。
   static const rootPassword = 'orion';
 
-  static const _knownHostsMarker = 'orion_agent_managed';
 
   /// 已拉起的 sshd 进程（仅本 App 生命周期内有效，退出页面不杀，
   /// 方便下次进来秒连）。
@@ -81,44 +80,83 @@ class SshTerminalService {
       return;
     }
     onLog?.call('正在初始化 sshd…');
-    // 1) host key + root 密码 + 配置：一次性做完，失败信息直接抛给页面
+    // 1) host key + root 密码 + 运行目录。
+    //    ⚠️ 不再往 /etc/ssh/sshd_config 追加指令：sshd_config 里同一关键字
+    //    重复出现会直接报 "Bad configuration option" 而拒绝启动（用户/
+    //    包管理已经写过 Port/PermitRootLogin 时必踩）。启动参数改用
+    //    `sshd -o` 命令行传入——天然幂等，不碰配置文件。
+    //    /run/sshd（Debian 的 privilege separation 目录）与 /var/empty
+    //    缺失时 sshd 会立刻退出，这是「启动超时」最常见的原因。
     final init = await _terminal.runOn(
       _terminal.activeDistro,
-      // shell 片段：ssh-keygen -A 生成 host key；chpasswd 设 root 密码；
-      // sshd_config 用 heredoc 落盘（PermitRootLogin yes 必须，
-      // 否则密码方式会被拒；ListenAddress 0.0.0.0 让宿主 127.0.0.1 可连）
       'set -e; '
-      '[ -f /etc/ssh/sshd_config ] || ssh-keygen -A; '
+      'command -v sshd >/dev/null 2>&1 || test -x /usr/sbin/sshd || '
+      '  { echo NO_SSHD; exit 3; }; '
+      'ssh-keygen -A >/dev/null 2>&1 || true; '
       'echo "root:$rootPassword" | chpasswd; '
-      'printf "%s\\n" "$_knownHostsMarker" > /etc/ssh/orion_agent_sshd; '
-      'grep -q $_knownHostsMarker /etc/ssh/sshd_config || '
-      'printf "%s\\n" '
-      '"Port $port" "ListenAddress 0.0.0.0" "PermitRootLogin yes" '
-      '"PasswordAuthentication yes" "KbdInteractiveAuthentication yes" '
-      '"UsePAM no" "PermitEmptyPasswords no" '
-      '>> /etc/ssh/sshd_config; '
+      'mkdir -p /run/sshd /var/empty /etc/ssh /dev/pts; '
       'echo READY',
       timeout: const Duration(seconds: 60),
     );
     if (init.exitCode != 0 || !init.output.contains('READY')) {
+      if (init.output.contains('NO_SSHD')) {
+        throw Exception('沙箱内没有 sshd，请先安装 openssh 组件');
+      }
       throw Exception('sshd 初始化失败：${init.output.trim()}');
     }
     onLog?.call('配置就绪，正在启动 sshd…');
-    // 2) 后台常驻：startOn 返回的 Process 不等待退出；sshd -D 前台运行
+    // 2) 后台常驻：startOn 返回的 Process 不等待退出；sshd -D 前台运行。
+    //    端口/允许 root 登录等全部用 -o 传参，幂等且不动配置文件。
+    // ⚠️ UsePAM 只有 Debian 系认：Alpine 的 OpenSSH 未编译 PAM 支持，
+    // 传 -o UsePAM 会让 sshd 报 "Unsupported option" 并**直接退出**，
+    // 表现就是「启动超时」。按发行版拼参数。
+    final isAlpine = _terminal.activeDistro == TerminalDistro.alpine;
+    final sshdFlags = [
+      '-o ListenAddress=0.0.0.0',
+      '-o PermitRootLogin=yes',
+      '-o PasswordAuthentication=yes',
+      '-o KbdInteractiveAuthentication=yes',
+      '-o PermitEmptyPasswords=no',
+      if (!isAlpine) '-o UsePAM=no',
+    ].join(' ');
     _sshdProc = await _terminal.startOn(
       _terminal.activeDistro,
-      'exec /usr/sbin/sshd -D -e',
+      'exec /usr/sbin/sshd -D -e -p $port $sshdFlags',
     );
-    // 3) 等端口就绪（最多 8s）
-    for (var i = 0; i < 16; i++) {
+    // 2.1) 把 sshd 自己的 stderr 回显——它是唯一能说清「为什么没起来」
+    //     的信息源（缺目录、配置冲突、端口占用、host key 权限…）。
+    final diag = StringBuffer();
+    void drain(Stream<List<int>> s) {
+      s.transform(utf8.decoder).transform(const LineSplitter()).listen((line) {
+        final text = line.trim();
+        if (text.isEmpty) return;
+        diag.writeln(text);
+        onLog?.call('sshd: $text');
+      });
+    }
+
+    try {
+      drain(_sshdProc!.stdout);
+      drain(_sshdProc!.stderr);
+    } catch (_) {}
+    var exited = false;
+    _sshdProc!.exitCode.then((_) => exited = true).catchError((_) {});
+
+    // 3) 等端口就绪（最多 20s：proot 首次启动要读几 MB 的 proot 二进制
+    //    并挂载 /dev /proc /sys，冷启动比后续慢得多）
+    for (var i = 0; i < 40; i++) {
       if (await isPortOpen()) {
         onLog?.call('sshd 已就绪（127.0.0.1:$port）');
         return;
       }
+      if (exited) {
+        throw Exception('sshd 已退出（code=${_sshdProc!.exitCode}）。'
+            '上面的 sshd 日志说明了原因。');
+      }
       await Future<void>.delayed(const Duration(milliseconds: 500));
     }
-    throw Exception('sshd 启动超时（8 秒），可先在下方命令框手动执行 '
-        '/usr/sbin/sshd -D -e 查看报错');
+    throw Exception('sshd 启动超时（20 秒）。'
+        '${diag.toString().trim().isEmpty ? "没有输出日志" : "见上方 sshd 日志"}');
   }
 
   /// 连接并开启交互 shell。
