@@ -1,3 +1,16 @@
+# Orion Agent v0.2.10 更新说明
+
+## 移除 OpenCode CLI 组件
+
+- 终端环境不再检测/安装 OpenCode CLI：组件检测列表移除
+  「OpenCode CLI（内置 ACP 支持）」，一键安装脚本不再执行
+  `npm install -g opencode-ai`
+- 其余组件不受影响（Node.js / npm / Git / Python / uv / pip / SSH / sshd）
+- 已装过 opencode 的环境无需处理，如需清理可在终端内执行
+  `npm uninstall -g opencode-ai`
+
+---
+
 # Orion Agent v0.2.9 更新说明
 
 ## 修复：终端环境安装失败

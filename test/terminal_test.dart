@@ -25,8 +25,10 @@ void main() {
     for (final pkg in ['nodejs', 'npm', 'git', 'python3', 'uv', 'openssh', 'sshpass']) {
       expect(alpine, contains(pkg), reason: 'Alpine 缺少 $pkg');
     }
-    expect(alpine, contains('opencode-ai'));
     expect(alpine, contains('npmmirror')); // npm 走国内镜像
+    // opencode-ai 已按用户要求移除（2026-10-05），确保不再被装回
+    expect(alpine.contains('opencode-ai'), isFalse,
+        reason: 'OpenCode CLI 已移除，不应出现在安装脚本中');
 
     final debian = TerminalService.installScriptFor(TerminalDistro.debian);
     expect(debian, startsWith('apt-get update'));
@@ -34,7 +36,8 @@ void main() {
       expect(debian, contains(pkg), reason: 'Debian 缺少 $pkg');
     }
     expect(debian, contains('pip3 install --break-system-packages uv'));
-    expect(debian, contains('opencode-ai'));
+    expect(debian.contains('opencode-ai'), isFalse,
+        reason: 'OpenCode CLI 已移除，不应出现在安装脚本中');
   });
 
   test('发行版定义完整', () {

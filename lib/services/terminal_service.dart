@@ -101,18 +101,18 @@ class TerminalService {
 
   static const npmMirror = 'https://registry.npmmirror.com';
 
-  /// 一键安装脚本：系统包 + uv(Debian 走 pip) + OpenCode(npm，走国内镜像)。
+  /// 一键安装脚本：系统包 + uv(Debian 走 pip)。
+  /// npm 仅配置国内镜像（rootfs 内 node 生态自用），不再安装 opencode-ai
+  /// （2026-10-05 用户要求移除 OpenCode CLI 组件）。
   static String alpineInstallScript() =>
       'apk add --no-cache ${alpinePackages.join(' ')} && '
-      'npm config set -g registry $npmMirror && '
-      'npm install -g opencode-ai';
+      'npm config set -g registry $npmMirror';
 
   static String debianInstallScript() =>
       'apt-get update -qq && '
       'apt-get install -y --no-install-recommends ${debianPackages.join(' ')} && '
       'pip3 install --break-system-packages uv && '
-      'npm config set -g registry $npmMirror && '
-      'npm install -g opencode-ai';
+      'npm config set -g registry $npmMirror';
 
   static String installScriptFor(TerminalDistro d) =>
       d == TerminalDistro.alpine

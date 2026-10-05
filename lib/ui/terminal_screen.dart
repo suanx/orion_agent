@@ -33,8 +33,6 @@ const _toolChecks = <_ToolCheck>[
   _ToolCheck('python', 'Python 解释器', 'python3 --version', binary: 'python3'),
   _ToolCheck('uv', 'Python 项目与包工具', 'uv --version', binary: 'uv'),
   _ToolCheck('pip', 'Python 包安装器', 'pip3 --version', binary: 'pip3'),
-  _ToolCheck('opencode', 'OpenCode CLI（内置 ACP 支持）', 'opencode --version',
-      binary: 'opencode'),
   // ssh -V 把版本写进 stderr，退出码仍为 0。
   _ToolCheck('ssh', 'SSH 客户端', 'ssh -V', binary: 'ssh'),
   _ToolCheck('sshd', 'OpenSSH 服务器', 'sshd -V', binary: 'sshd'),
@@ -240,7 +238,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       // 为什么并发：proot 每次启动都要做路径重写，耗时 0.3~2 秒。
       // 9 个组件串行最坏要 9 × 2 = 18 秒，用户看着像卡死。
       // 为什么单项短超时（20s 而非默认 120s）：某个组件的探测命令若在
-      // guest 里挂住（例如 opencode 的 --version 会尝试联网），
+      // guest 里挂住（组件的 --version 可能尝试联网），
       // 串行下会拖住整轮检测。并发 + 短超时把最坏情况压到 20 秒。
       final results = await Future.wait<String?>([
         for (final t in _toolChecks)

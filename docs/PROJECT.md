@@ -490,7 +490,9 @@ $nativeLibraryDir/libproot.so \
 
 **安装标记**：Alpine 看 `bin/busybox`，Debian 看 `usr/bin/apt-get`
 
-**组件检测** (`terminal_screen.dart:15-25`)：nodejs / npm / git / python / uv / pip / opencode / ssh / sshd
+**组件检测** (`terminal_screen.dart:15-25`)：nodejs / npm / git / python / uv / pip / ssh / sshd
+（OpenCode CLI 组件已于 2026-10-05 按用户要求移除：检测项与安装脚本中的
+`npm install -g opencode-ai` 均已删除，回归测试反向断言其不再出现）
 
 **自启动任务** (`autostartTasks` `:146-156`)：
 
