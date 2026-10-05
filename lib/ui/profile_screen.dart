@@ -120,8 +120,10 @@ class ProfileScreen extends ConsumerWidget {
               label: '长期记忆',
               value: memoryCountLabel,
               onTap: () async {
-                await _push(context, const MemoryScreen());
+                // 直接 Navigator（_push 返回 void 不能 await），
                 // 从记忆页返回时可能增删过，刷新计数
+                await Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const MemoryScreen()));
                 ref.invalidate(memoryCountProvider);
               },
             ),

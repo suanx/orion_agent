@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/llm_config.dart';
 import '../providers/providers.dart';
+import '../services/llm_client.dart' show FetchedModel;
 
 /// 「AI 提供商」列表页：一条卡片一个提供商，点进详情。
 class SettingsScreen extends ConsumerWidget {
@@ -943,10 +944,12 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
     if (picked == null || picked.isEmpty) return;
     widget.onChanged();
     final notifier = ref.read(configProvider.notifier);
+    // name -> 元数据：Dart 3 core 没有 firstWhereOrNull，用 map 直查
+    final metaByName = {for (final m in fetched) m.name: m};
     for (final n in picked) {
       // 网关若附带 context_length / max_output_tokens，自动填充，
       // 省去逐个模型手填上下文与最大输出
-      final meta = fetched.firstWhereOrNull((m) => m.name == n);
+      final meta = metaByName[n];
       notifier.addModel(
         widget.configId,
         ProviderModel(
