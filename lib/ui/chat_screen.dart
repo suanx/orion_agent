@@ -1107,7 +1107,7 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
               const SizedBox(width: 6),
               Flexible(
                 child: Text(
-                  '· 🔧 ' + widget.toolNames.join(' · '),
+                  '· 🔧 ${widget.toolNames.join(' · ')}',
                   style: TextStyle(fontSize: 12, color: onSurface(context, 0.45)),
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

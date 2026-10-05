@@ -128,8 +128,9 @@ void main() {
     /// Archive → TarEncoder → GZipEncoder → 落盘。
     String makeTarGz(Directory tmp) {
       final archive = Archive()
-        ..add(ArchiveFile.string('a.txt', 'hello orion'))
-        ..add(ArchiveFile.string('usr/bin/tool', '#!/bin/sh\necho ok'));
+        // archive 3.x 的 API 是 addFile（4.x 才有 add），CI 解析到 3.x
+        ..addFile(ArchiveFile.string('a.txt', 'hello orion'))
+        ..addFile(ArchiveFile.string('usr/bin/tool', '#!/bin/sh\necho ok'));
       final tar = TarEncoder().encode(archive);
       final gz = GZipEncoder().encode(tar)!;
       final path = '${tmp.path}/test-rootfs.tar.gz';
