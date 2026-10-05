@@ -1,6 +1,7 @@
 import '../theme.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -85,9 +86,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _scrollController = ScrollController();
   final _pendingImages = <String>[]; // data URL
 
-  /// 待发送的文本类文件附件（名称 + UTF-8 文本内容）。
-  /// 发送时以「【附件：名称】+ 代码块」形式并入消息正文。
-  final _pendingFiles = <({String name, String content})>[];
+  /// 待发送的附件。文件已复制到工作区 uploads 目录；[text] 非空表示
+  /// 是小体积文本类文件（内容直接并入消息），否则只给模型路径 +
+  /// 「用终端工具处理」的提示（zip/apk/办公文档等二进制一律走这条）。
+  final _pendingFiles =
+      <({String name, String path, String guestPath, int size, String? text})>[];
   bool _hasText = false;
   bool _listening = false;
   /// 上次触发自动滚动的流式内容长度，避免每帧都注册 post-frame 回调。
@@ -168,10 +171,20 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       text = SkillService.expand(skill, args);
     }
 
-    // 文本类文件附件并入消息正文：模型对纯文本的兼容性远好于
-    // 自定义文件协议，代码块包裹保留缩进与换行。
+    // 附件并入消息正文：
+    // - 文本类（小文件能按 UTF-8 解码）：内容直接贴进代码块，模型直接可读
+    // - 其它一切格式（zip / apk / pdf / docx / 图片…）：只给工作区路径 +
+    //   工具提示。App 侧不解包二进制，而 proot 终端里的 unzip / tar /
+    //   python / file 才是处理它们的正确工具（用户 2026-10-05 明确要求）。
     for (final f in _pendingFiles) {
-      text = '$text\n\n【附件：${f.name}】\n```text\n${f.content}\n```';
+      final sizeMb = (f.size / (1024 * 1024)).toStringAsFixed(
+          f.size < 1024 * 1024 ? 2 : 1);
+      text = f.text != null
+          ? '$text\n\n【附件：${f.name}】\n```text\n${f.text}\n```'
+          : '$text\n\n【已上传文件】${f.name}（$sizeMb MB）\n'
+              '已上传到工作区（终端内可见）：${f.guestPath}\n'
+              '如需查看或处理，请使用终端工具（如 unzip / tar -xf / '
+              'cat / python3 读取该路径），不要臆测文件内容。';
     }
 
     if (text.isEmpty && _pendingImages.isEmpty) return;
@@ -275,7 +288,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         ),
         GlassMenuOption(
           value: 'file',
-          title: '文件（文本类）',
+          title: '文件（任意格式）',
           icon: Icons.description_outlined,
         ),
       ],
@@ -308,45 +321,82 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  /// 选择文本类文件附件：仅支持 512KB 内可按 UTF-8 解码的文件
-  /// （代码 / Markdown / 配置等），二进制文件明确提示不支持。
+  /// 选择附件：**任意格式**都收（zip / apk / pdf / docx / 图片 / 代码…）。
+  ///
+  /// 处理策略（2026-10-05 用户要求：不是有终端吗，各种格式交给终端
+  /// 的解压/查看命令处理）：
+  /// 1. 文件复制到【工作区 uploads/ 目录】——proot 终端与内置文件读写
+  ///    工具都以此为根，模型拿到的路径可直接被 unzip / tar / cat 读取；
+  /// 2. ≤256KB 且能按 UTF-8 解码 → 内容直接并入消息（代码/配置/日志
+  ///    这类最常见，也最省 token）；
+  /// 3. 其余（压缩包、安装包、办公文档、二进制…）→ 消息里只给路径 +
+  ///    工具提示，不在 App 侧做任何解包。
   Future<void> _pickFile() async {
     try {
       final result = await FilePicker.platform.pickFiles(
         type: FileType.any,
-        withData: true,
+        // 不强制读进内存：Android 返回 SAF 缓存路径，copy 是流式的，
+        // 大文件不会把内存打爆；只有极少数无路径的平台才落到 bytes。
+        withData: false,
       );
       if (!mounted) return;
       final file = result?.files.singleOrNull;
       if (file == null) return;
-      final bytes = file.bytes;
-      if (bytes == null || bytes.isEmpty) {
+      if (file.size > 200 * 1024 * 1024) {
         ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('读取文件失败：内容为空')));
+            const SnackBar(content: Text('文件过大（上限 200MB）')));
         return;
       }
-      if (bytes.length > 512 * 1024) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('文件过大（上限 512KB），请摘取相关内容后粘贴')));
+      final ws = await ref.read(terminalServiceProvider).workspaceDir();
+      final dir = Directory('$ws/uploads');
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      // 文件名做基本清洗（去掉路径分隔符与控制字符），重名加时间戳
+      var safe = file.name.replaceAll(RegExp(r'[\\/:*?"<>|\x00-\x1f]'), '_');
+      if (safe.isEmpty) safe = 'file.bin';
+      var dest = File('${dir.path}/$safe');
+      if (dest.existsSync()) {
+        final dot = safe.lastIndexOf('.');
+        final stem = dot > 0 ? safe.substring(0, dot) : safe;
+        final ext = dot > 0 ? safe.substring(dot) : '';
+        safe = '${stem}_${DateTime.now().millisecondsSinceEpoch}$ext';
+        dest = File('${dir.path}/$safe');
+      }
+      final src = file.path;
+      if (src != null) {
+        await File(src).copy(dest.path);
+      } else if (file.bytes != null) {
+        await dest.writeAsBytes(file.bytes!, flush: true);
+      } else {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('读取文件失败')));
         return;
       }
-      final String content;
-      try {
-        content = utf8.decode(bytes, allowMalformed: false);
-      } catch (_) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('仅支持文本类文件（代码 / Markdown / 配置等），'
-                '二进制文件无法作为附件发送')));
-        return;
+
+      // 尝试按文本解码：成功则内容并入消息，失败保持二进制路径模式
+      String? asText;
+      final len = await dest.length();
+      if (len <= 256 * 1024) {
+        try {
+          asText = utf8.decode(await dest.readAsBytes(), allowMalformed: false);
+          if (asText.trim().isEmpty) asText = '（空文件）';
+        } catch (_) {
+          asText = null; // 二进制
+        }
       }
+      if (!mounted) return;
       setState(() => _pendingFiles.add((
-            name: file.name,
-            content: content.trim().isEmpty ? '（空文件）' : content,
+            name: safe,
+            path: dest.path,
+            // guest 内工作区固定挂载在 /workspace（见 terminal_service
+            // startOn 的 -b 绑定）——给模型/终端的必须是这个路径
+            guestPath: '/workspace/uploads/$safe',
+            size: len,
+            text: asText,
           )));
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('选择文件失败：$e')));
+          .showSnackBar(SnackBar(content: Text('添加附件失败：$e')));
     }
   }
 
@@ -551,7 +601,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            _pendingFiles[i].name,
+                            // 附大小：二进制文件消息里只给路径，大小很关键
+                            '${_pendingFiles[i].name}'
+                            '（${(_pendingFiles[i].size / 1024).round()} KB'
+                            '${_pendingFiles[i].text != null ? ' · 文本' : ''}）',
                             style: const TextStyle(fontSize: 12.5),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,

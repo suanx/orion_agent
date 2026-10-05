@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -64,14 +65,16 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         fileName: 'orion_backup_$ts.json',
         type: FileType.custom,
         allowedExtensions: ['json'],
+        // Android/iOS 的 SAF 必须拿到内容本身，只给路径会报
+        // "Bytes are required on Android & iOS when saving a file"
+        bytes: Uint8List.fromList(utf8.encode(jsonText)),
       );
       if (!mounted) return;
       if (result == null) return; // 用户取消
-      await svc.writeToFile(result, jsonText);
       if (selected['configs'] == true) {
-        _toast('已导出：$result\n⚠️ 备份含 API Key，请妥善保管');
+        _toast('已导出备份\n⚠️ 含 API Key，请妥善保管');
       } else {
-        _toast('已导出：$result');
+        _toast('已导出备份');
       }
     } catch (e) {
       _toast('导出失败：$e');

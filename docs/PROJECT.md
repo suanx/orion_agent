@@ -164,6 +164,7 @@ orion_agent/
 │   │
 │   └── ui/                界面层
 │       ├── home_shell.dart             4 Tab 外壳 + 抽屉 + 底部导航
+│       ├── update_dialog.dart          应用内更新弹窗（进度条 + 实时速度 + 弹窗内安装）
 │       ├── chat_screen.dart            对话页（1867 行，最大文件；无气泡正文版式）
 │       ├── sessions_drawer.dart        会话抽屉
 │       ├── tasks_screen.dart           自动任务（M3 占位页）
@@ -176,7 +177,7 @@ orion_agent/
 │       ├── appearance_screen.dart      主题/明暗模式
 │       ├── notification_settings_screen.dart  通知设置
 │       ├── storage_settings_screen.dart     存储管理 + 工作区目录选择
-│       ├── about_screen.dart           关于页（软件介绍 + 在线更新 + 日志入口）
+│       ├── about_screen.dart           关于页（软件介绍 + 在线更新 + 日志入口；启动更新的下载/安装已迁至 update_dialog）
 │       ├── log_screen.dart             诊断日志查看/导出
 │       ├── backup_screen.dart          备份与恢复（数据域开关 + 导出/导入）
 │       ├── profile_screen.dart         我的
@@ -496,6 +497,12 @@ $nativeLibraryDir/libproot.so \
 **挂载点**：`/dev`、`/proc`、`/sys`、`<宿主 workspace>:/workspace`
 
 **安装标记**：Alpine 看 `bin/busybox`，Debian 看 `usr/bin/apt-get`
+
+**组件自动检测**（2026-10-05）：安装完成后自动跑一次检测；页面在前台时
+每次 `AppLifecycleState.resumed` 重新检测（组件会在 App 存活期内被
+apk add / apt install 改变，旧结果会骗人；IndexedStack 保活导致
+initState 只跑一次，故必须挂生命周期）。终端页是 push 页面，每次进入
+本身即 initState 检测。
 
 **组件检测** (`terminal_screen.dart:15-25`)：nodejs / npm / git / python / uv / pip / ssh / sshd
 （OpenCode CLI 组件已于 2026-10-05 按用户要求移除：检测项与安装脚本中的
@@ -839,10 +846,14 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
   流式 delta 不重复解析历史消息
 - 输入栏：发送/停止按钮切换、图片附件（`image_picker` 拍照或相册，1600px/quality80）
 - 语音输入（麦克风按钮）、技能调用（`/技能名`）
-- **文件附件**（2026-10-05）：「+」菜单第三项「文件（文本类）」走
-  FilePicker（SAF，免存储权限）；仅支持 512KB 内可 UTF-8 解码的文本类
-  文件（二进制/超限明确提示），发送时以「【附件：名称】+ text 代码块」
-  并入消息正文；待发送文件在输入框上方以行条展示可移除
+- **文件附件（任意格式）**（2026-10-05）：「+」菜单第三项「文件（任意
+  格式）」走 FilePicker（SAF，免存储权限），上限 200MB。文件先复制到
+  **工作区 uploads/**（proot 内固定挂载为 `/workspace`），然后二分：
+  - ≤256KB 且可 UTF-8 解码 → 内容以代码块并入消息（代码/配置/日志）
+  - 其余（zip / apk / pdf / docx / 图片…）→ 消息里只给
+    `/workspace/uploads/<名>` 路径 + 「用终端工具（unzip / tar / cat /
+    python3）处理」的提示——App 侧不做任何二进制解包，proot 才是正确工具
+  - 待发送附件在输入框上方以行条展示（名称 + 大小 + 是否文本），可移除
 - **发送前拦截**（`:112-119`）：流式期间必须**先拦截再清空输入框**，
   否则用户刚输入的文字和已选图片会被静默销毁
 - **自动滚动**（`:214-221`）：按 `streamingContent` 长度去重后才注册

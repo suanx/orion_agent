@@ -46,7 +46,8 @@ class TerminalScreen extends ConsumerStatefulWidget {
   ConsumerState<TerminalScreen> createState() => _TerminalScreenState();
 }
 
-class _TerminalScreenState extends ConsumerState<TerminalScreen> {
+class _TerminalScreenState extends ConsumerState<TerminalScreen>
+    with WidgetsBindingObserver {
   bool _busy = false;
   bool _installed = false;
   bool _checked = false;
@@ -83,10 +84,28 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
     _tasks = _loadTasks();
     _wsDirFuture = _terminal.workspaceDir();
     _restoreDistroAndRefresh();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  /// 每次回到前台自动重新检测组件（2026-10-05 用户要求）。
+  ///
+  /// HomeShell 用 IndexedStack 保留四个 Tab，终端页 State 只在首次进入时
+  /// 创建——initState 里那一次检测之后，用户反复进出页面看到的都是旧结果。
+  /// 组件装在 App 存活期内确实会变（在终端里 apk add / apt install），
+  /// 所以「每次进入界面自动检测」是必要的，而不是只在安装后跑一次。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    if (_busy || !_installed) return;
+    if (_checked) {
+      _appendLog('—— 重新进入页面，自动刷新组件检测 ——');
+      _checkTools();
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _logFlushTimer?.cancel();
     _cmdCtrl.dispose();
     super.dispose();
@@ -148,6 +167,9 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       await _terminal.install(_distro, onProgress: _appendLog);
       await _refreshInstalled();
       _refreshWorkspace();
+      // 安装完立即自动检测组件（用户要求：装完就能看到 node/git/python
+      // 装没装上，不用再手点一次「检测」）
+      await _checkTools();
     } catch (e) {
       // 终端依赖 proot 才能跑。proot 起不来时 rootfs 下载完成但环境不可用，
       // 这里把proot 相关的原因单独拎出来，否则用户只会看到
