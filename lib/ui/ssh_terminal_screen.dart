@@ -120,14 +120,13 @@ class _SshTerminalScreenState extends ConsumerState<SshTerminalScreen> {
         return;
       }
       _session = session;
-      // 持续收输出：pty 是双向流，stdout/stderr 都要接
-      final out = session.shell.stdout as dynamic;
-      (out as Stream<dynamic>).listen((dynamic data) {
-        _logRaw(stripAnsi(utf8.decode(data is List<int> ? data : List<int>.from(data as List), allowMalformed: true)));
+      // 持续收输出：pty 是双向流，stdout/stderr 都要接（类型是
+      // Stream<Uint8List>，按 UTF-8 容错解码后清掉 ANSI 控制序列）
+      session.shell.stdout.listen((data) {
+        _logRaw(stripAnsi(utf8.decode(data, allowMalformed: true)));
       });
-      final err = session.shell.stderr as dynamic;
-      (err as Stream<dynamic>).listen((dynamic data) {
-        _logRaw(stripAnsi(utf8.decode(data is List<int> ? data : List<int>.from(data as List), allowMalformed: true)));
+      session.shell.stderr.listen((data) {
+        _logRaw(stripAnsi(utf8.decode(data, allowMalformed: true)));
       });
       setState(() => _status = '已连接（root@沙箱）');
       _log('提示：输入命令后回车执行；「/workspace」是宿主映射的工作区；'

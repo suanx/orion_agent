@@ -3,8 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:dartssh2/ssh_client.dart';
-import 'package:dartssh2/ssh_socket.dart';
+import 'package:dartssh2/dartssh2.dart';
 
 import 'terminal_service.dart';
 
@@ -90,7 +89,7 @@ class SshTerminalService {
       // 否则密码方式会被拒；ListenAddress 0.0.0.0 让宿主 127.0.0.1 可连）
       'set -e; '
       '[ -f /etc/ssh/sshd_config ] || ssh-keygen -A; '
-      'echo "root:$_rootPassword" | chpasswd; '
+      'echo "root:$rootPassword" | chpasswd; '
       'printf "%s\\n" "$_knownHostsMarker" > /etc/ssh/orion_agent_sshd; '
       'grep -q $_knownHostsMarker /etc/ssh/sshd_config || '
       'printf "%s\\n" '
@@ -142,7 +141,10 @@ class SshSession {
   SshSession._({required this.client, required this.shell});
 
   final SSHClient client;
-  final dynamic shell; // SSHShell（dartssh2 未导出该类型的公开名字时用 dynamic）
+
+  /// `client.shell()` 的返回类型：带 pty 的会话，stdout/stderr 是
+  /// `Stream<Uint8List>`，`write(Uint8List)` 发输入。
+  final SSHSession shell;
 
   /// 关闭连接（页面退出时调用；sshd 进程保持常驻）。
   Future<void> close() async {
@@ -157,9 +159,7 @@ class SshSession {
   /// 发送原始输入（方向键、Ctrl-C 等控制序列走这里）。
   void write(String data) {
     try {
-      // dartssh2 的 shell 暴露 write(Uint8List)；用 dynamic 调用避免
-      // 不同版本 SSHShell 类型导出差异带来的编译问题
-      (shell as dynamic).write(Uint8List.fromList(utf8.encode(data)));
+      shell.write(Uint8List.fromList(utf8.encode(data)));
     } catch (_) {}
   }
 }
