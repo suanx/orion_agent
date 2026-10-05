@@ -12,16 +12,23 @@ import '../providers/providers.dart';
 class FontSettingsScreen extends ConsumerWidget {
   const FontSettingsScreen({super.key});
 
-  /// 档位表：缩放系数 → 显示名。
+  /// 档位表：(缩放系数, 显示名)。
   /// 顺序即 UI 呈现顺序；新增档位时同步 providers.dart 的注释约定。
-  static const _options = <double, String>{
-    0.85: '小',
-    1.0: '标准',
-    1.15: '大',
-    1.3: '特大',
-  };
+  /// 用 record 列表而非 Map<double, _>：double 重写了 == / hashCode，
+  /// const map 的 double 键会触发 const_map_key_not_primitive_equality 编译错误。
+  static const _options = <(double, String)>[
+    (0.85, '小'),
+    (1.0, '标准'),
+    (1.15, '大'),
+    (1.3, '特大'),
+  ];
 
-  static String labelOf(double scale) => _options[scale] ?? '标准';
+  static String labelOf(double scale) {
+    for (final (s, label) in _options) {
+      if (s == scale) return label;
+    }
+    return '标准';
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -51,10 +58,10 @@ class FontSettingsScreen extends ConsumerWidget {
               width: double.infinity,
               child: SegmentedButton<double>(
                 segments: [
-                  for (final e in _options.entries)
+                  for (final (s, label) in _options)
                     ButtonSegment(
-                      value: e.key,
-                      label: Text(e.value),
+                      value: s,
+                      label: Text(label),
                     ),
                 ],
                 selected: {scale},
