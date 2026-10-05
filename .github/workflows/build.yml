@@ -2,7 +2,7 @@ name: build
 
 on:
   push:
-    branches: [main, beta]
+    branches: [main]
   workflow_dispatch:
     inputs:
       obfuscate:
@@ -56,6 +56,11 @@ jobs:
 
           // targetSdk 28（终端环境 exec 需要）触发 Play 上架 lint，侧载分发故关闭
           android {
+              // file_picker 的传递依赖 flutter_plugin_android_lifecycle 2.0.2x
+              // 要求编译目标 ≥ Android API 36，不满足则 checkReleaseAarMetadata
+              // 直接失败（v0.2.16-beta 实测）。compileSdk 只影响编译期 API，
+              // targetSdk 仍为 28（终端 exec 需要），互不影响。
+              compileSdk = 36
               lint {
                   checkReleaseBuilds = false
                   abortOnError = false
@@ -507,19 +512,16 @@ jobs:
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$TAG" "orion-agent-v$VN.apk" --clobber -R "$GITHUB_REPOSITORY"
             gh release edit "$TAG" --notes-file /tmp/rel_notes.md -R "$GITHUB_REPOSITORY"
-            # ⚠️ beta 分支专属：本分支构建一律发布为 pre-release——
-            # releases/latest（稳定通道）会排除 pre-release，稳定用户不受影响；
-            # 应用内「加入 Beta 测试」开关开启的用户走 releases 列表可收到本版
-            # （beta 分支可能先以 pre-release 占用同版本 tag；之后该版本合入
-            # main 发稳定版时，main 侧的 --prerelease=false 会取消此标记）
-            gh release edit "$TAG" --prerelease -R "$GITHUB_REPOSITORY"
+            # beta 分支可能先以 pre-release 占用了同版本 tag；稳定版覆盖
+            # 同 tag 时必须取消预发布标记，否则 releases/latest（排除
+            # pre-release）会跳过它，稳定通道用户收不到该版更新
+            gh release edit "$TAG" --prerelease=false -R "$GITHUB_REPOSITORY"
             # 清理历史遗留的未重命名资产
             gh release delete-asset "$TAG" app-release.apk -y -R "$GITHUB_REPOSITORY" || true
           else
             gh release create "$TAG" "orion-agent-v$VN.apk" \
               -R "$GITHUB_REPOSITORY" \
-              --title "Orion Agent v$VN (Beta)" \
-              --notes-file /tmp/rel_notes.md \
-              --prerelease
+              --title "Orion Agent v$VN" \
+              --notes-file /tmp/rel_notes.md
           fi
-          echo "已发布 $TAG（pre-release）"
+          echo "已发布 $TAG"
