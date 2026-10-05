@@ -429,29 +429,25 @@ jobs:
         # 其 AAR metadata 要求使用方 compileSdk ≥ 36；而 Flutter 插件
         # 子模块默认按 flutter.compileSdkVersion(34) 编译 →
         # :file_picker:checkReleaseAarMetadata 直接失败（v0.2.16-beta 实测）。
-        # 这里把【所有 Android 子模块】的 compileSdk 统一提到 36——
-        # 用反射调用 setCompileSdkVersion：root 脚本类路径上没有 AGP 类型，
-        # 不能直接引用 BaseExtension。targetSdk 不受影响（仍为 28）。
+        #
+        # 两个被否决的方案（省得再踩）：
+        # 1. root build.gradle.kts 追加 subprojects{afterEvaluate{...}} →
+        #    报 "project is already evaluated"（root 评估时机晚于子项目）
+        # 2. dependency_overrides 钉 lifecycle 2.0.19 → 用 v1 embedding
+        #    API，在 Flutter 3.47 下 javac 编译失败
+        #
+        # 本方案：pub get 之后直接把 pub-cache 里所有插件构建脚本的
+        # flutter.compileSdkVersion 替换为字面量 36（app 模块已单独设 36）。
+        # 只影响编译期 API 级别，targetSdk 仍为 28。
         run: |
-          cat >> android/build.gradle.kts <<'EOF'
-          // 插件子模块 compileSdk 统一 36（见 build.yml 注入步骤说明）。
-          // 用反射调 setCompileSdkVersion：root 脚本类路径上没有 AGP 类型，
-          // 不能直接写 com.android.build.gradle.BaseExtension 强转。
-          subprojects {
-              afterEvaluate {
-                  val ext = extensions.findByName("android") ?: return@afterEvaluate
-                  val setter = ext.javaClass.methods.firstOrNull {
-                      it.name == "setCompileSdkVersion" &&
-                          it.parameterTypes.firstOrNull() == java.lang.Integer.TYPE
-                  } ?: return@afterEvaluate
-                  val cur = ext.javaClass.methods
-                      .firstOrNull { it.name == "getCompileSdkVersion" }
-                      ?.invoke(ext) as? String
-                  if (cur == null || cur < "android-36") setter.invoke(ext, 36)
-              }
-          }
-          EOF
-          tail -14 android/build.gradle.kts
+          CACHE="${PUB_CACHE:-$HOME/.pub-cache}/hosted/pub.dev"
+          COUNT=0
+          for f in $(grep -rl "flutter\.compileSdkVersion" "$CACHE"/*/android/build.gradle* 2>/dev/null); do
+            sed -i 's/flutter\.compileSdkVersion/36/g' "$f"
+            COUNT=$((COUNT+1))
+          done
+          echo "已改写 $COUNT 个插件构建脚本的 compileSdk"
+          grep -rn "compileSdk = 36\|compileSdkVersion 36" "$CACHE"/*/android/build.gradle* 2>/dev/null | head -5 || true
 
       - name: Build APK
         # 同样把失败明细以 annotation 暴露（job log 无权限查看）
