@@ -59,8 +59,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     // 延迟：首帧渲染 + 终端自启任务 + MCP 连接都在抢启动窗口，
     // 更新检查不与它们竞争。
     await Future<void>.delayed(const Duration(seconds: 4));
-    final info =
-        await ref.read(updateServiceProvider).checkForUpdate(kAppVersion);
+    final info = await ref.read(updateServiceProvider).checkForUpdate(
+        kAppVersion,
+        // Beta 用户：自动检查也走含预发布的通道（与关于页手动检查一致）
+        includePrereleases: ref.read(betaOptInProvider));
     if (info == null || !mounted) return;
     ref.read(pendingUpdateProvider.notifier).state = info;
     if (!mounted) return;

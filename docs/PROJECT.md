@@ -866,10 +866,27 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 **防反编译**（2026-10-05，v0.2.2 首开后白屏，已于 v0.2.3 回退）：v0.2.2 曾启用
 `--obfuscate --split-debug-info` + R8 minify/shrink，装机启动白屏（见 §11.18）。
 APK 取证结论：R8 实际未生效（dex 内插件类名原样、arsc 无变化）；libapp.so
-符号剥离（--obfuscate）为白屏主因。**当前构建已回退为 v0.2.1 的纯 release**。
+符号剥离（--obfuscate）为白屏主因。**当前正式构建仍为纯 release**。
 workflow 里保留 `proguard-rules.pro` 落盘逻辑供未来重新启用；重新引入任何
 混淆前必须：单独出测试版 → 真机验证启动与工具调用 → 用 mapping.txt /
 so 符号表确认混淆确实生效，再进正式版。
+
+**分步重引入协议实施（2026-10-05，第一步就位）**：`build.yml` 的
+`workflow_dispatch` 新增输入 `obfuscate`（boolean，默认 false）——
+
+- 手动触发并勾选时：构建追加 `--obfuscate --split-debug-info=build/app/symbols`，
+  artifact 命名 `orion-agent-apk-test`（与正式包隔离防误装），符号表归档为
+  `orion-agent-symbols`（`flutter symbolize -d <libapp.so> -i <trace> -o out`
+  还原堆栈用，必须与 APK 同 run 留档）
+- **发布步骤加 `if: github.event_name == 'push'`**：测试版不发 Release，
+  不会进入应用内更新通道
+- push 触发的正式构建路径完全不变（无混淆），真机验证通过后第二步才切换
+- 当时致白屏的两个 release-only 崩溃（Markdown 样式表空断言 §11.18、
+  AnimatedContainer clip 无 decoration）已分别于 v0.2.5/v0.2.6 修复，
+  且发布版有红色错误卡片兜底，本次重试有判据
+- 第二步（真机验证通过后）：正式构建切混淆 + symbols artifact 常态归档；
+  第三步：R8/minify 单独验证（v0.2.2 时它实际未生效，须以 mapping.txt/
+  dex 取证确认后才启用）
 
 **18 个步骤**：
 
@@ -963,6 +980,7 @@ grep -qE 'jvmTarget\s*=\s*.*(JVM_17|VERSION_17)' "$F" || exit 1
 | `theme_id` | String | `classic` | 配色主题 |
 | `theme_mode` | String | `system` | `system`/`light`/`dark` |
 | `chat_font_scale` | double | `1.0` | 对话字体缩放（0.85/1.0/1.15/1.3，`chatFontScaleProvider`，入口：我的→对话字体→`FontSettingsScreen`） |
+| `beta_opt_in` | bool | `false` | 加入 Beta 测试（`betaOptInProvider`，入口：关于页开关）。开启后更新检查走 GitHub releases 列表（含 pre-release、跳过 draft），云端 /update/check 被旁路；关闭后恢复「云端优先 → GitHub latest」。Beta 发布的 tag 仍须是纯 vX.Y.Z 数字（预发布语义用 GitHub pre-release 勾选表达），带 `-beta.1` 后缀会破坏逐段数字比较 |
 | `terminal_setup_done` | bool | `false` | 首次运行引导是否已完成 |
 | `terminal_tasks` | String(JSON) | `[]` | 终端自启动任务数组 |
 | `cloud_base_url` | String | 无 | 云端服务器地址（空 = 云功能降级，本地不受影响） |

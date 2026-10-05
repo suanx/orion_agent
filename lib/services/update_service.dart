@@ -14,6 +14,11 @@ class UpdateService {
   static const _latestApi =
       'https://api.github.com/repos/suanx/orion_agent/releases/latest';
 
+  /// Beta 通道：releases 列表（按 created_at 倒序，含 pre-release）。
+  /// 取前 5 条：预发布可能连续多个，足够覆盖到第一条比当前新的版本。
+  static const _listApi =
+      'https://api.github.com/repos/suanx/orion_agent/releases?per_page=5';
+
   static const _defaultTimeout = Duration(seconds: 15);
 
   final CloudService? _cloud;
@@ -21,8 +26,16 @@ class UpdateService {
   Dio get _dio => _dioInstance ??= Dio(BaseOptions(connectTimeout: _defaultTimeout));
 
   /// 检查结果：null 表示已是最新或检查失败（自动检查应当静默）。
+  ///
+  /// [includePrereleases] = Beta 通道（关于页「加入 Beta 测试」开关）：
+  /// 云端 /update/check 没有「预发布」概念，开启后直查 GitHub releases
+  /// 列表（含 pre-release、不含 draft），取最新一条带 APK 且比当前新的。
   Future<UpdateInfo?> checkForUpdate(String currentVersion,
-      {Duration timeout = _defaultTimeout}) async {
+      {Duration timeout = _defaultTimeout,
+      bool includePrereleases = false}) async {
+    if (includePrereleases) {
+      return _checkViaGithubList(currentVersion, timeout: timeout);
+    }
     // 云端优先：国内网络下 GitHub API 与 Releases 下载都不可靠
     final viaCloud = await _checkViaCloud(currentVersion);
     if (viaCloud != null) return viaCloud;
@@ -65,31 +78,73 @@ class UpdateService {
       );
       final data = resp.data;
       if (data == null) return null;
-      final tag = (data['tag_name'] as String? ?? '').replaceFirst('v', '');
-      if (tag.isEmpty) return null;
-      if (!isNewer(tag, currentVersion)) return null;
-      String? apkUrl;
-      final assets = data['assets'];
-      if (assets is List) {
-        for (final a in assets) {
-          if (a is! Map) continue;
-          final m = a.cast<String, dynamic>();
-          final name = m['name'] as String? ?? '';
-          if (name.toLowerCase().endsWith('.apk')) {
-            apkUrl = m['browser_download_url'] as String?;
-            break;
-          }
-        }
-      }
-      final changelog = (data['body'] as String? ?? '').trim();
-      return UpdateInfo(
-        version: tag,
-        changelog: changelog.isEmpty ? null : changelog,
-        apkUrl: apkUrl,
-      );
+      return parseReleaseEntry(data, currentVersion: currentVersion);
     } catch (_) {
       return null;
     }
+  }
+
+  /// Beta 通道：查 releases 列表（含 pre-release），从新到旧找第一条
+  /// 比 [currentVersion] 新且带 APK 的发布。
+  ///
+  /// 顺序遍历全部 5 条而不是只看第一条：预发布可能不带 APK 或带也可能
+  /// 仍是当前版本（重复推包），跳过它们继续向后找稳定版兜底。
+  Future<UpdateInfo?> _checkViaGithubList(String currentVersion,
+      {required Duration timeout}) async {
+    try {
+      final resp = await _dio.get<List<dynamic>>(
+        _listApi,
+        options: Options(
+          responseType: ResponseType.json,
+          receiveTimeout: timeout,
+        ),
+      );
+      final list = resp.data;
+      if (list == null) return null;
+      for (final item in list) {
+        final info = parseReleaseEntry(item, currentVersion: currentVersion);
+        if (info != null) return info;
+      }
+      return null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 把一条 GitHub release JSON 解析为 UpdateInfo；不可用（draft / 无
+  /// APK / 不比 [currentVersion] 新）返回 null。
+  ///
+  /// 纯函数（无网络），供单元测试直接构造 JSON 断言。
+  /// ⚠️ 版本比较依赖「逐段数字」规则，beta 发布的 tag 仍须是纯 vX.Y.Z
+  /// 数字（预发布语义用 GitHub 的 pre-release 勾选表达），带 `-beta.1`
+  /// 之类后缀会被解析成 0 而比较错乱。
+  static UpdateInfo? parseReleaseEntry(dynamic item,
+      {required String currentVersion}) {
+    if (item is! Map) return null;
+    final m = item.cast<String, dynamic>();
+    if (m['draft'] == true) return null; // draft 无 APK 且非公开
+    final tag = (m['tag_name'] as String? ?? '').replaceFirst('v', '');
+    if (tag.isEmpty) return null;
+    if (!isNewer(tag, currentVersion)) return null;
+    String? apkUrl;
+    final assets = m['assets'];
+    if (assets is List) {
+      for (final a in assets) {
+        if (a is! Map) continue;
+        final am = a.cast<String, dynamic>();
+        final name = am['name'] as String? ?? '';
+        if (name.toLowerCase().endsWith('.apk')) {
+          apkUrl = am['browser_download_url'] as String?;
+          break;
+        }
+      }
+    }
+    final changelog = (m['body'] as String? ?? '').trim();
+    return UpdateInfo(
+      version: tag,
+      changelog: changelog.isEmpty ? null : changelog,
+      apkUrl: apkUrl,
+    );
   }
 
   /// 版本比较：逐段数字比较，段数不足补 0。'v' 前缀由调用方剥掉。

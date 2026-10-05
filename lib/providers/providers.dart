@@ -260,6 +260,15 @@ final chatFontScaleProvider = StateProvider<double>((ref) {
       1.0;
 });
 
+/// 是否加入 Beta 测试（持久化，默认关闭）。
+///
+/// 开启后更新检查改走 GitHub releases 列表（含 pre-release），
+/// 会提示安装标记为「预发布」的测试版本（可能不稳定）。
+/// 入口：关于页「加入 Beta 测试」开关。
+final betaOptInProvider = StateProvider<bool>((ref) {
+  return ref.watch(sharedPreferencesProvider).getBool('beta_opt_in') ?? false;
+});
+
 final mcpServiceProvider = Provider<McpService>((ref) =>
     McpService(ref.watch(databaseProvider), ref.watch(toolRegistryProvider)));
 

@@ -10,7 +10,7 @@ import '../providers/providers.dart';
 /// 当前版本号。发版时与 pubspec.yaml 的 `version` 同步更新
 /// （只升 pubspec 不升这里 → 应用自报版本落后，更新检查会一直
 /// 提示安装「新版本」，即使用户已经装上了最新包）。
-const String kAppVersion = '0.2.10';
+const String kAppVersion = '0.2.11';
 
 /// GitHub Releases 页面（检查逻辑在 UpdateService）。
 const _releasesPage = 'https://github.com/suanx/orion_agent/releases';
@@ -68,7 +68,10 @@ class _AboutScreenState extends ConsumerState<AboutScreen>
     try {
       final info = await ref
           .read(updateServiceProvider)
-          .checkForUpdate(kAppVersion, timeout: const Duration(seconds: 15));
+          .checkForUpdate(kAppVersion,
+              timeout: const Duration(seconds: 15),
+              // Beta 开启时走含预发布的 GitHub releases 列表
+              includePrereleases: ref.read(betaOptInProvider));
       if (!mounted) return;
       if (info == null) {
         setState(() {
@@ -296,6 +299,30 @@ class _AboutScreenState extends ConsumerState<AboutScreen>
               },
       ),
     ];
+    // Beta 测试开关：开启后更新检查含 GitHub 预发布（pre-release）版本。
+    // watch 放本方法内（build 调用链上），切换立即刷新本页开关状态。
+    final beta = ref.watch(betaOptInProvider);
+    tiles.add(Divider(height: 1, color: onSurface(context, 0.06)));
+    tiles.add(SwitchListTile(
+      secondary: const Icon(Icons.science_outlined, size: 20),
+      title: const Text('加入 Beta 测试',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w500)),
+      subtitle: Text('提前体验预发布测试版，可能不稳定',
+          style: TextStyle(fontSize: 12, color: onSurface(context, 0.4))),
+      value: beta,
+      onChanged: (v) {
+        ref.read(sharedPreferencesProvider).setBool('beta_opt_in', v);
+        ref.read(betaOptInProvider.notifier).state = v;
+        // 关闭 Beta 后若之前停在「发现新版（预发布）」状态，重置提示，
+        // 避免继续展示用户已选择不再接收的预发布更新。
+        if (!v && (_state == 'available' || _state == 'downloaded')) {
+          setState(() {
+            _state = 'idle';
+            _message = null;
+          });
+        }
+      },
+    ));
     // 发现新版时展示更新日志
     if (_state == 'available' && _changelog != null) {
       tiles.add(Divider(height: 1, color: onSurface(context, 0.06)));
