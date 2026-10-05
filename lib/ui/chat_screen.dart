@@ -506,7 +506,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           modelName: ref.watch(configProvider).activeConfig?.chatModel?.name,
           onPickModel: _pickModel,
         ),
-        const SizedBox(height: 72), // 给磨砂底导航留出空间
+        // 键盘弹出时磨砂底导航已整体隐藏（见 HomeShell），这个占位
+        // 也必须随之归零，否则输入栏与键盘之间会留一条 72px 的空隙；
+        // 键盘收起后才恢复给底导航留位。
+        SizedBox(height: MediaQuery.viewInsetsOf(context).bottom > 0 ? 0 : 72),
       ],
     );
   }

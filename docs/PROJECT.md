@@ -770,6 +770,14 @@ State，只有 `HomeShell` 知道怎么切；navigatorKey 只能 push/pop。
 键盘弹起时底部导航**整条隐藏**（`AnimatedContainer` 高度动画到 0，收起后展开），
 输入界面只留输入栏，不再与键盘之间夹一条导航（2026-10-05 用户反馈）。
 
+**键盘避让只做一次**：Scaffold 显式 `resizeToAvoidBottomInset: false`，
+键盘高度完全由 body 外层 `Padding(bottom: viewInsets.bottom)` 手动承担。
+此前未显式关闭 Scaffold 默认避让（默认 true），与手动 padding 叠加成
+**双重避让**——内容被多顶起一个键盘的高度，输入栏浮在屏幕顶端、与键盘之间
+一大片空白（2026-10-05 用户截图对比竞品发现）。同时 `ChatScreen` 底部给底导航
+留位的 `SizedBox(height: 72)` 在键盘弹出时归零（此时底导航已隐藏），否则输入栏
+与键盘之间还会留一条 72px 缝。
+
 Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 —— 与 `HomeTab` 常量一一对应。
 

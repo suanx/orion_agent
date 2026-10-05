@@ -165,14 +165,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
   Widget build(BuildContext context) {
     // 键盘弹起时把整棵子树顶上去。
     //
-    // 之前用 Scaffold 默认的 resizeToAvoidBottomInsets，键盘弹起后
-    // Scaffold 会给body 加一段 bottom padding 把内容顶高，但
-    // bottomNavigationBar 是自定义的、不参与这套避让，于是
-    // 「被顶高的 body」与「原地不动的底栏」之间留下一条空白带
-    // —— 截图里键盘上方那块什么都没有的灰条就是它。
-    //
-    // 改成自己处理：MediaQuery.viewInsets.bottom 就是键盘高度，
-    // 用它整体位移，键盘与内容永远贴合，不留缝。
+    // ⚠️ 避让只做一次（历史教训，截图对比竞品发现）：Scaffold 默认的
+    // resizeToAvoidBottomInset = true 已经把 body 缩短一个键盘高度，
+    // 这里若再手动 Padding(bottom: kb) 就顶了两次——内容被多抬高一个
+    // 键盘的高度，表现为输入栏浮在屏幕顶端、与键盘之间一大片空白。
+    // 必须显式设 resizeToAvoidBottomInset: false，把避让完全交给
+    // 下面的手动 padding，键盘与输入栏才能贴合。
     final kb = MediaQuery.viewInsetsOf(context).bottom;
 
     return Scaffold(
@@ -188,9 +186,10 @@ class _HomeShellState extends ConsumerState<HomeShell> {
         },
       ),
       extendBody: true,
-      // 不设 resizeToAvoidBottomInsets：当前 Flutter stable 已移除该参数
-      // （设了会编译失败）。改为整体不依赖 Scaffold 的避让——
-      // body 与底栏都用下面的 kb 手动位移，两者同步，不会叠加。
+      // 显式关闭 Scaffold 自带的键盘避让（默认 true），键盘避让只由
+      // body 外层的 Padding(bottom: kb) 做一次，否则双重避让会把
+      // 输入栏顶到屏幕顶端（与键盘之间留下一整块空白）。
+      resizeToAvoidBottomInset: false,
       body: Padding(
         padding: EdgeInsets.only(bottom: kb),
         child: IndexedStack(
