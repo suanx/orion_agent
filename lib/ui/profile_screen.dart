@@ -31,9 +31,16 @@ class ProfileScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final memory = ref.watch(memoryServiceProvider);
     final config = ref.watch(configProvider);
     final mode = ref.watch(themeModeProvider);
+    // 记忆条数走响应式 FutureProvider：懒加载的 MemoryService 直读
+    // notes 恒为 0（见 memoryCountProvider 注释）。加载失败显示 '?'，
+    // 不阻塞整页渲染。
+    final memoryCount = ref.watch(memoryCountProvider);
+    final memoryCountLabel = memoryCount.maybeWhen(
+      data: (n) => '$n 条',
+      orElse: () => '…',
+    );
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 90),
@@ -111,8 +118,12 @@ class ProfileScreen extends ConsumerWidget {
               // 通用视觉符号；原来的灯泡容易和「提示/想法」混淆。
               icon: Icons.memory_outlined,
               label: '长期记忆',
-              value: '${memory.notes.length} 条',
-              onTap: () => _push(context, const MemoryScreen()),
+              value: memoryCountLabel,
+              onTap: () async {
+                await _push(context, const MemoryScreen());
+                // 从记忆页返回时可能增删过，刷新计数
+                ref.invalidate(memoryCountProvider);
+              },
             ),
             _Row(
               // 知识库用图书馆/阅读图标，与「书」相关但和记忆区分开。

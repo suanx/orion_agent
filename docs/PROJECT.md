@@ -439,6 +439,9 @@ abstract class Tool {
 - **加载语义** (`load()` `:28-48`)：`_loaded` 只在查询**成功后**置位，
   并发调用共享同一个 `Future`。失败后允许重试
 - 淘汰时**先 insert 后 delete**，否则新记录可能被当最旧的删掉
+- **「我的」页记忆计数**（2026-10-05）：走响应式 `memoryCountProvider`
+  （FutureProvider，watch 即 load；曾直读 notes 恒显示 0 条——懒加载
+  未触发且普通 Provider 不通知）。刷新点：记忆页返回、切「我的」Tab
 
 ### 5.6 终端环境 (`terminal_service.dart`)
 
@@ -630,6 +633,9 @@ sanitize: replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')
 - **重连前先按服务器名前缀注销旧工具** —— 否则旧 `McpTool`（持有旧 client/Dio）
   被永久保留，新连接被丢弃
 - 每个服务器独立 Dio，失败 `close(force: true)`，失败打日志不静默
+- **编辑服务器**（`updateServer`，2026-10-05）：改名称/URL 落库并断开旧
+  client，由界面触发 `connectAll` 重连——改名会换工具注册前缀、改 URL
+  换端点，两处失效都由重连兜底
 
 ### 5.10 技能系统 (`skill_service.dart`)
 
@@ -1061,7 +1067,17 @@ class ToolCall {
 | 模型 | `models` / `defaultChatModel` / `defaultEmbeddingModel` |
 
 **`ProviderModel`（模型）字段**：`name` / `kind` / `contextWindow` /
-`maxOutputTokens` / `temperature`。温度范围 **0–1.5**，默认 **0.7**。
+`maxOutputTokens` / `temperature` / `modalities`（多模态，2026-10-05 新增，
+`['text']` 恒在 + 编辑器勾选 `image` / `video`；旧数据无字段 → 聊天模型
+视为 `text+image`、向量模型 `text`，与旧行为一致）。温度范围 **0–1.5**，
+默认 **0.7**。
+
+**拉取模型自动填充元数据**（2026-10-05）：`listModels` 返回
+`FetchedModel`（name + 可选 contextWindow / maxOutputTokens），解析
+`context_length` / `context_window` / `context_size`、`max_output_tokens` /
+`max_completion_tokens` / `max_tokens` 及嵌套 `top_provider.max_completion_tokens`
+（OpenRouter）；网关没给的字段留 0（不限制），`listModelNames` 保留为
+仅取名字的兼容入口。
 
 **关键派生属性**
 

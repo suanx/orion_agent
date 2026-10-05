@@ -44,15 +44,20 @@ class _McpScreenState extends ConsumerState<McpScreen> {
     }
   }
 
-  Future<void> _addServer() async {
-    final nameCtrl = TextEditingController();
-    final urlCtrl = TextEditingController(text: 'http://');
+  /// 添加 / 编辑 MCP 服务器共用弹窗。[existing] 非空为编辑模式，
+  /// 输入框预填当前值；返回 (name, url) 或 null（取消）。
+  Future<(String, String)?> _showServerDialog({
+    McpServer? existing,
+  }) async {
+    final nameCtrl = TextEditingController(text: existing?.name ?? '');
+    final urlCtrl =
+        TextEditingController(text: existing?.url ?? 'http://');
     // 双输入框弹窗，不迁移 showGlassTextDialog；输入值随 pop 带出 +
     // whenComplete dispose（P2-6）。
     final saved = await showGlassDialog<(String, String)>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('添加 MCP 服务器'),
+        title: Text(existing == null ? '添加 MCP 服务器' : '编辑 MCP 服务器'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -78,24 +83,46 @@ class _McpScreenState extends ConsumerState<McpScreen> {
           TextButton(
               onPressed: () =>
                   Navigator.pop(ctx, (nameCtrl.text.trim(), urlCtrl.text.trim())),
-              child: const Text('添加')),
+              child: Text(existing == null ? '添加' : '保存')),
         ],
       ),
     ).whenComplete(() {
       nameCtrl.dispose();
       urlCtrl.dispose();
     });
+    return saved;
+  }
+
+  void _showInvalidTip() {
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('名称和 URL 不能为空，URL 需以 http 开头')));
+  }
+
+  Future<void> _addServer() async {
+    final saved = await _showServerDialog();
     if (saved == null) return;
     final name = saved.$1;
     final url = saved.$2;
     if (name.isEmpty || !url.startsWith('http')) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('名称和 URL 不能为空，URL 需以 http 开头')));
-      }
+      _showInvalidTip();
       return;
     }
     await ref.read(mcpServiceProvider).addServer(name, url);
+    await _reloadAndConnect();
+  }
+
+  /// 编辑既有服务器：改完落库并重连（改名会换工具前缀、改 URL 换端点）。
+  Future<void> _editServer(McpServer s) async {
+    final saved = await _showServerDialog(existing: s);
+    if (saved == null) return;
+    final name = saved.$1;
+    final url = saved.$2;
+    if (name.isEmpty || !url.startsWith('http')) {
+      _showInvalidTip();
+      return;
+    }
+    if (name == s.name && url == s.url) return; // 无变化不重连
+    await ref.read(mcpServiceProvider).updateServer(s.id, name: name, url: url);
     await _reloadAndConnect();
   }
 
@@ -157,6 +184,12 @@ class _McpScreenState extends ConsumerState<McpScreen> {
                               await _reload();
                               if (v) await _reloadAndConnect();
                             },
+                          ),
+                          // 编辑：改名称/URL 后自动断开旧连接并按新配置重连
+                          IconButton(
+                            icon: const Icon(Icons.edit_outlined, size: 20),
+                            tooltip: '编辑',
+                            onPressed: () => _editServer(s),
                           ),
                           IconButton(
                             icon: const Icon(Icons.delete_outline, size: 20),

@@ -498,7 +498,22 @@ class LlmClient {
   /// 拉取该提供商可用的模型名列表（`GET /models`）。
   ///
   /// 返回去重后的模型名，按字母序排序，便于界面上稳定展示。
-  Future<List<String>> listModels({
+  Future<List<String>> listModelNames({
+    required LlmConfig config,
+    CancelToken? cancelToken,
+  }) async =>
+      (await listModels(config: config, cancelToken: cancelToken))
+          .map((m) => m.name)
+          .toList();
+
+  /// 拉取模型列表（含可选的上下文/最大输出元数据）。
+  ///
+  /// OpenAI 标准的 /v1/models 只返回 id，但部分网关会附带更多字段——
+  /// 能取到就自动填充编辑器的「上下文长度 / 最大输出」，取不到留 0：
+  /// - `context_length`（OpenRouter）/ `context_window` / `context_size`
+  /// - `max_output_tokens` / `max_completion_tokens` / `max_tokens`
+  ///   / `top_provider.max_completion_tokens`（OpenRouter 嵌套）
+  Future<List<FetchedModel>> listModels({
     required LlmConfig config,
     CancelToken? cancelToken,
   }) async {
@@ -519,18 +534,42 @@ class LlmClient {
           throw Exception('返回结构异常（缺少 data 数组），'
               '该服务可能不支持 /models 接口');
         }
-        final names = <String>{};
+        final models = <String, FetchedModel>{};
         for (final item in data) {
           if (item is String) {
-            if (item.trim().isNotEmpty) names.add(item.trim());
+            if (item.trim().isNotEmpty) {
+              models.putIfAbsent(
+                  item.trim(), () => FetchedModel(name: item.trim()));
+            }
             continue;
           }
           if (item is! Map) continue;
-          final id = item.cast<String, dynamic>()['id'];
-          if (id is String && id.trim().isNotEmpty) names.add(id.trim());
+          final m = item.cast<String, dynamic>();
+          final id = m['id'];
+          if (id is! String || id.trim().isEmpty) continue;
+          final ctx = _firstInt(m, const [
+            'context_length',
+            'context_window',
+            'context_size',
+          ]);
+          var maxOut = _firstInt(m, const [
+            'max_output_tokens',
+            'max_completion_tokens',
+            'max_tokens',
+          ]);
+          // OpenRouter 把最大输出藏在嵌套的 top_provider 里
+          if (maxOut == null && m['top_provider'] is Map) {
+            maxOut = _firstInt(
+                (m['top_provider'] as Map).cast<String, dynamic>(),
+                const ['max_completion_tokens']);
+          }
+          models.putIfAbsent(id.trim(),
+              () => FetchedModel(name: id.trim(), contextWindow: ctx, maxOutputTokens: maxOut));
         }
-        if (names.isEmpty) throw Exception('该服务未返回任何模型');
-        return names.toList()..sort();
+        if (models.isEmpty) throw Exception('该服务未返回任何模型');
+        final list = models.values.toList()
+          ..sort((a, b) => a.name.compareTo(b.name));
+        return list;
       } on DioException catch (e) {
         // 多 Key 模式下换下一个 Key 再试
         if (isKeyFailure(e) && key != keys.last) {
@@ -543,6 +582,19 @@ class LlmClient {
     throw lastAuthError ?? Exception('拉取模型失败');
   }
 
+  /// 从 map 里按顺序取第一个能解析成正整数的字段；找不到返回 null。
+  static int? _firstInt(Map<String, dynamic> m, List<String> keys) {
+    for (final k in keys) {
+      final v = m[k];
+      if (v is num && v > 0) return v.toInt();
+      if (v is String) {
+        final n = int.tryParse(v.trim());
+        if (n != null && n > 0) return n;
+      }
+    }
+    return null;
+  }
+
   /// 连通性自检：请求 `/models`，把结果整理成一行可读结论。
   ///
   /// 「测试运行」按钮用它 —— 用户配完一堆参数后最需要知道的就是
@@ -553,25 +605,26 @@ class LlmClient {
   }) async {
     final sw = Stopwatch()..start();
     final models = await listModels(config: config, cancelToken: cancelToken);
+    final names = models.map((m) => m.name).toList();
     final ms = sw.elapsedMilliseconds;
     final hasChat = config.chatModels.isNotEmpty;
     final hasEmb = config.embeddingModels.isNotEmpty;
     final buf = StringBuffer()
       ..writeln('连接成功（${ms}ms）')
       ..writeln('地址：${modelsUrl(config)}')
-      ..writeln('可用模型：${models.length} 个');
-    if (models.length <= 8) {
-      buf.writeln(models.join('、'));
+      ..writeln('可用模型：${names.length} 个');
+    if (names.length <= 8) {
+      buf.writeln(names.join('、'));
     } else {
-      buf.writeln('${models.take(8).join('、')} 等');
+      buf.writeln('${names.take(8).join('、')} 等');
     }
     if (!hasChat) {
       buf.writeln('\n⚠️ 尚未添加聊天模型，无法对话。');
-    } else if (!models.contains(config.model)) {
+    } else if (!names.contains(config.model)) {
       buf.writeln('\n⚠️ 当前聊天模型「${config.model}」不在服务端返回的列表里，'
           '可能是名称写错或该模型未开放。');
     }
-    if (hasEmb && !models.contains(config.embeddingModelName)) {
+    if (hasEmb && !names.contains(config.embeddingModelName)) {
       buf.writeln('⚠️ 向量模型「${config.embeddingModelName}」不在返回列表里。');
     }
     return buf.toString().trimRight();
@@ -692,4 +745,21 @@ class LlmClient {
       throw Exception('Embedding 返回了不一致或为空的向量维度：$dims');
     }
   }
+}
+
+/// /models 拉取到的单个模型条目（名称 + 可选元数据）。
+class FetchedModel {
+  const FetchedModel({
+    required this.name,
+    this.contextWindow,
+    this.maxOutputTokens,
+  });
+
+  final String name;
+
+  /// 上下文窗口（token）。网关未提供时为 null（编辑器留空 = 0 不限制）。
+  final int? contextWindow;
+
+  /// 单次回复最大输出（token）。网关未提供时为 null。
+  final int? maxOutputTokens;
 }

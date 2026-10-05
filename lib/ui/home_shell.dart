@@ -228,7 +228,13 @@ class _HomeShellState extends ConsumerState<HomeShell> {
                 height: _navHeight,
                 // 与 HomeTab 常量保持一致：HomeShell 的 children 顺序即 Tab 顺序，
                 // 两处都用常量，任一处调整顺序都会立刻暴露不一致。
-                onTap: (i) => setState(() => _tab = i),
+                // onTap 闭包引用了 ref（刷新记忆计数），不能保持 const。
+                onTap: (i) {
+                  setState(() => _tab = i);
+                  // Agent 在对话中可通过 save_memory 工具增删记忆，
+                  // IndexedStack 不重建子页，切到「我的」时强制刷新计数
+                  if (i == 3) ref.invalidate(memoryCountProvider);
+                },
               ),
       ),
     );

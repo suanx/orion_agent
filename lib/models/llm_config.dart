@@ -68,21 +68,34 @@ class ProviderModel {
   /// 采样温度。
   final double temperature;
 
+  /// 支持的多模态输入类型。'text' 恒在；'image' / 'video' 由编辑器勾选。
+  /// 旧数据无此字段 → 视为 ['text','image']（与旧版行为一致：图片附件
+  /// 一直可用）；向量模型默认 ['text']。
+  final List<String> modalities;
+
   const ProviderModel({
     required this.name,
     this.kind = ModelKind.chat,
     this.contextWindow = 0,
     this.maxOutputTokens = 0,
     this.temperature = 0.7,
+    this.modalities = const ['text', 'image'],
   });
 
-  factory ProviderModel.fromJson(Map<String, dynamic> j) => ProviderModel(
-        name: j['name'] as String? ?? '',
-        kind: ModelKindX.fromWire(j['kind'] as String?),
-        contextWindow: (j['contextWindow'] as num?)?.toInt() ?? 0,
-        maxOutputTokens: (j['maxOutputTokens'] as num?)?.toInt() ?? 0,
-        temperature: (j['temperature'] as num?)?.toDouble() ?? 0.7,
-      );
+  factory ProviderModel.fromJson(Map<String, dynamic> j) {
+    final kind = ModelKindX.fromWire(j['kind'] as String?);
+    final rawMods = (j['modalities'] as List?)?.cast<String>();
+    return ProviderModel(
+      name: j['name'] as String? ?? '',
+      kind: kind,
+      contextWindow: (j['contextWindow'] as num?)?.toInt() ?? 0,
+      maxOutputTokens: (j['maxOutputTokens'] as num?)?.toInt() ?? 0,
+      temperature: (j['temperature'] as num?)?.toDouble() ?? 0.7,
+      // 旧数据无 modalities：聊天模型视为 text+image（旧行为），向量模型 text
+      modalities: rawMods ??
+          (kind == ModelKind.embedding ? const ['text'] : const ['text', 'image']),
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'name': name,
@@ -90,6 +103,7 @@ class ProviderModel {
         'contextWindow': contextWindow,
         'maxOutputTokens': maxOutputTokens,
         'temperature': temperature,
+        'modalities': modalities,
       };
 
   ProviderModel copyWith({
@@ -98,6 +112,7 @@ class ProviderModel {
     int? contextWindow,
     int? maxOutputTokens,
     double? temperature,
+    List<String>? modalities,
   }) =>
       ProviderModel(
         name: name ?? this.name,
@@ -105,7 +120,11 @@ class ProviderModel {
         contextWindow: contextWindow ?? this.contextWindow,
         maxOutputTokens: maxOutputTokens ?? this.maxOutputTokens,
         temperature: temperature ?? this.temperature,
+        modalities: modalities ?? this.modalities,
       );
+
+  bool get supportsImage => modalities.contains('image');
+  bool get supportsVideo => modalities.contains('video');
 
   String get contextLabel => contextWindow <= 0 ? '不限制' : '$contextWindow';
 

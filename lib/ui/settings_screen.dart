@@ -919,9 +919,9 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
       return;
     }
     setState(() => _fetching = true);
-    List<String> names;
+    List<FetchedModel> fetched;
     try {
-      names = await ref.read(llmClientProvider).listModels(config: config);
+      fetched = await ref.read(llmClientProvider).listModels(config: config);
     } catch (e) {
       if (mounted) setState(() => _fetching = false);
       _toast('拉取失败：$e');
@@ -929,6 +929,7 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
     }
     if (!mounted) return;
     setState(() => _fetching = false);
+    final names = fetched.map((m) => m.name).toList();
 
     // 已存在的模型默认不勾选，避免重复导入
     final existing = {for (final m in config.models) m.name};
@@ -943,9 +944,17 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
     widget.onChanged();
     final notifier = ref.read(configProvider.notifier);
     for (final n in picked) {
+      // 网关若附带 context_length / max_output_tokens，自动填充，
+      // 省去逐个模型手填上下文与最大输出
+      final meta = fetched.firstWhereOrNull((m) => m.name == n);
       notifier.addModel(
         widget.configId,
-        ProviderModel(name: n, kind: _guessKind(n)),
+        ProviderModel(
+          name: n,
+          kind: _guessKind(n),
+          contextWindow: meta?.contextWindow ?? 0,
+          maxOutputTokens: meta?.maxOutputTokens ?? 0,
+        ),
       );
     }
     _toast('已导入 ${picked.length} 个模型');
@@ -1130,7 +1139,10 @@ class _ModelCard extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         '${model.kind.fullLabel} · 上下文 ${model.contextLabel}'
-                        ' · 输出 ${model.maxOutputLabel}',
+                        ' · 输出 ${model.maxOutputLabel}'
+                        // 图片是聊天模型的默认能力（旧数据即如此），不展示；
+                        // 只把较少见的视频能力标出来
+                        '${model.supportsVideo ? ' · 视频' : ''}',
                         style: TextStyle(
                             fontSize: 12, color: onSurface(context, 0.45)),
                         maxLines: 1,
@@ -1197,6 +1209,21 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
           : '${widget.existing!.maxOutputTokens}');
   late ModelKind _kind = widget.existing?.kind ?? ModelKind.chat;
   late double _temp = widget.existing?.temperature ?? 0.7;
+  // 多模态输入能力：'text' 恒在，仅勾选 image / video。
+  // 旧数据无字段时默认 text+image（与旧版「图片附件始终可用」一致）。
+  late List<String> _modalities =
+      List.of(widget.existing?.modalities ?? const ['text', 'image']);
+
+  /// 勾选/取消一个模态；'text' 不允许取消（无意义的纯无输入模型）。
+  void _toggleModality(String m) {
+    setState(() {
+      if (_modalities.contains(m)) {
+        _modalities.remove(m);
+      } else {
+        _modalities.add(m);
+      }
+    });
+  }
 
   @override
   void dispose() {
@@ -1229,6 +1256,10 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
       contextWindow: ctxV,
       maxOutputTokens: outV,
       temperature: _temp,
+      // 'text' 恒在且排首位；向量模型不带多模态
+      modalities: _kind == ModelKind.embedding
+          ? const ['text']
+          : ['text', ..._modalities.where((m) => m != 'text')],
     );
     final notifier = ref.read(configProvider.notifier);
     final old = widget.existing;
@@ -1353,6 +1384,29 @@ class _ModelEditorSheetState extends ConsumerState<_ModelEditorSheet> {
                 presets: const [1024, 2048, 4096, 8192, 16384, 32768],
                 onTap: (v) => setState(() => _out.text = '$v'),
               ),
+              // 多模态输入能力：文本恒支持，图片/视频按模型实际能力勾选
+              Row(
+                children: [
+                  const Text('多模态输入',
+                      style: TextStyle(fontSize: 13)),
+                  const SizedBox(width: 8),
+                  FilterChip(
+                    label: const Text('图片'),
+                    selected: _modalities.contains('image'),
+                    onSelected: (_) => _toggleModality('image'),
+                  ),
+                  const SizedBox(width: 8),
+                  FilterChip(
+                    label: const Text('视频'),
+                    selected: _modalities.contains('video'),
+                    onSelected: (_) => _toggleModality('video'),
+                  ),
+                ],
+              ),
+              Text('勾选后该模型会出现在对应能力的候选列表（当前对话已支持发送图片）',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.outline)),
               Row(
                 children: [
                   const Text('温度'),

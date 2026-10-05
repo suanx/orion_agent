@@ -148,9 +148,16 @@ class UpdateService {
   }
 
   /// 版本比较：逐段数字比较，段数不足补 0。'v' 前缀由调用方剥掉。
+  ///
+  /// 每段容忍非数字后缀（取前导数字）：Beta 通道版本号形如 `0.2.13-beta`，
+  /// 第三段 '13-beta' 解析为 13。这样：
+  /// - '0.2.13-beta' > '0.2.12' ✓（Beta 用户能收到测试版）
+  /// - '0.2.13' vs '0.2.13-beta' 相等 ✓（同号稳定版不再提示 Beta 用户更新）
   static bool isNewer(String remote, String local) {
-    List<int> parse(String v) =>
-        v.split('.').map((s) => int.tryParse(s) ?? 0).toList();
+    List<int> parse(String v) => v.split('.').map((s) {
+          final m = RegExp(r'^(\d+)').firstMatch(s.trim());
+          return m == null ? 0 : int.parse(m.group(1)!);
+        }).toList();
     final a = parse(remote);
     final b = parse(local);
     final n = a.length > b.length ? a.length : b.length;

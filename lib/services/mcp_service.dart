@@ -46,6 +46,16 @@ class McpService {
     _clients.remove(id)?.close();
   }
 
+  /// 修改服务器名称/URL。改名后工具注册前缀（按旧名 sanitize）随之失效、
+  /// URL 变更后旧 client 也不可用——这里只负责落库与断开旧连接，
+  /// 重连（connectAll 会按新名/新 URL 重新注册工具）由调用方触发。
+  Future<void> updateServer(String id,
+      {required String name, required String url}) async {
+    await (_db.update(_db.mcpServers)..where((s) => s.id.equals(id)))
+        .write(McpServersCompanion(name: Value(name), url: Value(url)));
+    _clients.remove(id)?.close();
+  }
+
   Future<void> setEnabled(String id, bool enabled) async {
     await (_db.update(_db.mcpServers)..where((s) => s.id.equals(id)))
         .write(McpServersCompanion(enabled: Value(enabled)));
