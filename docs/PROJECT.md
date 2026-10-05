@@ -914,7 +914,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | 页面 | 状态 |
 |---|---|
 | `chat_screen` | ✅ 完整（无气泡正文 + 思考行 + 代码块卡片） |
-| `cloud_account_screen` | ✅ 云端登录页 + 个人中心（卡密/设备/用量） |
+| `cloud_account_screen` | ✅ 云端登录页 + 个人中心（卡密/设备/用量）；2026-10-06 两张头部卡片由主色渐变换成 `glassPanel` 液态玻璃（白字改 onSurface 体系） |
 | `sessions_drawer` | ✅ 会话列表、切换、删除 |
 | `skills_screen` | ✅ 18 内置 + 自定义 |
 | `roles_screen` | ✅ CRUD（无预置） |

@@ -151,6 +151,7 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
               onPressed: () => Navigator.pop(ctx, true), child: const Text('解绑')),
         ],
       ),
+        ),
     );
     if (confirmed != true) return;
     try {
@@ -237,75 +238,70 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
       children: [
         // ------- Hero -------
-        Container(
+        // 液态玻璃卡片（2026-10-06 用户要求：去掉蓝色渐变背景）。
+        // 原设计是「主色渐变 + 白字」；换成玻璃后白字在浅色玻璃上不可读，
+        // 文字改用 onSurface 体系，胶囊标签用主色淡染。
+        SizedBox(
           width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(20, 26, 20, 22),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [scheme.primary, scheme.primary.withValues(alpha: 0.72)],
-            ),
-            borderRadius: BorderRadius.circular(24),
-            boxShadow: [
-              BoxShadow(
-                color: scheme.primary.withValues(alpha: 0.35),
-                blurRadius: 20,
-                offset: const Offset(0, 10),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              MascotAvatar(size: 76, image: mascotAsset(context)),
-              const SizedBox(height: 14),
-              const Text(
-                'Orion Cloud',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 24,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                '给 Agent 装上云端翅膀\n搜索中继 · 云端任务 · MCP 工具',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.88),
-                  fontSize: 13,
-                  height: 1.5,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                alignment: WrapAlignment.center,
+          child: glassPanel(
+            context,
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 26, 20, 22),
+              child: Column(
                 children: [
-                  for (final label in const ['联网搜索中继', '云端定时任务', '云端 MCP'])
-                    Container(
-                      padding:
-                          const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.28)),
-                      ),
-                      child: Text(
-                        label,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
+                  MascotAvatar(size: 76, image: mascotAsset(context)),
+                  const SizedBox(height: 14),
+                  Text(
+                    'Orion Cloud',
+                    style: TextStyle(
+                      color: onSurface(context, 0.92),
+                      fontSize: 24,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.5,
                     ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '给 Agent 装上云端翅膀\n搜索中继 · 云端任务 · MCP 工具',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: onSurface(context, 0.62),
+                      fontSize: 13,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    alignment: WrapAlignment.center,
+                    children: [
+                      for (final label
+                          in const ['联网搜索中继', '云端定时任务', '云端 MCP'])
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 11, vertical: 5),
+                          decoration: BoxDecoration(
+                            color: scheme.primary.withValues(alpha: 0.10),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(
+                                color:
+                                    scheme.primary.withValues(alpha: 0.22)),
+                          ),
+                          child: Text(
+                            label,
+                            style: TextStyle(
+                              color: scheme.primary,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
                 ],
               ),
-            ],
+            ),
           ),
         ),
         const SizedBox(height: 20),
@@ -902,25 +898,13 @@ class _AccountHero extends StatelessWidget {
     final shortId = userId.isEmpty
         ? '—'
         : (userId.length > 16 ? '${userId.substring(0, 14)}…' : userId);
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.fromLTRB(18, 18, 8, 16),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [scheme.primary, scheme.primary.withValues(alpha: 0.72)],
-        ),
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: scheme.primary.withValues(alpha: 0.35),
-            blurRadius: 20,
-            offset: const Offset(0, 10),
-          ),
-        ],
-      ),
-      child: Column(
+    // 液态玻璃卡片（2026-10-06 用户要求：去掉蓝色渐变背景）：玻璃自带模糊 +
+    // 半透明白底 + 亮边；卡片内文字从白字改为 onSurface 体系才可读。
+    return glassPanel(
+      context,
+      Padding(
+        padding: const EdgeInsets.fromLTRB(18, 18, 8, 16),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
@@ -931,15 +915,15 @@ class _AccountHero extends StatelessWidget {
                 height: 52,
                 alignment: Alignment.center,
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.22),
+                  color: scheme.primary.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                   border:
-                      Border.all(color: Colors.white.withValues(alpha: 0.35)),
+                      Border.all(color: scheme.primary.withValues(alpha: 0.24)),
                 ),
                 child: Text(
                   initial,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: onSurface(context, 0.92),
                     fontSize: 22,
                     fontWeight: FontWeight.w700,
                   ),
@@ -955,8 +939,8 @@ class _AccountHero extends StatelessWidget {
                         Flexible(
                           child: Text(
                             email.isEmpty ? '已登录' : email,
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: onSurface(context, 0.92),
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
                             ),
@@ -968,13 +952,13 @@ class _AccountHero extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(
                               horizontal: 8, vertical: 3),
                           decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.22),
+                            color: scheme.primary.withValues(alpha: 0.12),
                             borderRadius: BorderRadius.circular(999),
                           ),
                           child: Text(
                             cloudPlanLabel(plan),
-                            style: const TextStyle(
-                              color: Colors.white,
+                            style: TextStyle(
+                              color: onSurface(context, 0.92),
                               fontSize: 11.5,
                               fontWeight: FontWeight.w600,
                             ),
@@ -986,7 +970,7 @@ class _AccountHero extends StatelessWidget {
                     Text(
                       expiryText,
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.88),
+                        color: onSurface(context, 0.62),
                         fontSize: 12.5,
                       ),
                     ),
@@ -1000,10 +984,10 @@ class _AccountHero extends StatelessWidget {
                         height: 18,
                         width: 18,
                         child: CircularProgressIndicator(
-                            strokeWidth: 2, color: Colors.white.withValues(alpha: 0.9)),
+                            strokeWidth: 2, color: scheme.primary),
                       )
-                    : const Icon(Icons.refresh_rounded,
-                        color: Colors.white, size: 20),
+                    : Icon(Icons.refresh_rounded,
+                        color: onSurface(context, 0.92), size: 20),
                 onPressed: busy ? null : onRefresh,
               ),
             ],
@@ -1018,13 +1002,13 @@ class _AccountHero extends StatelessWidget {
               child: Row(
                 children: [
                   Icon(Icons.copy_rounded,
-                      size: 13, color: Colors.white.withValues(alpha: 0.7)),
+                      size: 13, color: onSurface(context, 0.55)),
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
                       '账号 $shortId · 点按复制邮箱',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.7),
+                        color: onSurface(context, 0.55),
                         fontSize: 11.5,
                         fontFamily: 'monospace',
                       ),
@@ -1036,7 +1020,7 @@ class _AccountHero extends StatelessWidget {
             ),
           ),
         ],
-      ),
+        ),
     );
   }
 }
