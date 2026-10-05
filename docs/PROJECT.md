@@ -888,7 +888,16 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 
 ## 8. 构建与 CI
 
-**唯一工作流**：`.github/workflows/build.yml`（push to main +手动触发）
+**唯一工作流**：`.github/workflows/build.yml`
+（`push` 触发分支 **[main, beta]** + 手动 workflow_dispatch）
+
+⚠️ **两个分支必须共用同一份 workflow，且 `push.branches` 要同时列出
+main 与 beta**（2026-10-06 实测事故）：把 main 分支的 workflow 文件推到
+beta 会把 beta 的触发器悄悄改回 `[main]`，此后 beta 推送**不再触发 CI**，
+表现为「push 成功但没有 run」，容易误判成 GitHub 抖动。修复方式是把
+分支列表改回 `[main, beta]` 并重新推送；发布步骤按
+`github.ref == 'refs/heads/beta'` 决定 pre-release 与 target 分支，
+同一份文件服务两条通道。
 
 **防反编译**（2026-10-05，v0.2.2 首开后白屏，已于 v0.2.3 回退）：v0.2.2 曾启用
 `--obfuscate --split-debug-info` + R8 minify/shrink，装机启动白屏（见 §11.18）。
