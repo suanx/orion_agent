@@ -1547,6 +1547,24 @@ buildAppTheme→fromTheme 真实链路，裸构造会红、修复后全绿）；
 **教训（第三次重申）**：第三方库的"可空参数"不等于"可以不传"——
 使用前查其内部对 `!` 断言的字段；带 UI 的组件改动必须有 widget 测试兜底。
 
+**最终根因（v0.2.5 错误卡片堆栈指认，v0.2.6 修复）**：用户截图堆栈
+#0 `Container.build (container.dart:414)` ← StatelessElement 首帧 mount。
+对照框架源码：Container.build 413 行 `decoration!`——
+「`clipBehavior != Clip.none` 且 `decoration == null`」时 release 下解引用
+崩溃（409 行的 assert 在 release 被剥离，所以正式包才炸、debug 只是警告）。
+全库审计 `clipBehavior` 用法：唯一符合该模式的是 **home_shell v0.2.2 加入的
+底栏 AnimatedContainer(clipBehavior: Clip.hardEdge) 未给 decoration**
+——v0.2.2~v0.2.5 每一版都带着它，这才是启动崩溃的唯一元凶；
+v0.2.5 修的 Markdown 空断言是并存的另一个真实隐患（列表渲染会炸），
+但不是本次堆栈指认的崩溃。修复：底栏改 AnimatedSize（ClipRect 裁剪，
+无 decoration 依赖），`test/nav_animated_size_test.dart` 固化正确写法
+并留档错误写法反例。
+
+**最终教训**：① release-only 崩溃（assert 剥离类）必须靠错误卡片/堆栈
+定位，猜测性修复会一轮轮空转——v0.2.4 的错误卡片正是破案工具；
+②「回退」必须回退**代码**而不是只回退构建开关；③ 修改 UI 动画/布局类
+代码时，先查框架对该组合的约束（clip 必配 decoration）。
+
 ## 12. 待修复的问题
 
 按建议优先级排序。**均未实现**。

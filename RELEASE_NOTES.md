@@ -1,3 +1,19 @@
+# Orion Agent v0.2.6 更新说明
+
+## 崩溃根因最终修复：底栏动画容器（v0.2.2 引入）
+
+- **根因**（由 v0.2.5 错误卡片堆栈直接指认）：v0.2.2 起底栏键盘显隐用了
+  `AnimatedContainer(clipBehavior: Clip.hardEdge)` 且未给 decoration——
+  Flutter 框架 Container.build 对「裁剪但无装饰」在**正式包**下解引用
+  `decoration!` 直接崩溃（debug 只报 assert，所以此前一直隐蔽）。
+  这是 v0.2.2~v0.2.5 启动崩溃的唯一元凶
+- **修复**：底栏动画改用 AnimatedSize（内部走 ClipRect，无此陷阱），
+  并新增回归测试固化正确写法
+- 错误卡片堆栈行数 8 → 14 行，确保截到业务帧
+- 保留 v0.2.5 的 Markdown 样式表修复（那是另一个真实隐患：列表空断言）
+
+---
+
 # Orion Agent v0.2.5 更新说明
 
 ## 白屏根因修复：Markdown 样式表空断言

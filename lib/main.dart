@@ -70,8 +70,8 @@ Widget _buildErrorCard(String message) {
       child: Text(
         '组件渲染出错：$message',
         style: const TextStyle(
-            fontSize: 11.5, height: 1.4, color: Color(0xFFB71C1C)),
-        maxLines: 12,
+            fontSize: 11, height: 1.4, color: Color(0xFFB71C1C)),
+        maxLines: 18,
         overflow: TextOverflow.ellipsis,
       ),
     ),
@@ -91,7 +91,9 @@ Future<void> main() async {
       final st = details.stack?.toString();
       if (st != null && st.isNotEmpty) {
         sb.write('\n');
-        sb.write(st.split('\n').take(8).join('\n'));
+        // 取堆栈前 14 行：框架帧之后通常就是出错的业务组件，
+        // 行数太少会把关键帧截掉（v0.2.5 的 8 行就没截到业务帧）。
+        sb.write(st.split('\n').take(14).join('\n'));
       }
       return _buildErrorCard(sb.toString());
     };

@@ -208,15 +208,20 @@ class _HomeShellState extends ConsumerState<HomeShell> {
           ],
         ),
       ),
-      bottomNavigationBar: AnimatedContainer(
+      bottomNavigationBar: AnimatedSize(
         // 键盘弹起时整条底栏隐藏（用户要求：输入界面不显示底部导航），
-        // 键盘收起后展开回原高度。clipBehavior 防止收起动画期间内容溢出。
+        // 键盘收起后展开回原高度。
+        //
+        // ⚠️ 历史教训（v0.2.2~v0.2.5 白屏/报错根因）：这里曾用
+        // AnimatedContainer(clipBehavior: Clip.hardEdge) 且没有 decoration——
+        // Container.build 对「clip ≠ none 且 decoration == null」在 release 下
+        // 会解引用 decoration!（framework container.dart:413），
+        // 抛 "Null check operator used on a null value"，首帧 mount 即崩。
+        // AnimatedSize 的裁剪走 ClipRect（不需要 decoration），无此陷阱。
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
-        height: kb > 0 ? 0 : null,
-        clipBehavior: Clip.hardEdge,
         child: kb > 0
-            ? null
+            ? const SizedBox(width: double.infinity)
             : _FrostedNavBar(
                 index: _tab,
                 height: _navHeight,
