@@ -442,6 +442,18 @@ abstract class Tool {
 
 ### 5.6 终端环境 (`terminal_service.dart`)
 
+**安装失败档案（#89，2026-10-05）**：真机安装报
+`Invalid argument(s): Illegal argument in isolate message: object is unsendable
+- Class: _Timer`，卡在「解压 rootfs…」步骤。根因：解压原用
+`Isolate.run(() => _extractRootfs(...))`，**闭包跨 isolate 发送时会整体序列化
+其捕获链**；安装进度回调链上有不可发送对象（terminal_screen 的日志合帧
+`_logFlushTimer` 挂在 `_appendLog` → State 上），捕获链带出即 send 失败。
+修复：改 `Isolate.spawn` + **顶层入口函数** `_extractRootfsEntry`，跨界只有
+一条纯数据 record（SendPort/路径/bool），机制上杜绝任何捕获对象外泄；
+isolate 内异常转字符串传回后重新抛出（异常对象含堆栈引用不可发送）。
+公开 `TerminalService.extractRootfsInIsolate` 供回归测试
+（terminal_test.dart：跨 isolate 统计/落盘 + 异常传回两个用例）。
+
 **运行机制** (`startOn()` `:387-421`)：
 
 ```bash

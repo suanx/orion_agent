@@ -406,10 +406,18 @@ class TerminalService {
       tmpHandle.createSync(recursive: true);
 
       // 解压在独立 isolate 内进行（大 tar 的解码 + 落盘会阻塞 UI 数十秒）。
-      // 进度回调不能跨 isolate：isolate 内只做纯 dart:io/archive 操作，
+      //
+      // ⚠️ 不能用 `Isolate.run(() => _extractRootfs(...))` 这类闭包写法：
+      // 真机上报「object is unsendable - Class: _Timer」安装失败——
+      // 闭包跨 isolate 发送时会整体序列化其捕获链，任何一处带出
+      // 不可发送对象（如 UI 进度回调 _appendLog 所在 State 持有的
+      // 日志合帧 _logFlushTimer）都会在 send 时炸掉。
+      // 改为 Isolate.spawn + 顶层入口函数：跨界只有一条纯数据 record
+      // （SendPort/路径/bool），没有任何捕获对象可以外泄。
+      // 进度不跨 isolate：isolate 内只做纯 dart:io/archive 操作，
       // 统计结果一次性带回，由主 isolate 统一打日志。
       final stats =
-          await Isolate.run(() => _extractRootfs(archivePath, tmpRootfs, isGz));
+          await extractRootfsInIsolate(archivePath, tmpRootfs, isGz);
       if (stats.skippedUnsafe > 0) {
         debugPrint('TerminalService: 解压时已拒绝并跳过 '
             '${stats.skippedUnsafe} 个不安全/无法解析的 tar 条目');
@@ -463,6 +471,29 @@ class TerminalService {
     }
   }
 
+  /// 解压 rootfs 到 [destDir]：在独立 isolate 内执行（公开给测试回归用）。
+  ///
+  /// 实现为 `Isolate.spawn` + 顶层入口 [_extractRootfsEntry]：
+  /// 跨 isolate 边界的只有一条纯数据 record，不经过任何闭包——
+  /// 闭包会把捕获链整体序列化，捕获链上有不可发送对象（Timer / Socket /
+  /// StreamController 等）时 send 直接失败（真机 v0.2.8 实测）。
+  ///
+  /// isolate 内抛出的异常转成字符串传回，在此重新抛出（保留可读原因，
+  /// 代价是丢失堆栈——isolate 异常对象本身不可发送）。
+  static Future<RootfsExtractStats> extractRootfsInIsolate(
+      String archivePath, String destDir, bool isGz) async {
+    final port = ReceivePort();
+    try {
+      await Isolate.spawn(
+          _extractRootfsEntry, (port.sendPort, archivePath, destDir, isGz));
+      final msg = await port.first;
+      if (msg is RootfsExtractStats) return msg;
+      throw Exception('解压 rootfs 失败：$msg');
+    } finally {
+      port.close();
+    }
+  }
+
   /// 在独立 isolate 中解压 rootfs 压缩包到 [destDir]。
   ///
   /// 只做纯 dart:io / package:archive 操作（无 Flutter、无回调），
@@ -473,7 +504,7 @@ class TerminalService {
   // 恒为空——此前误用 content 当目标，300+ 个链接全部被创建成
   // 「空目标」，guest 内一切命令 not found（V0.1.7 根因）。
   // 只有 TarFile 保留 typeFlag 与 nameOfLinkedFile 原始信息。
-  static _ExtractStats _extractRootfs(
+  static RootfsExtractStats _extractRootfs(
       String archivePath, String destDir, bool isGz) {
     final compressed = File(archivePath).readAsBytesSync();
     final List<int> tarBytes;
@@ -558,7 +589,7 @@ class TerminalService {
         src.copySync(e.key);
       }
     }
-    return _ExtractStats(
+    return RootfsExtractStats(
       createdLinks: createdLinks,
       createdFiles: createdFiles,
       skippedUnsafe: skippedUnsafe,
@@ -925,16 +956,30 @@ class TerminalService {
 
 /// 解压统计：由 `TerminalService._extractRootfs` 在 isolate 内完成后
 /// 一次性带回主 isolate（简单 int 字段，可安全跨 isolate 传递）。
-class _ExtractStats {
+class RootfsExtractStats {
   final int createdLinks;
   final int createdFiles;
   final int skippedUnsafe;
 
-  const _ExtractStats({
+  const RootfsExtractStats({
     required this.createdLinks,
     required this.createdFiles,
     required this.skippedUnsafe,
   });
+}
+
+/// isolate 解压入口：**顶层函数**（非闭包），不携带任何捕获上下文。
+///
+/// 消息为 (回传端口, 压缩包路径, 目标目录, 是否 gzip) 纯数据 record；
+/// 内部异常转成字符串传回（异常对象本身含堆栈引用，不可发送）。
+/// 见 `TerminalService.extractRootfsInIsolate` 的注释。
+void _extractRootfsEntry((SendPort, String, String, bool) msg) {
+  final (port, archivePath, destDir, isGz) = msg;
+  try {
+    port.send(TerminalService._extractRootfs(archivePath, destDir, isGz));
+  } catch (e) {
+    port.send(e.toString());
+  }
 }
 
 /// 等待 stdout/stderr 两个订阅**结束**，带超时兜底。

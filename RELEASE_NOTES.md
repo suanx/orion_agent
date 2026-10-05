@@ -1,3 +1,19 @@
+# Orion Agent v0.2.9 更新说明
+
+## 修复：终端环境安装失败
+
+- **症状**：安装 Alpine/Debian 时卡在「解压 rootfs…」后报
+  `安装失败：Invalid argument(s) ... object is unsendable - Class: _Timer`
+- **根因**：解压在后台 isolate 进行时用了闭包写法，闭包跨 isolate 发送会
+  整体序列化其捕获链；进度回调链上挂着的 UI 计时器对象不可发送，
+  导致发送阶段直接失败
+- **修复**：改为「顶层入口函数 + 纯数据消息」的跨 isolate 方式，
+  跨界不含任何捕获对象，从机制上杜绝此类错误；isolate 内异常
+  转为可读文本传回，失败原因不再无线索
+- 新增跨 isolate 解压的回归测试（统计/落盘正确性 + 异常传回）
+
+---
+
 # Orion Agent v0.2.8 更新说明
 
 ## 新功能：对话字体大小可调

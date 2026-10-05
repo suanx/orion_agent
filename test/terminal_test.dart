@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orion_agent/services/terminal_service.dart';
 
@@ -117,6 +119,59 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(cancelled, containsAll(<String>['out', 'err']),
           reason: '实际被取消的流=$cancelled');
+    });
+  });
+
+  group('extractRootfsInIsolate', () {
+    /// 造一个小 tar.gz（2 个普通文件），返回压缩包路径。
+    /// _extractRootfs 只认「解压后目录」，所以这里完整走一遍编码链路：
+    /// Archive → TarEncoder → GZipEncoder → 落盘。
+    String makeTarGz(Directory tmp) {
+      final archive = Archive()
+        ..add(ArchiveFile.string('a.txt', 'hello orion'))
+        ..add(ArchiveFile.string('usr/bin/tool', '#!/bin/sh\necho ok'));
+      final tar = TarEncoder().encode(archive);
+      final gz = GZipEncoder().encode(tar)!;
+      final path = '${tmp.path}/test-rootfs.tar.gz';
+      File(path).writeAsBytesSync(gz);
+      return path;
+    }
+
+    test('跨 isolate 返回统计并正确落盘（unsendable 回归）', () async {
+      // 回归：v0.2.8 真机用 Isolate.run(闭包) 解压，捕获链带出不可发送
+      // 对象（UI 日志合帧的 Timer），报「object is unsendable - _Timer」。
+      // 现实现跨界只有纯数据 record（Isolate.spawn + 顶层入口函数）。
+      final tmp = await Directory.systemTemp.createTemp('orion_extract_test');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
+      final archivePath = makeTarGz(tmp);
+      final destDir = '${tmp.path}/rootfs';
+
+      final stats =
+          await TerminalService.extractRootfsInIsolate(archivePath, destDir, true);
+
+      expect(stats.createdFiles, 2, reason: '应创建 2 个普通文件');
+      expect(stats.skippedUnsafe, 0, reason: '不应有被拒绝条目');
+      expect(File('$destDir/a.txt').readAsStringSync(), 'hello orion',
+          reason: '文件内容应完整落盘');
+      expect(File('$destDir/usr/bin/tool').existsSync(), isTrue,
+          reason: '嵌套目录应随解压自动创建');
+    });
+
+    test('isolate 内异常转字符串传回并重新抛出', () async {
+      final tmp = await Directory.systemTemp.createTemp('orion_extract_test');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
+      // 不存在的压缩包 → _extractRootfs 内 readAsBytesSync 抛错
+      final bad = '${tmp.path}/missing.tar.gz';
+      expect(
+        () => TerminalService.extractRootfsInIsolate(
+            bad, '${tmp.path}/out', true),
+        throwsException,
+        reason: 'isolate 内异常应转成字符串传回并重新抛出，而不是静默或挂起',
+      );
     });
   });
 }
