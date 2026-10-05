@@ -1434,13 +1434,9 @@ class _ContextGauge extends StatelessWidget {
                 ],
               ),
             ),
-            const SizedBox(width: 5),
-            Text(
-              hasTotal
-                  ? '${compactTokens(used)} / ${compactTokens(total)}'
-                  : '上下文不限',
-              style: TextStyle(fontSize: 11, color: onSurface(context, 0.5)),
-            ),
+            // 「647 / 1.0M」数字文本已按用户要求移除（2026-10-05 截图
+            // 红框标注「删除」）：只保留圆形进度图标（环 + 百分比），
+            // 点击展开用量明细弹窗的行为不变。
           ],
         ),
       ),
