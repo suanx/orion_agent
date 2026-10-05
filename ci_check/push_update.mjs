@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// 推送脚本: 把本地指定文件以一次 commit 推到 GitHub main（Git Data API）。
+// 推送脚本: 把本地指定文件以一次 commit 推到 GitHub（Git Data API）。
 // 本机 git 直连 github.com 不通，凭据走 credential manager（永不回显）。
 //
 // 用法:
-//   node push_update.mjs                 # 按 push_files.txt 清单推送
+//   node push_update.mjs                 # 按 push_files.txt 清单推到 main
 //   node push_update.mjs f1 f2 ...       # 命令行指定文件（仓库相对路径）
+//   PUSH_BRANCH=beta node push_update.mjs ...   # 推到指定分支（默认 main）
 //
 // push_files.txt 每行一个仓库相对路径，# 开头为注释。
 import { execFileSync, execSync } from "node:child_process";
@@ -12,7 +13,7 @@ import { readFileSync } from "node:fs";
 
 const REPO = "suanx/orion_agent";
 const API = "https://api.github.com";
-const BRANCH = "main";
+const BRANCH = process.env.PUSH_BRANCH || "main";
 
 // 凭据: 优先环境变量 GITHUB_TOKEN（git credential fill 在部分 Windows
 // 沙箱下 spawnSync 会报 EBUSY），否则走 credential manager（永不回显）。

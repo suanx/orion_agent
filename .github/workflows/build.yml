@@ -471,9 +471,12 @@ jobs:
           # AnimatedContainer clip 无 decoration）已在 v0.2.5/v0.2.6 修复，
           # 且发布版有红色错误卡片兜底（异常可见），本次重试有判据。
           OBF=""
-          if [ "${{ inputs.obfuscate }}" = "true" ]; then
+          # beta 分支 push 构建常态混淆（分步协议第二步，2026-10-06 起）：
+          # beta 是混淆验证渠道，验证通过后第三步再评估 R8/minify。
+          # main 分支 push 仍为无混淆，直到 beta 渠道验证稳定。
+          if [ "${{ inputs.obfuscate }}" = "true" ] || [ "$GITHUB_REF" = "refs/heads/beta" ]; then
             OBF="--obfuscate --split-debug-info=build/app/symbols"
-            echo "混淆测试版：$OBF"
+            echo "混淆构建：$OBF"
           fi
           flutter build apk --release \
             --target-platform android-arm64 \
@@ -507,7 +510,8 @@ jobs:
         # 混淆产物的符号表（--split-debug-info 输出）：崩溃堆栈用
         # `flutter symbolize -d <libapp.so> -i <trace.txt> -o out.txt` 还原。
         # 必须与 APK 同 run 归档留档，缺失则该版崩溃无法解析。
-        if: ${{ inputs.obfuscate == true }}
+        # beta 分支 push 构建同样常态混淆，符号表一并归档。
+        if: ${{ inputs.obfuscate == true || github.ref_name == 'beta' }}
         uses: actions/upload-artifact@v4
         with:
           name: orion-agent-symbols

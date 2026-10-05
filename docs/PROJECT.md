@@ -924,6 +924,14 @@ so 符号表确认混淆确实生效，再进正式版。
   第三步：R8/minify 单独验证（v0.2.2 时它实际未生效，须以 mapping.txt/
   dex 取证确认后才启用）
 
+**第二步就位（2026-10-06，v0.2.19-beta）**：beta 分支 push 构建常态启用
+`--obfuscate --split-debug-info=build/app/symbols`（`GITHUB_REF` 判断，
+与手动 `inputs.obfuscate` 走同一分支），symbols artifact 对 beta 同样
+归档（`if: inputs.obfuscate == true || github.ref_name == 'beta'`）——
+beta 成为混淆验证渠道，预发布 Release 直发混淆包，模拟器/真机验证
+启动与工具调用正常后，第三步才评估 R8/minify；main 分支 push 构建
+仍为无混淆，验证稳定前不受影响。
+
 **18 个步骤**：
 
 1. Flutter stable setup（`subosito/flutter-action@v2`，带缓存）

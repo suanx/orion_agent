@@ -1,3 +1,24 @@
+# Orion Agent v0.2.19-beta 更新说明（Beta 测试版）
+
+> 这是 **Beta 预发布版本**，供加入 Beta 测试的用户提前体验，可能不稳定。
+
+## 工作流加密：防反编译（Dart 混淆常态启用）
+
+- Beta 渠道 APK 构建启用 **`--obfuscate --split-debug-info`**：Dart 符号
+  （类名/函数名）编译期重命名为无意义标识，libapp.so 不再暴露原始
+  代码结构，反编译产物不可读
+- 符号表随构建归档（orion-agent-symbols artifact）：混淆版崩溃堆栈用
+  `flutter symbolize` 还原，不影响用户侧任何功能
+- 本版为混淆重引入第二步（v0.2.2 曾因混淆白屏回退，当时两个
+  release-only 崩溃已在 v0.2.5/v0.2.6 修复）；Beta 渠道验证稳定后
+  再推广到 main 正式渠道（协议见 docs/PROJECT.md §11.18）
+
+## 其它
+
+- CI 构建参数与发布流程微调（混淆仅影响编译产物，无功能变化）
+
+---
+
 # Orion Agent v0.2.18-beta 更新说明（Beta 测试版）
 
 > 这是 **Beta 预发布版本**，供加入 Beta 测试的用户提前体验，可能不稳定。
