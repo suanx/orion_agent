@@ -151,7 +151,6 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
               onPressed: () => Navigator.pop(ctx, true), child: const Text('解绑')),
         ],
       ),
-        ),
     );
     if (confirmed != true) return;
     try {
@@ -1020,6 +1019,7 @@ class _AccountHero extends StatelessWidget {
             ),
           ),
         ],
+        ),
         ),
     );
   }
