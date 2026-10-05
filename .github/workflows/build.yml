@@ -442,12 +442,16 @@ jobs:
         run: |
           CACHE="${PUB_CACHE:-$HOME/.pub-cache}/hosted/pub.dev"
           COUNT=0
-          for f in $(grep -rl "flutter\.compileSdkVersion" "$CACHE"/*/android/build.gradle* 2>/dev/null); do
-            sed -i 's/flutter\.compileSdkVersion/36/g' "$f"
+          for f in $(find "$CACHE" -maxdepth 3 -path "*/android/build.gradle*" 2>/dev/null); do
+            # 两种写法都覆盖：
+            #  - 老模板：compileSdk flutter.compileSdkVersion（→36）
+            #  - 新模板：compileSdk = 34 / compileSdkVersion 34（字面量→36）
+            sed -i -E 's/(compileSdk(Value)?[ ]*=?[ ]*)3[0-5]/\136/g;
+                       s/flutter\.compileSdkVersion/36/g' "$f"
             COUNT=$((COUNT+1))
           done
-          echo "已改写 $COUNT 个插件构建脚本的 compileSdk"
-          grep -rn "compileSdk = 36\|compileSdkVersion 36" "$CACHE"/*/android/build.gradle* 2>/dev/null | head -5 || true
+          echo "已处理 $COUNT 个插件构建脚本"
+          grep -rn "compileSdk" "$CACHE/file_picker-"*/android/build.gradle* 2>/dev/null | head -5 || true
 
       - name: Build APK
         # 同样把失败明细以 annotation 暴露（job log 无权限查看）
