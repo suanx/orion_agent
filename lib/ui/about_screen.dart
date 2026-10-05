@@ -10,7 +10,7 @@ import '../providers/providers.dart';
 /// 当前版本号。发版时与 pubspec.yaml 的 `version` 同步更新
 /// （只升 pubspec 不升这里 → 应用自报版本落后，更新检查会一直
 /// 提示安装「新版本」，即使用户已经装上了最新包）。
-const String kAppVersion = '0.2.13-beta';
+const String kAppVersion = '0.2.14-beta';
 
 /// GitHub Releases 页面（检查逻辑在 UpdateService）。
 const _releasesPage = 'https://github.com/suanx/orion_agent/releases';

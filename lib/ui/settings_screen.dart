@@ -931,13 +931,16 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
     if (!mounted) return;
     setState(() => _fetching = false);
     final names = fetched.map((m) => m.name).toList();
+    // 带上下文/最大输出元数据的模型数：0 说明网关的 /models 只返回了
+    // id（大多数 OpenAI 兼容网关如此），自动填充无从谈起——弹窗会明示
+    final withMeta = fetched.where((m) => m.hasMeta).length;
 
     // 已存在的模型默认不勾选，避免重复导入
     final existing = {for (final m in config.models) m.name};
     final picked = await showGlassDialog<Set<String>>(
       context: context,
       builder: (ctx) => _FetchResultDialog(
-        names: names,
+        models: fetched,
         existing: existing,
       ),
     );
@@ -946,10 +949,12 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
     final notifier = ref.read(configProvider.notifier);
     // name -> 元数据：Dart 3 core 没有 firstWhereOrNull，用 map 直查
     final metaByName = {for (final m in fetched) m.name: m};
+    var autoFilled = 0;
     for (final n in picked) {
       // 网关若附带 context_length / max_output_tokens，自动填充，
       // 省去逐个模型手填上下文与最大输出
       final meta = metaByName[n];
+      if (meta?.hasMeta == true) autoFilled++;
       notifier.addModel(
         widget.configId,
         ProviderModel(
@@ -960,7 +965,9 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
         ),
       );
     }
-    _toast('已导入 ${picked.length} 个模型');
+    _toast(autoFilled > 0
+        ? '已导入 ${picked.length} 个模型（$autoFilled 个自动填充了上下文/最大输出）'
+        : '已导入 ${picked.length} 个模型（网关未返回上下文/最大输出，请手动填写）');
   }
 
   /// 从模型名猜用途。名字里带 embed / bge / rerank 的基本都是向量模型，
@@ -997,9 +1004,12 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
 }
 
 class _FetchResultDialog extends StatefulWidget {
-  const _FetchResultDialog({required this.names, required this.existing});
+  const _FetchResultDialog({
+    required this.models,
+    required this.existing,
+  });
 
-  final List<String> names;
+  final List<FetchedModel> models;
   final Set<String> existing;
 
   @override
@@ -1007,16 +1017,29 @@ class _FetchResultDialog extends StatefulWidget {
 }
 
 class _FetchResultDialogState extends State<_FetchResultDialog> {
+  late final List<String> names = widget.models.map((m) => m.name).toList();
   late final Set<String> _checked = {
     // 默认只勾选还没导入过的；已存在的默认不勾，避免重复添加
-    for (final n in widget.names)
+    for (final n in names)
       if (!widget.existing.contains(n)) n,
   };
 
   @override
   Widget build(BuildContext context) {
-    final all = widget.names;
+    final all = names;
     final allChecked = _checked.length == all.length;
+    // 网关带回上下文/最大输出的模型数：0 = 该网关的 /models 只返回 id，
+    // 自动填充功能无从生效（弹窗内明确展示，避免用户以为功能失效）
+    final withMeta = widget.models.where((m) => m.hasMeta).length;
+    String? metaLabel(FetchedModel m) {
+      if (!m.hasMeta) return null;
+      final parts = <String>[
+        if (m.contextWindow != null) '上下文 ${m.contextWindow}',
+        if (m.maxOutputTokens != null) '输出 ${m.maxOutputTokens}',
+      ];
+      return parts.join(' · ');
+    }
+
     return AlertDialog(
       title: Text('发现 ${all.length} 个模型'),
       content: SizedBox(
@@ -1045,12 +1068,30 @@ class _FetchResultDialogState extends State<_FetchResultDialog> {
                         color: Theme.of(context).colorScheme.outline)),
               ],
             ),
+            if (withMeta == 0)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('该服务的 /models 未返回上下文/最大输出信息，导入后需手动填写',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.error)),
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4),
+                child: Text('其中 $withMeta 个模型带上下文/最大输出信息，导入时自动填充',
+                    style: TextStyle(
+                        fontSize: 11,
+                        color: Theme.of(context).colorScheme.outline)),
+              ),
             Expanded(
               child: ListView.builder(
                 itemCount: all.length,
                 itemBuilder: (ctx, i) {
                   final n = all[i];
+                  final m = widget.models[i];
                   final exists = widget.existing.contains(n);
+                  final meta = metaLabel(m);
                   return CheckboxListTile(
                     dense: true,
                     value: _checked.contains(n),
@@ -1060,7 +1101,12 @@ class _FetchResultDialogState extends State<_FetchResultDialog> {
                             style: TextStyle(
                                 fontSize: 11,
                                 color: Theme.of(ctx).colorScheme.outline))
-                        : null,
+                        : meta == null
+                            ? null
+                            : Text(meta,
+                                style: TextStyle(
+                                    fontSize: 11,
+                                    color: Theme.of(ctx).colorScheme.outline)),
                     onChanged: (v) => setState(() {
                       if (v == true) {
                         _checked.add(n);

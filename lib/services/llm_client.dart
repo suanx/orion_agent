@@ -550,11 +550,14 @@ class LlmClient {
           final ctx = _firstInt(m, const [
             'context_length',
             'context_window',
+            'contextWindow',
             'context_size',
+            'max_model_len', // vLLM 的上下文字段名
           ]);
           var maxOut = _firstInt(m, const [
             'max_output_tokens',
             'max_completion_tokens',
+            'maxOutputTokens',
             'max_tokens',
           ]);
           // OpenRouter 把最大输出藏在嵌套的 top_provider 里
@@ -762,4 +765,8 @@ class FetchedModel {
 
   /// 单次回复最大输出（token）。网关未提供时为 null。
   final int? maxOutputTokens;
+
+  /// 网关是否提供了任一元数据。false = /models 只返回 id，
+  /// 自动填充无从生效（弹窗会明示，需手动填写）。
+  bool get hasMeta => contextWindow != null || maxOutputTokens != null;
 }
