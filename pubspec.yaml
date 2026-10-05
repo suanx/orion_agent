@@ -55,10 +55,3 @@ flutter:
     # proot 全套不再走 assets：改由 CI 放进 jniLibs，安装后系统解压到
     # nativeLibraryDir（天然可执行、不受 W^X 限制），见 vendor/proot/README.md。
 
-# file_picker 的传递依赖 flutter_plugin_android_lifecycle 2.0.2x 在 AAR
-# metadata 里要求使用方 compileSdk ≥ 36，而 Flutter 插件子模块按
-# flutter.compileSdkVersion(34) 编译 → checkReleaseAarMetadata 失败
-# （v0.2.16-beta 实测）。钉回 2.0.19（不要求 36，API 与 2.0.2x 兼容）；
-# 待项目整体升 compileSdk 36 后可移除本 override。
-dependency_overrides:
-  flutter_plugin_android_lifecycle: 2.0.19
