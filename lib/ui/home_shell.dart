@@ -25,7 +25,8 @@ class HomeShell extends ConsumerStatefulWidget {
   ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
-class _HomeShellState extends ConsumerState<HomeShell> {
+class _HomeShellState extends ConsumerState<HomeShell>
+    with WidgetsBindingObserver {
   int _tab = 0;
 
   static const _navHeight = 64.0;
@@ -52,11 +53,46 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     });
     // 启动自动检查更新：延迟几秒避开启动高峰；
     // 发现新版本弹窗展示（用户要求：每次进入软件都自动检查）。
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _autoCheckUpdate());
   }
 
   /// 启动时自动检查更新，发现新版本弹窗展示更新日志。
-  Future<void> _autoCheckUpdate() async {
+  /// 上次自动检查的时刻：回到前台时做 30 分钟节流，避免每次切回来都打
+  /// 一轮网络（GitHub API 在国内不稳定，且启动还有其它任务在抢窗口）。
+  DateTime? _lastUpdateCheck;
+
+  /// 更新弹窗是否正在展示：防止 resume 与启动检查同时弹两个。
+  bool _updateDialogOpen = false;
+
+  /// 回到前台时补一次检查。
+  ///
+  /// 之前只在「启动 4 秒后」检查一次：应用常驻不关的话，之后发布的新版本
+  /// 永远不会提示（2026-10-06 用户反馈「怎么不弹窗提示新版本」）。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed) return;
+    final last = _lastUpdateCheck;
+    if (last != null &&
+        DateTime.now().difference(last) < const Duration(minutes: 30)) {
+      return;
+    }
+    _autoCheckUpdate(delay: const Duration(seconds: 1));
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// 检查更新；[delay] 让启动路径避开启动高峰、resume 路径快速响应。
+  Future<void> _autoCheckUpdate({
+    Duration delay = const Duration(seconds: 4),
+  }) async {
+    if (_updateDialogOpen) return;
+    _lastUpdateCheck = DateTime.now();
+    await Future<void>.delayed(delay);
     // 延迟：首帧渲染 + 终端自启任务 + MCP 连接都在抢启动窗口，
     // 更新检查不与它们竞争。
     await Future<void>.delayed(const Duration(seconds: 4));
@@ -69,7 +105,12 @@ class _HomeShellState extends ConsumerState<HomeShell> {
     if (!mounted) return;
     // 统一更新弹窗（截图样式）：弹窗内直接下载（进度条 + 实时速度），
     // 完成后自动拉起安装器；「稍后再说」随时可退出，下载中会取消。
-    await UpdateDownloadDialog.show(context, info);
+    _updateDialogOpen = true;
+    try {
+      await UpdateDownloadDialog.show(context, info);
+    } finally {
+      _updateDialogOpen = false;
+    }
   }
 
   /// 执行并清空导航意图。

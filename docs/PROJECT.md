@@ -927,6 +927,17 @@ Releases），每次构建 12MB+，三天就堆到 469MB。清理口径：**只�
 artifact + 最近 5 条 run**，其余用 REST API 批量删（`DELETE
 /actions/artifacts/{id}`、`DELETE /actions/runs/{id}`）。
 
+**更新检查的触发时机**（2026-10-06 修正）：启动 4s 后检查一次 **+
+每次回到前台（`AppLifecycleState.resumed`）补一次，30 分钟节流**。此前
+只有启动一次——应用常驻不关时，之后发布的新版本永远不提示（用户反馈
+「怎么不弹窗提示新版本」）。`home_shell` 用 `_updateDialogOpen` 防重复弹窗。
+
+⚠️ **Beta 号必须高于当时最新正式版**：版本比较是纯数字逐段比较（`-beta`
+后缀被忽略），所以 Beta 线一旦被正式版超过（如 beta 停在 0.2.16-beta、
+正式版发到 0.2.14），**Beta 用户将收不到任何后续提示**——`isNewer` 判定
+远端不比当前大。发版纪律：**每次给正式版发版后，下一个 Beta 版本号必须
+高于它**（当前状态：正式版 0.2.14 → 下个 Beta 至少 0.2.19-beta）。
+
 **唯一工作流**：`.github/workflows/build.yml`
 （`push` 触发分支 **[main, beta]** + 手动 workflow_dispatch）
 
