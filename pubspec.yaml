@@ -1,7 +1,7 @@
 name: orion_agent
 description: "Orion Agent - A mobile AI Agent app built with Flutter."
 publish_to: "none"
-version: 0.2.19-beta+30
+version: 0.2.24-beta+35
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
@@ -22,9 +22,11 @@ dependencies:
   sqlite3_flutter_libs: ^0.5.0
   flutter_secure_storage: ^9.2.2
   image_picker: ^1.1.2
-  # 对话页文件附件：系统 SAF 选择器，无需存储权限。
-  # 只用其 pickFiles(withData: true)，文本类文件内容直接并入消息。
+  # 对话页文件附件 + 备份导入导出：系统 SAF 选择器，无需存储权限。
   file_picker: ^8.1.2
+  # 应用内交互式终端：连沙箱内的 sshd（127.0.0.1:8022）。
+  # 纯 Dart 实现（dart:io socket），不引入原生代码，不影响 compileSdk。
+  dartssh2: ^4.1.0
   speech_to_text: ">=6.6.2 <8.0.0"
   flutter_tts: ">=4.0.0 <5.0.0"
   archive: ^3.6.1
