@@ -15,6 +15,14 @@ on:
 permissions:
   contents: write
 
+# 同分支的 run 互斥：新 push 自动取消上一个没跑完的 run。
+# main/beta 共用一个 workflow，连续推送时旧的 run 不取消会白排队、
+# 还可能与新 run 抢 hosted runner（2026-10-06 曾连续两次
+# "not acquired by Runner of type hosted"）。
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -341,6 +349,29 @@ jobs:
 
       - name: Pub get
         run: flutter pub get
+
+      - name: Track pubspec.lock
+        # 评估项 M1：lock 入库，构建可复现。本机无 Flutter SDK，lock 由
+        # CI 首次生成并自动回提交到当前分支；此后 pub get 每次发现
+        # lock 漂移（依赖升级/Flutter stable 变化）也回提交，隐式升级
+        # 在 git 历史里显式可见、可回溯。回提交只加 lock 文件，
+        # 本次构建产物对应 GITHUB_SHA，差异仅此一个文件，可接受。
+        run: |
+          set -e
+          if [ ! -s pubspec.lock ]; then
+            echo "::error ::pub get 后 pubspec.lock 不存在（异常）"; exit 1
+          fi
+          if git ls-files --error-unmatch pubspec.lock >/dev/null 2>&1 \
+             && git diff --quiet -- pubspec.lock; then
+            echo "pubspec.lock 已跟踪且无漂移"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pubspec.lock
+          git commit -m "chore: 同步 pubspec.lock（CI 自动回提交，保持依赖解析可复现）"
+          git push origin "HEAD:$GITHUB_REF"
+          echo "pubspec.lock 已回提交到 $GITHUB_REF"
 
       - name: Drift codegen
         run: dart run build_runner build --delete-conflicting-outputs

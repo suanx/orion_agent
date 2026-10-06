@@ -1008,7 +1008,9 @@ so 符号表确认混淆确实生效，再进正式版。
   第三步：R8/minify 单独验证（v0.2.2 时它实际未生效，须以 mapping.txt/
   dex 取证确认后才启用）
 
-**18 个步骤**：
+**19 个步骤**（2026-10-06 v0.2.26-beta 起加入 lock 跟踪；另在工作流顶层
+加了 `concurrency: build-${{ github.ref }}` + `cancel-in-progress`——同分支
+新 push 自动取消旧 run，main/beta 共用 workflow 时不再排队堆积）：
 
 1. Flutter stable setup（`subosito/flutter-action@v2`，带缓存）
 2. `flutter create --platforms android --project-name orion_agent .`
@@ -1024,12 +1026,14 @@ so 符号表确认混淆确实生效，再进正式版。
 10. 注入权限与通知 receiver
 11. 构建 Debian rootfs 并发布到 Release（tag `terminal-env`，已存在则跳过）
 12. `flutter pub get`
-13. `dart run build_runner build`（Drift codegen）
-14. `flutter analyze`
-15. `flutter test`
-16. `flutter build apk --release --target-platform android-arm64`
-17. 上传 artifact `orion-agent-apk`
-18. job 收尾
+13. **Track pubspec.lock**：lock 已入库（见 §9.1），pub get 后发现文件
+    漂移（或首次缺失）→ 以 github-actions[bot] 回提交到当前分支
+14. `dart run build_runner build`（Drift codegen）
+15. `flutter analyze`
+16. `flutter test`
+17. `flutter build apk --release --target-platform android-arm64`
+18. 上传 artifact `orion-agent-apk`
+19. job 收尾
 
 ### 为什么 targetSdk = 28
 
@@ -1111,7 +1115,9 @@ grep -qE 'jvmTarget\s*=\s*.*(JVM_17|VERSION_17)' "$F" || exit 1
 | `cloud_device_id` | String | 自动生成 | 云端设备标识（激活/登录/设备管理用） |
 | `cloud_email` | String | 无 | 登录邮箱（后端响应不回传，登录时本地记录，登出清除） |
 
-> `pubspec.lock` 被 `.gitignore` 忽略，依赖在 CI 统一解析。
+> `pubspec.lock` 自 v0.2.26-beta（2026-10-06）起**入库跟踪**：依赖解析固定、
+> 构建可复现；本机无 Flutter SDK，lock 由 CI 生成并回提交（build.yml
+> 「Track pubspec.lock」步骤），升级在 git 历史显式可见。
 
 ### FlutterSecureStorage
 
@@ -1792,7 +1798,7 @@ v0.2.5 修的 Markdown 空断言是并存的另一个真实隐患（列表渲染
 | 17 | `providers.dart` 690 行 | 所有 provider 集中一处，可按域拆分 |
 | 18 | 错误提示为裸字符串 | 无错误码/i18n 体系。如需多语言要重构 |
 | 19 | 无崩溃上报/日志文件 | Release崩溃只能靠用户反馈 |
-| 20 | 依赖版本宽松 | `pubspec.lock` 不跟踪，构建可复现性差 |
+| 20 | ~~依赖版本宽松~~ ✅ 已解决（v0.2.26-beta） | `pubspec.lock` 已入库跟踪，CI 发现漂移自动回提交，构建可复现 |
 
 ---
 
@@ -1858,6 +1864,8 @@ v0.2.5 修的 Markdown 空断言是并存的另一个真实隐患（列表渲染
 | `calculator_test.dart` | 计算器优先级/NaN/格式化 |
 | `regression_test.dart` | emoji 分块、ToolRegistry 注销、记忆去重、RAG 脏数据 |
 | `navigation_test.dart` | 通知 payload 映射、冷启动记账、seq 去重 |
+| `config_state_test.dart` | ConfigState 选商降级链：activeId 优先（对话页模型浮层记住的选择）→ 已启用且可用 → 已启用 → 兜底（v0.2.26-beta） |
+| `agent_orchestrator_test.dart` | Agent 主循环：空名 tool_call 回填、同名同参重复中止、8 轮上限交付进展、tool 结果按 tool_call_id 回填（假体隔离 LlmClient/ToolRegistry/MemoryService，v0.2.26-beta） |
 
 ### 约定
 

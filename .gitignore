@@ -5,8 +5,11 @@ build/
 .flutter-plugins
 .flutter-plugins-dependencies
 
-# 依赖在 CI 中统一 pub get 解析；不跟踪 lock，避免本地/CI 版本不一致导致求解冲突
-pubspec.lock
+# pubspec.lock 自 2026-10-06（v0.2.26-beta）起【入库跟踪】：
+# 依赖解析固定下来，构建可复现（此前每次 CI 重新求解，Flutter stable
+# 或依赖发新版都可能让"上次能过的构建"突然失败且无法二分）。
+# lock 升级只能显式发生；CI 会在 pub get 后发现 lock 漂移时自动
+# 回提交到当前分支（见 build.yml「Track pubspec.lock」步骤）。
 
 # IDE
 .idea/

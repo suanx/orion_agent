@@ -51,6 +51,27 @@ if (files.length === 0) {
 }
 if (files.length === 0) { console.error("没有要推送的文件"); process.exit(1); }
 
+// 版本一致性校验（发版纪律的机器兜底，§11.17 教训）：
+// pubspec version 与 about_screen kAppVersion 必须一致，且
+// RELEASE_NOTES.md 顶部要有本版说明——漏掉任何一个，应用内更新
+// 检查就会失效（自报版本落后 / Release 正文空）。
+const pubspec = readFileSync("pubspec.yaml", "utf8");
+const versionMatch = /^version:\s*(\S+)\s*$/m.exec(pubspec);
+if (!versionMatch) { console.error("pubspec.yaml 里读不到 version:"); process.exit(1); }
+const version = versionMatch[1].split("+")[0];
+const about = readFileSync("lib/ui/about_screen.dart", "utf8");
+if (!about.includes(`kAppVersion = '${version}'`)) {
+  console.error(`版本不一致：pubspec=${version}，但 lib/ui/about_screen.dart 的 kAppVersion 没同步成这个值。`);
+  console.error("请两处一起递增后再推送（否则应用自报版本落后，装了新版仍提示更新）。");
+  process.exit(1);
+}
+const notes = readFileSync("RELEASE_NOTES.md", "utf8");
+if (!notes.includes(`# Orion Agent v${version}`)) {
+  console.error(`RELEASE_NOTES.md 顶部没有 v${version} 的更新说明段落（发布步骤按版本号提取正文，缺失则 Release 说明为空）。`);
+  process.exit(1);
+}
+console.log(`版本一致性校验通过：${version}`);
+
 // 1. 基准: 远端 main 当前 commit
 const ref = await gh("GET", `/repos/${REPO}/git/ref/heads/${BRANCH}`);
 const baseCommit = await gh("GET", `/repos/${REPO}/git/commits/${ref.object.sha}`);
