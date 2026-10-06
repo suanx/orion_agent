@@ -410,7 +410,7 @@ const List<BuiltinSkill> builtinSkills = [
   BuiltinSkill(
     key: 'dockerfile_help',
     emoji: '🐳',
-    name: '写 Dockerfile',
+    name: '写Dockerfile',
     summary: '生成多阶段构建的生产级镜像配置',
     category: '开发者工具',
     template: '帮我为下面的项目写 Dockerfile：\n'
