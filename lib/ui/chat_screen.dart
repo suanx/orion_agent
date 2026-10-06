@@ -130,6 +130,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.dispose();
   }
 
+  /// 把消息内容以引用格式（markdown 块引用，多行逐行加 `> ` 前缀）填入
+  /// 输入框（v0.2.28-beta：消息长按 → 引用）。光标移到末尾。
+  void _quoteToInput(String text) {
+    final quoted = text.trim().split('\n').map((l) => '> $l').join('\n');
+    final cur = _inputController.text;
+    _inputController.text = cur.isEmpty ? '$quoted\n' : '$cur\n$quoted\n';
+    _inputController.selection = TextSelection.collapsed(
+        offset: _inputController.text.length);
+  }
+
   void _send() {
     var text = _inputController.text.trim();
     if (text.isEmpty && _pendingImages.isEmpty && _pendingFiles.isEmpty) {
@@ -376,14 +386,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         safe = '${stem}_${DateTime.now().millisecondsSinceEpoch}$ext';
         dest = File('${dir.path}/$safe');
       }
+      // 后面有多个 await（文件复制/写入），跨异步使用 context 前先取好
+      // messenger（use_build_context_synchronously）
+      final messenger = ScaffoldMessenger.of(context);
       final src = file.path;
       if (src != null) {
         await File(src).copy(dest.path);
       } else if (file.bytes != null) {
         await dest.writeAsBytes(file.bytes!, flush: true);
       } else {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('读取文件失败')));
+        messenger.showSnackBar(
+            const SnackBar(content: Text('读取文件失败')));
         return;
       }
 
@@ -452,7 +465,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final items = <Widget>[];
     if (session != null) {
       for (final m in session.messages) {
-        items.add(_MessageBubble(message: m));
+        items.add(_MessageBubble(message: m, onQuote: _quoteToInput));
       }
     }
     // 流式状态是全局单份，streamingSessionId 标记流内容归属的会话：
@@ -1013,9 +1026,12 @@ class _CachedMarkdown extends StatelessWidget {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
+  const _MessageBubble({required this.message, this.onQuote});
 
   final ChatMessage message;
+
+  /// 长按「引用」时把消息内容交还输入框（中文菜单，v0.2.28-beta）。
+  final void Function(String text)? onQuote;
 
   @override
   Widget build(BuildContext context) {
@@ -1024,39 +1040,42 @@ class _MessageBubble extends StatelessWidget {
       final hasImages = message.images.isNotEmpty;
       final bg = Theme.of(context).colorScheme.primaryContainer;
       final fg = Theme.of(context).colorScheme.onPrimaryContainer;
-      return Align(
-        alignment: Alignment.centerRight,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 5),
-          padding: hasImages
-              ? const EdgeInsets.all(6)
-              : const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
-          constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.78),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(18)
-                .copyWith(bottomRight: const Radius.circular(6)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final url in message.images)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: GestureDetector(
-                    onTap: () => _showImageViewer(context, url),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: _MessageImage(dataUrl: url),
+      return _withActions(
+        context,
+        Align(
+          alignment: Alignment.centerRight,
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 5),
+            padding: hasImages
+                ? const EdgeInsets.all(6)
+                : const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
+            constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.78),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(18)
+                  .copyWith(bottomRight: const Radius.circular(6)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final url in message.images)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: GestureDetector(
+                      onTap: () => _showImageViewer(context, url),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: _MessageImage(dataUrl: url),
+                      ),
                     ),
                   ),
-                ),
-              if (message.content.isNotEmpty)
-                SelectableText(message.content,
-                    style: TextStyle(color: fg, fontSize: 15, height: 1.5)),
-            ],
+                if (message.content.isNotEmpty)
+                  SelectableText(message.content,
+                      style: TextStyle(color: fg, fontSize: 15, height: 1.5)),
+              ],
+            ),
           ),
         ),
       );
@@ -1081,35 +1100,73 @@ class _MessageBubble extends StatelessWidget {
 
     // 助手消息：无气泡纯正文（与主流 AI 对话产品一致），
     // Markdown 直接铺在页面背景上，满宽阅读。
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看；
-          // 调用过的工具/技能名并入思考行（只显示名称，不显示详情）。
-          if ((message.reasoning ?? '').trim().isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: _ReasoningPanel(
-                text: message.reasoning!,
-                toolNames: [for (final tc in message.toolCalls) tc.name],
-              ),
-            ),
-          // 无思考行时工具名单独列出（有思考行时名称已在行内，避免重复）。
-          if ((message.reasoning ?? '').trim().isEmpty)
-            for (final tc in message.toolCalls)
+    return _withActions(
+      context,
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看；
+            // 调用过的工具/技能名并入思考行（只显示名称，不显示详情）。
+            if ((message.reasoning ?? '').trim().isNotEmpty)
               Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text('🔧 已调用 ${tc.name}',
-                    style: TextStyle(
-                        fontSize: 12, color: onSurface(context, 0.45))),
+                padding: const EdgeInsets.only(bottom: 6),
+                child: _ReasoningPanel(
+                  text: message.reasoning!,
+                  toolNames: [for (final tc in message.toolCalls) tc.name],
+                ),
               ),
-          if (message.content.isNotEmpty)
-            _CachedMarkdown(text: message.content),
-        ],
+            // 无思考行时工具名单独列出（有思考行时名称已在行内，避免重复）。
+            if ((message.reasoning ?? '').trim().isEmpty)
+              for (final tc in message.toolCalls)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text('🔧 已调用 ${tc.name}',
+                      style: TextStyle(
+                          fontSize: 12, color: onSurface(context, 0.45))),
+                ),
+            if (message.content.isNotEmpty)
+              _CachedMarkdown(text: message.content),
+          ],
+        ),
       ),
     );
+  }
+
+  /// 长按消息 → 复制 / 引用（中文菜单）。正文为空（纯图片等）不提供。
+  Widget _withActions(BuildContext context, Widget child) {
+    if (message.content.trim().isEmpty || onQuote == null) return child;
+    return Builder(
+      builder: (anchor) => GestureDetector(
+        onLongPress: () => _showActions(anchor),
+        child: child,
+      ),
+    );
+  }
+
+  Future<void> _showActions(BuildContext anchor) async {
+    final action = await showGlassAnchoredMenu<String>(
+      context: anchor,
+      anchor: anchor,
+      width: 176,
+      options: const [
+        GlassMenuOption(
+            value: 'copy', title: '复制', icon: Icons.copy_rounded),
+        GlassMenuOption(
+            value: 'quote', title: '引用', icon: Icons.format_quote_rounded),
+      ],
+    );
+    if (action == null || !anchor.mounted) return;
+    if (action == 'copy') {
+      await Clipboard.setData(ClipboardData(text: message.content));
+      if (anchor.mounted) {
+        ScaffoldMessenger.of(anchor).showSnackBar(
+            const SnackBar(content: Text('已复制')));
+      }
+    } else if (action == 'quote') {
+      onQuote?.call(message.content);
+    }
   }
 }
 

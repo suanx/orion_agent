@@ -111,7 +111,7 @@
       ├─ 插入 user 消息 → StorageService → SQLite
       └─ AgentOrchestrator.run()
            ├─ _systemPrompt()：基础 prompt + 角色 + 记忆 + 知识库
-           └─ 循环最多 8 轮：
+           └─ 循环无上限（护栏：同参重复 3 次中止 + 用户停止）：
                 ├─ LlmClient.chatStream() → SSE 增量文本 → AgentDelta → UI
                 ├─ 若模型返回 tool_calls：
                 │    ├─ ToolRegistry.execute() 执行
@@ -337,7 +337,9 @@ OpenAI 兼容协议的 SSE 流式客户端。
 
 ### 5.2 Agent 编排器 (`agent_orchestrator.dart`)
 
-ReAct 循环（推理 → 工具 → 观察 → 继续），**最多 8 轮**（`_maxSteps = 8`）。
+ReAct 循环（推理 → 工具 → 观察 → 继续），**轮数无上限**
+（2026-10-07 v0.2.28-beta 用户要求移除原 8 轮上限；护栏 = 同工具同参
+连续 3 次重复自动中止 + 用户随时停止，见下表）。
 
 **system prompt 拼装顺序** (`:206-231`)：
 
@@ -356,7 +358,6 @@ ReAct 循环（推理 → 工具 → 观察 → 继续），**最多 8 轮**（`
 | 同一工具重复调用 3 次 | 提前中止，避免空转烧 token | `:148-156` |
 | 用户取消 | 产出"已取消"，不报错 | `:107-111` |
 | 中间轮有文本、末轮也有 | `lead` 累积各轮文本，避免"说过的话消失" | `:126-134` |
-| 达到 8 轮上限 | 交付当前进展 + 说明，而非丢弃全部 | `:172-181` |
 | 空内容返回 | 视为失败（可能被内容过滤），不落库空消息 | `:125-129` |
 
 > ⚠️ **协议要求**：OpenAI 兼容协议要求 assistant 消息里的**每个** `tool_call`
@@ -383,7 +384,7 @@ abstract class Tool {
 | `current_time` | `DateTimeTool` | 当前日期时间，含时区（支持 UTC±HH:MM） |
 | `calculator` | `CalculatorTool` |递归下降解析器，精确计算 |
 | `web_fetch` | `WebFetchTool` | 网页正文抓取 |
-| `web_search` | `WebSearchTool` | DuckDuckGo 搜索，无需 Key |
+| `web_search` | `WebSearchTool` | 联网搜索。后端优先级：云端中继 → **soushen-hunter**（Debian 终端装了 `/root/soushen-hunter` 时，Playwright+chromium 抓 Bing/Google，JSON 输出，零 API 费用，2026-10-07 用户指定接入）→ DuckDuckGo HTML 兜底。任何后端失败静默降级到下一级 |
 | `save_memory` | `SaveMemoryTool` | 写入长期记忆 |
 | `search_knowledge` | `SearchKnowledgeTool` | 知识库语义检索 |
 | `run_command` | `RunCommandTool` | 终端执行 shell 命令；风险分级确认（见下） |
@@ -463,6 +464,23 @@ abstract class Tool {
   未触发且普通 Provider 不通知）。刷新点：记忆页返回、切「我的」Tab
 
 ### 5.6 终端环境 (`terminal_service.dart`)
+
+**Debian 安装失败修复（2026-10-07，v0.2.28-beta）**：`_pullDockerLayer`
+此前只接受**单 manifest** 类型，而 docker library 镜像（含
+`debian:bookworm-slim`）的 tag 现在指向**多架构 OCI index**（含
+provenance/SBOM attestation 子清单）——部分镜像源原样返回 index，
+`layers` 字段不存在 → 所有镜像统一报「manifest 中无层信息」，GitHub
+备用源国内基本连不上 → 安装必败。修复：Accept 同时带 index 类型；
+返回 index 时选 `linux/arm64` 的非 attestation 子清单，再取该清单的
+根层 digest；GitHub 兜底失败也给出可读错误（原先透传裸 Dio 异常）。
+
+**soushen-hunter 集成（2026-10-07，v0.2.28-beta）**：`web_search`
+第二优先级后端（云端中继 → soushen → DDG 兜底）。**仅支持 Debian
+发行版**——Playwright 无 musl（Alpine）官方支持（pip wheel 与内置
+node driver 均为 glibc 链接），Alpine 下静默回退 DDG。安装路径：
+`/root/soushen-hunter`（curl codeload tarball + apt chromium +
+pip playwright），技能「装搜索增强/深度搜索/网页结构分析」模板均
+带发行版检测（Alpine 时提示切换 Debian）。
 
 **安装失败档案（#89，2026-10-05）**：真机安装报
 `Invalid argument(s): Illegal argument in isolate message: object is unsendable
@@ -911,6 +929,9 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
   所有锚定浮层内容限高屏高 62%、超出内部滚动（ConstrainedBox 必须套在
   SingleChildScrollView 外层）——修复模型列表几十项时浮层「不能滑动选择、
   超出部分直接被裁掉」
+- **消息长按菜单（复制 / 引用）**（v0.2.28-beta）：长按用户或助手消息弹
+  锚定菜单——「复制」全文进剪贴板；「引用」以 markdown 块引用格式
+  （多行逐行 `> ` 前缀）填入输入框，光标移到末尾。纯图片消息不提供
 - 语音输入（麦克风按钮）、技能调用（`/技能名`）
 - **文件附件（任意格式）**（2026-10-05）：「+」菜单第三项「文件（任意
   格式）」走 FilePicker（SAF，免存储权限），上限 200MB。文件先复制到
@@ -936,7 +957,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | `chat_screen` | ✅ 完整（无气泡正文 + 思考行 + 代码块卡片） |
 | `cloud_account_screen` | ✅ 云端登录页 + 个人中心（卡密/设备/用量）；2026-10-06 两张头部卡片由主色渐变换成 `glassPanel` 液态玻璃（白字改 onSurface 体系） |
 | `sessions_drawer` | ✅ 会话列表、切换、删除 |
-| `skills_screen` | ✅ 18 内置 + 自定义 |
+| `skills_screen` | ✅ 42 内置（v0.2.28-beta 扩充：开发者工具 16 个含 soushen 三件套/写测试/代码审查/Git 助手等）+ 自定义；`skill_catalog_test.dart` 常驻校验目录完整性 |
 | `roles_screen` | ✅ CRUD（无预置） |
 | `knowledge_screen` | ✅ 文件导入（txt/md/docx/pdf，见 §5.4）+ 粘贴文本（v0.2.27-beta） |
 | `mcp_screen` | ✅ 添加/编辑/启用/删除 + 重连（2026-10-05 增编辑） |
@@ -948,6 +969,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | `font_settings_screen` | ✅ 对话字体四档缩放（带实时预览） |
 | `notification_settings_screen` | ✅ 4 项设置 + 权限申请 |
 | `storage_settings_screen` | ✅ 统计 + 2 项清理 |
+| `permission_screen` | ✅ 应用授权页（通知/录音/相机/无障碍/后台/悬浮窗/应用列表/所有文件）。**appsList 判定修复（v0.2.28-beta）**：此前误用无障碍服务状态替代，用户开启后仍显示「去开启」；现 API 30+ 按 QUERY_ALL_PACKAGES 以可见包数验证、API<30 走 READ_EXTERNAL_STORAGE 运行时授权 |
 | `tasks_screen` | ✅ 自动任务（每日/手动 + 启动补跑 + 存活期调度） |
 
 ---
@@ -1281,7 +1303,7 @@ class ToolCall {
 | 13 | 工具永远找不到 | 网关重复下发完整 name，`web_search` + `web_search` = 错名 | `llm_client.dart:139-147` |
 | 14 | 停止按钮显示"请求失败（HTTP null）" | `DioExceptionType.cancel` 未区分 | `agent_orchestrator.dart:107-111` |
 | 15 | 模型说过的话凭空消失 | 中间轮文本未累积进最终答案 | `agent_orchestrator.dart:126-134` |
-| 16 | 8 轮工具调用后全部作废 | 达到上限只报错，不交付已有进展 | `agent_orchestrator.dart:172-181` |
+| 16 | ~~8 轮工具调用后全部作废~~ ✅ 已解决（v0.2.28-beta） | 轮数改为无上限（护栏：重复中止 + 手动停止） | `agent_orchestrator.dart` |
 | 17 | 连接池耗尽 | SSE 异常路径未关闭响应体 | `llm_client.dart:161-163` |
 | 18 | 向量永久错位入库 | `addDocument` 只比总数，两批可互相抵消 | `rag_service.dart:66-84` 逐批校验 |
 | 19 | 知识库整体失效 | 单条脏 JSON 毁掉整次检索，且异常被空 catch 吞掉 | `rag_service.dart:135-155` 跳过+计数 |
@@ -1878,7 +1900,7 @@ v0.2.5 修的 Markdown 空断言是并存的另一个真实隐患（列表渲染
 | `regression_test.dart` | emoji 分块、ToolRegistry 注销、记忆去重、RAG 脏数据 |
 | `navigation_test.dart` | 通知 payload 映射、冷启动记账、seq 去重 |
 | `config_state_test.dart` | ConfigState 选商降级链：activeId 优先（对话页模型浮层记住的选择）→ 已启用且可用 → 已启用 → 兜底（v0.2.26-beta） |
-| `agent_orchestrator_test.dart` | Agent 主循环：空名 tool_call 回填、同名同参重复中止、8 轮上限交付进展、tool 结果按 tool_call_id 回填（假体隔离 LlmClient/ToolRegistry/MemoryService，v0.2.26-beta） |
+| `agent_orchestrator_test.dart` | Agent 主循环：空名 tool_call 回填、同名同参重复中止、10 轮无上限收尾、tool 结果按 tool_call_id 回填（假体隔离 LlmClient/ToolRegistry/MemoryService，v0.2.26-beta；无上限 v0.2.28-beta） |
 
 ### 约定
 
@@ -1896,7 +1918,9 @@ expect(s.contains('#'), isFalse);
 ### 待补测试
 
 - Agent 主链路集成测试（伪 LLM 服务驱动 SSE）
-- `AgentOrchestrator` 的 8 轮上限、重复调用中止、空 tool_call 回填
+- ~~`AgentOrchestrator` 的 8 轮上限、重复调用中止、空 tool_call 回填~~
+  ✅ 已补（v0.2.26-beta：`agent_orchestrator_test.dart`；v0.2.28-beta 轮数
+  改为无上限，新增 10 轮收尾用例）
 - `HomeShell` 导航意图消费的 Widget 测试
 - `StorageService.loadSessions` 的 N+1 回归（查询次数断言）
 

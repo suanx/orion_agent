@@ -132,7 +132,7 @@ void main() {
   });
 
   test('同名同参连续 3 次 → 提前中止，避免空转', () async {
-    final repeat = () => assistant('', const [
+    ChatMessage repeat() => assistant('', const [
           ToolCall(id: 'c', name: 'web_search', arguments: '{"q":"x"}'),
         ]);
     final llm = FakeLlm([repeat()]);
@@ -146,23 +146,30 @@ void main() {
     expect(llm.call, lessThanOrEqualTo(3));
   });
 
-  test('耗尽 8 轮 → 交付最后一轮可见进展并说明被截断', () async {
+  test('工具调用轮数无上限：10 轮后仍正常收尾（原上限 8 轮）', () async {
     final scripted = <ChatMessage>[
-      for (var i = 1; i <= 8; i++)
-        assistant('第$i轮进展', [
+      for (var i = 1; i <= 10; i++)
+        assistant('', [
           ToolCall(id: 'c$i', name: 'web_search', arguments: '{"q":"$i"}'),
         ]),
+      assistant('10 轮调研完成'),
     ];
     final llm = FakeLlm(scripted);
     final events =
         await buildOrchestrator(llm).run(config: config, history: history).toList();
 
+    expect(events.whereType<AgentFailure>(), isEmpty,
+        reason: '超过原 8 轮上限后不得中止');
     final answers = events.whereType<AgentAnswer>().toList();
     expect(answers, hasLength(1));
-    final content = answers.single.message.content;
-    expect(content, contains('第8轮进展'));
-    expect(content, contains('最大推理轮数 8'));
-    expect(events.whereType<AgentFailure>(), isEmpty);
+    expect(answers.single.message.content, '10 轮调研完成');
+    expect(llm.call, 11, reason: '10 轮工具调用 + 1 轮最终回答');
+    // 工具结果按 tool_call_id 逐轮回填，不残留未回填调用
+    for (var r = 1; r < llm.seenMessages.length; r++) {
+      final toolMsgs =
+          llm.seenMessages[r].where((m) => m['role'] == 'tool').toList();
+      expect(toolMsgs, hasLength(1), reason: 'round $r');
+    }
   });
 
   test('每轮工具结果按 tool_call_id 回填（多轮循环不残留未回填调用）', () async {

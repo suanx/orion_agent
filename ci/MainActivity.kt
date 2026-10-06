@@ -122,12 +122,18 @@ class MainActivity : FlutterActivity() {
             enabled.split(':').any { it.equals(service, ignoreCase = true) }
         } catch (_: Exception) { false }
         out["appsList"] = try {
-            // 用系统无障碍管理器判断本应用的无障碍服务是否启用，替代不可靠的
-            // 「可见包数>50」启发式。getEnabledAccessibilityServiceList 与
-            // FEEDBACK_ALL_MASK 均 API 14+ 可用，兼容 targetSdk 28，无额外依赖。
-            val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as? AccessibilityManager
-            am?.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)
-                ?.any { it.resolveInfo?.serviceInfo?.packageName == packageName } ?: false
+            // 应用列表读取权限的真实判定（此前误用无障碍服务状态替代，
+            // 导致用户开启后仍显示「去开启」）：
+            // - API 30+：由 Manifest 声明的 QUERY_ALL_PACKAGES 提供，
+            //   没有用户开关，以实际可见包数验证（>1 即不止本应用自身）
+            // - API <30：走运行时权限 READ_EXTERNAL_STORAGE（maxSdk 32）
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                packageManager.getInstalledPackages(0).size > 1
+            } else {
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    this, android.Manifest.permission.READ_EXTERNAL_STORAGE
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
         } catch (_: Exception) { false }
         // a11yServiceEnabled 保留：区分「系统里有无此服务」与「服务已开启」
         out["a11yServiceDeclared"] = a11y != null
@@ -168,7 +174,20 @@ class MainActivity : FlutterActivity() {
                             Uri.parse("package:$packageName")
                         )
                     )
-                "appsList" -> openAppDetails()
+                "appsList" -> {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        // QUERY_ALL_PACKAGES 已声明，状态天然为已开启；
+                        // 跳应用详情页兜底（正常不会走到）
+                        openAppDetails()
+                    } else {
+                        // 旧版本走运行时权限授权对话框
+                        androidx.core.app.ActivityCompat.requestPermissions(
+                            this,
+                            arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE),
+                            7001
+                        )
+                    }
+                }
                 "allFiles" -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         try {

@@ -64,6 +64,11 @@ class AgentFailure extends AgentEvent {
 }
 
 /// Agent 编排器：ReAct 循环（推理 → 工具调用 → 观察结果 → 继续推理）。
+///
+/// 工具调用轮数**无上限**（2026-10-07 用户要求，原上限 8 轮）：
+/// 复杂任务（多文件调研、长流程搭建）不再被中途截断。护栏改为——
+/// 同一工具同一参数连续重复 3 次自动中止（防模型卡死空转）+
+/// 用户随时点「停止」+ 取消令牌逐轮检查。
 class AgentOrchestrator {
   AgentOrchestrator({
     required LlmClient llm,
@@ -76,8 +81,6 @@ class AgentOrchestrator {
         _memory = memory,
         _stats = stats,
         _skills = skills;
-
-  static const _maxSteps = 8;
 
   final LlmClient _llm;
   final ToolRegistry _tools;
@@ -107,16 +110,15 @@ class AgentOrchestrator {
     // 这些文本也会以 AgentDelta 推给 UI，但最终落库的 answer 只取最后一轮，
     // 于是用户看到自己已读的文字凭空消失。这里把各轮可见文本累积起来。
     final lead = StringBuffer();
-    // 记录最后一次可见内容：达到 _maxSteps 时据此交付进展，而不是全部丢弃。
-    var lastVisible = '';
     // 各轮思考过程累积：回答落库时随消息一起保存，UI 可折叠回看。
     // 多轮工具调用时每轮都可能有思考，用空行连接保持段落完整。
     final reasoningBuf = StringBuffer();
     // 同一工具 + 同一参数连续重复调用说明模型卡住了，提前收尾避免空转烧 token。
+    // （轮数无上限后，这是无限循环的主要护栏。）
     String? prevSig;
     var repeatCount = 0;
 
-    for (var step = 0; step < _maxSteps; step++) {
+    for (;;) {
       if (cancelToken?.isCancelled ?? false) {
         yield const AgentFailure('已取消。');
         return;
@@ -201,7 +203,6 @@ class AgentOrchestrator {
       // 有工具调用：执行并把结果回填，进入下一轮
       messages.add(assistant.toApiJson());
       if (assistant.content.trim().isNotEmpty) {
-        lastVisible = assistant.content;
         // 各轮文本之间补换行，否则两段会被直接粘在一起。
         if (lead.isNotEmpty) lead.writeln();
         lead.write(assistant.content);
@@ -251,18 +252,6 @@ class AgentOrchestrator {
         yield const AgentFailure('已取消。');
         return;
       }
-    }
-
-    // 走到这里说明耗尽了 _maxSteps 轮。8 轮里用户已经看到的工具结果与推理文本
-    // 不该白费——交付当前进展，并说明是被轮数上限截断。
-    if (lastVisible.trim().isNotEmpty) {
-      yield AgentAnswer(ChatMessage(
-        id: 'asst_partial_${DateTime.now().millisecondsSinceEpoch}',
-        role: 'assistant',
-        content: '$lastVisible\n\n（已达到最大推理轮数 $_maxSteps，以上为当前进展。）',
-      ));
-    } else {
-      yield const AgentFailure('已达最大工具调用轮数（$_maxSteps），任务中止。');
     }
   }
 

@@ -392,8 +392,14 @@ class TerminalService {
           report('国内镜像不可用，改用备用源下载…');
         }
         if (!mirrorOk) {
-          await _dio.download(spec.downloadUrl, archivePath);
-          isGz = false;
+          try {
+            await _dio.download(spec.downloadUrl, archivePath);
+            isGz = false;
+          } catch (e) {
+            throw Exception(
+                'Debian 基础系统下载失败：国内镜像与备用源（GitHub）均不可用。'
+                '请检查网络后重试（${e.toString().split('\n').first}）');
+          }
         }
       } else {
         await _dio.download(spec.downloadUrl, archivePath);
@@ -707,7 +713,15 @@ class TerminalService {
   }
 
   /// Docker Registry v2 匿名拉取 library/debian:bookworm-slim 的根层。
+  ///
+  /// ⚠️ 必须同时接受【清单 index】类型：docker library 镜像的 tag 现在指向
+  /// 多架构 index（含 provenance/SBOM attestation 子清单），只接受单 manifest
+  /// 时部分镜像源会直接返回 index，`layers` 字段不存在 → 全部镜像统一报
+  /// 「manifest 中无层信息」，GitHub 备用源在国内又基本连不上，安装必败。
+  /// 见 index → 选 linux/arm64 非子清单 → 再取该清单的层。
   Future<void> _pullDockerLayer(String base, String savePath) async {
+    const indexAccept = 'application/vnd.docker.distribution.manifest.list.v2+json,'
+        'application/vnd.oci.image.index.v1+json';
     const manifestAccept = 'application/vnd.docker.distribution.manifest.v2+json,'
         'application/vnd.oci.image.manifest.v1+json';
 
@@ -729,19 +743,66 @@ class TerminalService {
       token = (tr.data?['token'] ?? tr.data?['access_token']) as String?;
     }
 
-    // manifest → 根层 digest
+    String? layerDigestOf(Map<String, dynamic> manifest) {
+      final layers = manifest['layers'] as List? ?? const [];
+      return layers.isEmpty
+          ? null
+          : (layers.first as Map)['digest'] as String?;
+    }
+
+    // manifest（可能直接是单 manifest，也可能是 index）
     final manifest = await _dio.get<Map<String, dynamic>>(
       '$base/v2/library/debian/manifests/bookworm-slim',
       options: Options(headers: {
         if (token != null) 'Authorization': 'Bearer $token',
-        'Accept': manifestAccept,
+        'Accept': '$indexAccept,$manifestAccept',
       }),
     );
-    final layers = manifest.data?['layers'] as List? ?? const [];
-    final digest =
-        layers.isEmpty ? null : (layers.first as Map)['digest'] as String?;
-    if (digest == null) throw Exception('manifest 中无层信息');
+    final data = manifest.data ?? const <String, dynamic>{};
 
+    if (data['manifests'] is List) {
+      // index：选 linux/arm64 的真实镜像清单（跳过 attestation 附属清单）
+      final entries = (data['manifests'] as List).cast<Map>();
+      Map<String, dynamic>? picked;
+      for (final e in entries) {
+        final platform = (e['platform'] as Map?) ?? const <String, dynamic>{};
+        final refType =
+            ((e['annotations'] as Map?)?['vnd.docker.reference.type']) as String?;
+        if (refType == 'attestation-manifest') continue;
+        if (platform['os'] == 'linux' &&
+            platform['architecture'] == 'arm64' &&
+            platform['variant'] == null) {
+          picked = e;
+          break;
+        }
+      }
+      picked ??= entries.cast<Map?>().firstWhere(
+            (e) =>
+                e != null &&
+                ((e['platform'] as Map?)?['architecture']) == 'arm64',
+            orElse: () => null,
+          );
+      if (picked == null || picked['digest'] == null) {
+        throw Exception('index 中找不到 linux/arm64 镜像清单');
+      }
+      final sub = await _dio.get<Map<String, dynamic>>(
+        '$base/v2/library/debian/manifests/${picked['digest']}',
+        options: Options(headers: {
+          if (token != null) 'Authorization': 'Bearer $token',
+          'Accept': manifestAccept,
+        }),
+      );
+      final digest = layerDigestOf(sub.data ?? const <String, dynamic>{});
+      if (digest == null) throw Exception('arm64 清单中无层信息');
+      await _dio.download('$base/v2/library/debian/blobs/$digest', savePath,
+          options: Options(headers: {
+            if (token != null) 'Authorization': 'Bearer $token',
+          }));
+      return;
+    }
+
+    final digest = layerDigestOf(data);
+    if (digest == null) throw Exception('manifest 中无层信息');
     await _dio.download('$base/v2/library/debian/blobs/$digest', savePath,
         options: Options(headers: {
           if (token != null) 'Authorization': 'Bearer $token',

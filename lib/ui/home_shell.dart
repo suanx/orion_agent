@@ -1,5 +1,4 @@
 import '../theme.dart';
-import 'glass.dart';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
