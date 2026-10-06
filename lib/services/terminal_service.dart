@@ -762,7 +762,7 @@ class TerminalService {
 
     if (data['manifests'] is List) {
       // index：选 linux/arm64 的真实镜像清单（跳过 attestation 附属清单）
-      final entries = (data['manifests'] as List).cast<Map>();
+      final entries = (data['manifests'] as List).cast<Map<String, dynamic>>();
       Map<String, dynamic>? picked;
       for (final e in entries) {
         final platform = (e['platform'] as Map?) ?? const <String, dynamic>{};
@@ -776,12 +776,15 @@ class TerminalService {
           break;
         }
       }
-      picked ??= entries.cast<Map?>().firstWhere(
-            (e) =>
-                e != null &&
-                ((e['platform'] as Map?)?['architecture']) == 'arm64',
-            orElse: () => null,
-          );
+      if (picked == null) {
+        // 严格匹配（无 variant 的 arm64）没命中时放宽到任意 arm64
+        for (final e in entries) {
+          if (((e['platform'] as Map?)?['architecture']) == 'arm64') {
+            picked = e;
+            break;
+          }
+        }
+      }
       if (picked == null || picked['digest'] == null) {
         throw Exception('index 中找不到 linux/arm64 镜像清单');
       }
