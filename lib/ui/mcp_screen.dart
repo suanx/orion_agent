@@ -56,7 +56,7 @@ class _McpScreenState extends ConsumerState<McpScreen> {
     // whenComplete dispose（P2-6）。
     final saved = await showGlassDialog<(String, String)>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: Text(existing == null ? '添加 MCP 服务器' : '编辑 MCP 服务器'),
         content: Column(
           mainAxisSize: MainAxisSize.min,

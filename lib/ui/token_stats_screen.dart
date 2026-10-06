@@ -50,7 +50,7 @@ class _TokenStatsScreenState extends ConsumerState<TokenStatsScreen> {
     final svc = ref.read(tokenStatsServiceProvider);
     final ok = await showGlassDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('清空统计'),
         content: const Text('将删除全部 token 用量记录，且无法恢复。\n'
             '只清空统计，不会删除任何对话。'),

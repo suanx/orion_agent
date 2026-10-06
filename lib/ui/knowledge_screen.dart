@@ -37,7 +37,7 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
     // 输入值随 pop 带出 + whenComplete dispose（P2-6）。
     final saved = await showGlassDialog<(String, String)>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         backgroundColor: Colors.transparent,
         title: const Text('导入文档'),
         content: SingleChildScrollView(

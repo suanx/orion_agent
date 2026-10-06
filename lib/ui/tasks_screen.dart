@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'glass.dart';
 import 'status_bar_area.dart';
-import 'terminal_screen.dart';
 
 import '../providers/providers.dart';
 import '../services/database.dart';
@@ -62,7 +61,7 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
     final notifier = ref.read(tasksProvider.notifier);
     final ok = await showGlassDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: Text('删除「${t.name}」？'),
         content: const Text('运行结果也会一并删除。'),
         actions: [
@@ -111,15 +110,6 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
                     tooltip: '新建任务',
                     icon: const Icon(Icons.add_circle_outline_rounded),
                     onPressed: () => _openEditor(),
-                  ),
-                  // 任务本质是「跑命令」，把终端放在触手可及的位置：
-                  // 想验证命令、装依赖、查报错，点这里直接进控制台。
-                  IconButton(
-                    tooltip: '打开终端',
-                    icon: const Icon(Icons.terminal_rounded),
-                    onPressed: () => Navigator.of(context).push(
-                        MaterialPageRoute(
-                            builder: (_) => const TerminalScreen())),
                   ),
                 ],
               ),
@@ -531,7 +521,7 @@ class _TaskEditorState extends State<_TaskEditor> {
         await notifier.upsert(row);
       }
 
-      return AlertDialog(
+      return glassAlertDialog(
         title: Text(widget.existing == null ? '新建自动任务' : '编辑任务'),
         content: SizedBox(
           width: double.maxFinite,

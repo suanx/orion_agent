@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
 import '../theme.dart';
+import 'glass.dart';
 
 /// 备份与恢复页（我的 → 备份与恢复）。
 ///
@@ -121,7 +122,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   Future<bool> showConfirm(String msg) async {
     final r = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('导入备份'),
         content: Text(msg),
         actions: [
@@ -140,7 +141,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   Future<void> showInfo(String msg) {
     return showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('导入结果'),
         content: Text(msg),
         actions: [

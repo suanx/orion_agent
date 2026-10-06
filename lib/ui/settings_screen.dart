@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/llm_config.dart';
+import '../services/app_log.dart';
 import '../providers/providers.dart';
 import '../services/llm_client.dart' show FetchedModel;
 
@@ -44,6 +45,7 @@ class SettingsScreen extends ConsumerWidget {
                   // 多选启用是允许的，但一次对话只能用一个提供商。
                   inUse: c.id == state.usingId,
                   onTap: () => _openProvider(context, c.id),
+                  onDelete: () => _confirmDelete(context, ref, c),
                 )),
             const SizedBox(height: 12),
             Text(
@@ -68,6 +70,34 @@ class SettingsScreen extends ConsumerWidget {
     );
     ref.read(configProvider.notifier).upsert(c);
     await _openProvider(context, c.id);
+  }
+
+  /// 删除确认（2026-10-06）：删除不可撤销，且会连带清掉该配置里的
+  /// API Key 与模型清单，所以必须二次确认，并提示「使用中」的影响。
+  static Future<void> _confirmDelete(
+      BuildContext context, WidgetRef ref, LlmConfig c) async {
+    final name = c.displayName;
+    final ok = await showGlassDialog<bool>(
+      context: context,
+      builder: (ctx) => glassAlertDialog(
+        title: const Text('删除提供商'),
+        content: Text('确定删除「$name」？\n'
+            '该配置里的 API Key 与模型清单会一并删除，且无法撤销。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('取消')),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    ref.read(configProvider.notifier).remove(c.id);
+    // 删除动作落进「诊断日志」，便于用户反馈「我明明删了」时回溯
+    AppLog.i('删除 AI 提供商：$name（${c.id}）');
   }
 
   static Future<void> _openProvider(BuildContext context, String id) {
@@ -132,11 +162,17 @@ class _ProviderCard extends StatelessWidget {
     required this.config,
     required this.inUse,
     required this.onTap,
+    required this.onDelete,
   });
 
   final LlmConfig config;
   final bool inUse;
   final VoidCallback onTap;
+
+  /// 删除该提供商（2026-10-06 补：原先只有添加/编辑，删不掉）。
+  /// 独立按钮而不是长按菜单——用户明确反馈「添加后无法删除」，
+  /// 入口必须一眼可见。
+  final VoidCallback onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -191,6 +227,13 @@ class _ProviderCard extends StatelessWidget {
                       ),
                     ],
                   ),
+                ),
+                IconButton(
+                  tooltip: '删除提供商',
+                  visualDensity: VisualDensity.compact,
+                  icon: Icon(Icons.delete_outline_rounded,
+                      size: 20, color: onSurface(context, 0.45)),
+                  onPressed: onDelete,
                 ),
                 if (config.enabled) ...[
                   const _Badge(text: '已启用', ok: true),
@@ -597,7 +640,7 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
   Future<void> _pickType(BuildContext context, LlmConfig config) async {
     final picked = await showGlassDialog<ProviderType>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         backgroundColor: Colors.transparent,
         title: const Text('提供商类型'),
         content: Column(
@@ -626,7 +669,7 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
     // 之后再读 ctrl.text 会抛「used after dispose」。
     final result = await showGlassDialog<(bool, String)>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('网络代理'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -692,7 +735,7 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
     Navigator.of(context).pop(); // 关掉 loading
     await showGlassDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('测试连接'),
         content: SingleChildScrollView(child: Text(result)),
         actions: [
@@ -889,7 +932,7 @@ class _ModelsTabState extends ConsumerState<_ModelsTab> {
   Future<void> _delete(ProviderModel m) async {
     final ok = await showGlassDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('删除模型'),
         content: Text('确定删除「${m.name}」？'),
         actions: [
@@ -1036,7 +1079,7 @@ class _FetchResultDialogState extends State<_FetchResultDialog> {
       return parts.join(' · ');
     }
 
-    return AlertDialog(
+    return glassAlertDialog(
       title: Text('发现 ${all.length} 个模型'),
       content: SizedBox(
         width: double.maxFinite,

@@ -102,7 +102,7 @@ class RolesScreen extends ConsumerWidget {
     // 输入值随 pop 带出 + whenComplete dispose（P2-6）。
     final saved = await showGlassDialog<(String, String)>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: Text(existing == null ? '新建角色' : '编辑角色'),
         content: Column(
           mainAxisSize: MainAxisSize.min,

@@ -179,6 +179,7 @@ orion_agent/
 │       ├── storage_settings_screen.dart     存储管理 + 工作区目录选择
 │       ├── about_screen.dart           关于页（软件介绍 + 在线更新 + 日志入口；启动更新的下载/安装已迁至 update_dialog）
 │       ├── log_screen.dart             诊断日志查看/导出
+│       ├── ssh_terminal_screen.dart     交互式 SSH 终端（连沙箱 sshd，持续会话）
 │       ├── backup_screen.dart          备份与恢复（数据域开关 + 导出/导入）
 │       ├── profile_screen.dart         我的
 │       ├── cloud_account_screen.dart   云端服务（Hero 登录页 + 多功能个人中心）
@@ -503,6 +504,51 @@ $nativeLibraryDir/libproot.so \
 apk add / apt install 改变，旧结果会骗人；IndexedStack 保活导致
 initState 只跑一次，故必须挂生命周期）。终端页是 push 页面，每次进入
 本身即 initState 检测。
+
+**交互式终端（SSH）**（2026-10-06）：`ssh_terminal_service.dart` +
+`ssh_terminal_screen.dart`。链路 = **App → SSH(127.0.0.1:8022) → proot
+内的 OpenSSH**（proot 不隔离网络，guest 监听端口宿主可直接连，无需端口
+转发）。要点：
+- `ensureSshd()`：探测端口 → 没有则 `ssh-keygen -A` + `chpasswd`（root
+  密码 `orion`）+ `mkdir -p /run/sshd /var/empty /etc/ssh /dev/pts`，再
+  `startOn('exec /usr/sbin/sshd -D -e -p 8022 -o ...')` 常驻；沙箱没装
+  openssh 时页面自动 `apk add` / `apt install`
+- **三个真实坑（都曾表现为「启动超时」，2026-10-06 修）**：
+  1. **不要往 `sshd_config` 追加指令**——同一关键字重复出现 sshd 直接
+     报 `Bad configuration option` 拒绝启动；参数改用 `sshd -o` 传，
+     天然幂等
+  2. **`UsePAM` 只有 Debian 系认**——Alpine 的 OpenSSH 未编译 PAM，
+     传 `-o UsePAM=no` 会 `Unsupported option` 直接退出；按发行版拼参数
+  3. **必须建 `/run/sshd`**（Debian 的 privilege separation 目录）与
+     `/dev/pts`（pty 分配），缺失时 sshd 启动即退
+- **必须把 sshd 的 stderr 回显到终端页**：它是唯一能说清失败原因的信息源；
+  同时监听进程退出码，退出即刻报错而不是干等超时（20s 上限，proot 冷启动慢）
+- 会话用 dartssh2（**纯 Dart，无原生代码**，不影响 compileSdk）：
+  `SSHSocket.connect` → `SSHClient(onPasswordRequest)` → `client.shell()`
+  拿 pty；`shell.stdout/stderr` 持续收，`shell.write` 发输入
+- 渲染是「等宽日志 + 输入行 + 快捷键（^C / Tab / ↑↓ 历史）」，**不是**
+  全屏 ANSI 模拟器：pty 控制序列经 `stripAnsi` 清理；全屏 curses 程序
+  （vim/htop）显示会异常，建议用「命令控制台」跑
+- 输出缓冲上限 200K 字符，超限从中间截断（长时间挂着会无限增长）
+
+**终端日志与探测的三个坑**（2026-10-06 修，用户日志刷屏反馈）：
+1. **日志必须有上限 + 重复折叠**：安装/并发探测的输出能到上千行，
+   `SelectableText(_log)` 会把整屏糊住。规则 = 连续相同行只留一条 +
+   收尾补「↳ 上行重复 N 次」，总行数上限 400（超限丢一半）。
+2. **组件探测不能 9 个 proot 全并发**：proot 启动会重写/修复 `/dev`、
+   `/tmp`，多实例并发操作同一 rootfs 会互相踩，表现为成片的
+   `Deletion failed, path = '/data/utmp'`。改为**每批 3 个**（保留并行
+   提速，又避免竞争）。
+3. **Debian 下载镜像要冗余**：`dockerproxy.net` 的 bookworm-slim 层
+   返回 404 会让安装走到「全部镜像不可用」；`dockerMirrors` 扩到 8 个
+   国内源，单个失效不阻断。
+
+**组件自动检测 + 「打开终端」**（2026-10-06）：①每次进入页面即自动检测
+（已安装时 initState 直接跑 `_checkTools`，用户不必点「检测组件」）；安装
+完成后再自动跑一次；页面在前台时每次 `AppLifecycleState.resumed` 重测。
+②「打开终端」按钮在终端页**「自启动任务」区块标题右侧**（空态时与「+ 新增
+任务」并排，**不是**「自动任务」Tab）→ push `SshTerminalScreen`（交互式
+SSH 终端）。
 
 **组件检测** (`terminal_screen.dart:15-25`)：nodejs / npm / git / python / uv / pip / ssh / sshd
 （OpenCode CLI 组件已于 2026-10-05 按用户要求移除：检测项与安装脚本中的
@@ -868,7 +914,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | 页面 | 状态 |
 |---|---|
 | `chat_screen` | ✅ 完整（无气泡正文 + 思考行 + 代码块卡片） |
-| `cloud_account_screen` | ✅ 云端登录页 + 个人中心（卡密/设备/用量） |
+| `cloud_account_screen` | ✅ 云端登录页 + 个人中心（卡密/设备/用量）；2026-10-06 两张头部卡片由主色渐变换成 `glassPanel` 液态玻璃（白字改 onSurface 体系） |
 | `sessions_drawer` | ✅ 会话列表、切换、删除 |
 | `skills_screen` | ✅ 18 内置 + 自定义 |
 | `roles_screen` | ✅ CRUD（无预置） |
@@ -887,6 +933,37 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 ---
 
 ## 8. 构建与 CI
+
+**Actions housekeeping**（2026-10-06）：artifact 只是发版中间产物（APK 已进
+Releases），每次构建 12MB+，三天就堆到 469MB。清理口径：**只留最近 2 个
+artifact + 最近 5 条 run**，其余用 REST API 批量删（`DELETE
+/actions/artifacts/{id}`、`DELETE /actions/runs/{id}`）。
+
+**更新检查的触发时机**（2026-10-06 修正）：启动 4s 后检查一次 **+
+每次回到前台（`AppLifecycleState.resumed`）补一次，30 分钟节流**。此前
+只有启动一次——应用常驻不关时，之后发布的新版本永远不提示（用户反馈
+「怎么不弹窗提示新版本」）。`home_shell` 用 `_updateDialogOpen` 防重复弹窗。
+
+⚠️ **Beta 号必须高于当时最新正式版**：版本比较是纯数字逐段比较（`-beta`
+后缀被忽略），所以 Beta 线一旦被正式版超过（如 beta 停在 0.2.16-beta、
+正式版发到 0.2.14），**Beta 用户将收不到任何后续提示**——`isNewer` 判定
+远端不比当前大。发版纪律：**每次给正式版发版后，下一个 Beta 版本号必须
+高于它**（当前状态：正式版 0.2.14 → 下个 Beta 至少 0.2.19-beta）。
+
+**弹窗必须「按内容收缩」（2026-10-06 两次返工才对，用户连续反馈
+「弹窗还是很宽很长」）：**
+1. `showGlassDialog` **不能包 `Dialog`**：`Dialog` 内部是
+   `Align(alignment: center, child: …)` 且 width/heightFactor 均为 null，
+   `Align` 在有界约束下撑到 `constraints.maximum` → 面板变整屏高。
+   改用 `Align` + `widthFactor/heightFactor = 1.0` + `ConstrainedBox(maxWidth 340,
+   maxHeight 屏高*0.8)`。
+2. **更关键：弹窗内容也不能用 `AlertDialog`**——它内部同样是 `Dialog`，
+   会把上面那份 80% 上限吃满，于是「只修了外层还是又宽又长」。全项目
+   23 处 `AlertDialog(` 已机械替换为自研的 **`glassAlertDialog`**
+   （`Column(mainAxisSize: min)` + 内容区 `ConstrainedBox(maxHeight 360)`
+   内滚动 + actions 右对齐），参数与 AlertDialog 对齐（title/content/actions）。
+3. 口径：**弹窗一律 `showGlassDialog` + `glassAlertDialog`**，不写裸
+   `AlertDialog` / `showDialog` / `showModalBottomSheet`。
 
 **唯一工作流**：`.github/workflows/build.yml`
 （`push` 触发分支 **[main, beta]** + 手动 workflow_dispatch）
@@ -923,14 +1000,6 @@ so 符号表确认混淆确实生效，再进正式版。
 - 第二步（真机验证通过后）：正式构建切混淆 + symbols artifact 常态归档；
   第三步：R8/minify 单独验证（v0.2.2 时它实际未生效，须以 mapping.txt/
   dex 取证确认后才启用）
-
-**第二步就位（2026-10-06，v0.2.19-beta）**：beta 分支 push 构建常态启用
-`--obfuscate --split-debug-info=build/app/symbols`（`GITHUB_REF` 判断，
-与手动 `inputs.obfuscate` 走同一分支），symbols artifact 对 beta 同样
-归档（`if: inputs.obfuscate == true || github.ref_name == 'beta'`）——
-beta 成为混淆验证渠道，预发布 Release 直发混淆包，模拟器/真机验证
-启动与工具调用正常后，第三步才评估 R8/minify；main 分支 push 构建
-仍为无混淆，验证稳定前不受影响。
 
 **18 个步骤**：
 

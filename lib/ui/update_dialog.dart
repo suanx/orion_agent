@@ -38,7 +38,7 @@ class _UpdateDownloadDialogState extends ConsumerState<UpdateDownloadDialog> {
   final _cancel = CancelToken();
 
   /// downloading → authorizing → installing → done / failed
-  String _phase = 'downloading';
+  String _phase = 'idle';
   int _received = 0;
   int _total = 0;
   double _speed = 0; // bytes/s（0.3s 窗口滑动平均）
@@ -50,8 +50,9 @@ class _UpdateDownloadDialogState extends ConsumerState<UpdateDownloadDialog> {
   @override
   void initState() {
     super.initState();
-    // 弹窗首帧后自动开始下载（截图交互：弹出即「下载中…」）
-    WidgetsBinding.instance.addPostFrameCallback((_) => _start());
+    // ⚠️ 不自动下载（2026-10-06 用户要求）：弹出后先展示版本号与更新日志，
+    // 由用户点「下载更新」再开始——应用内更新属于主动升级行为，
+    // 静默开始下载会抢用户带宽、也会在用户只想看更新说明时产生流量。
   }
 
   @override
@@ -152,7 +153,7 @@ class _UpdateDownloadDialogState extends ConsumerState<UpdateDownloadDialog> {
   @override
   Widget build(BuildContext context) {
     final info = widget.info;
-    return AlertDialog(
+    return glassAlertDialog(
       title: Text('发现新版本 v${info.version}'),
       content: SizedBox(
         width: double.maxFinite,
@@ -194,6 +195,12 @@ class _UpdateDownloadDialogState extends ConsumerState<UpdateDownloadDialog> {
                   style: TextStyle(
                       fontSize: 12, color: onSurface(context, 0.5)),
                 ),
+              ],
+              if (_phase == 'idle') ...[
+                const SizedBox(height: 14),
+                Text('是否现在下载并安装？点「下载更新」开始，或选「稍后再说」。',
+                    style: TextStyle(
+                        fontSize: 12.5, color: onSurface(context, 0.6))),
               ],
               if (_phase == 'authorizing') ...[
                 const SizedBox(height: 16),
@@ -240,6 +247,12 @@ class _UpdateDownloadDialogState extends ConsumerState<UpdateDownloadDialog> {
           const TextButton(
             onPressed: null,
             child: Text('下载中…'),
+          )
+        else if (_phase == 'idle')
+          FilledButton.icon(
+            onPressed: _start,
+            icon: const Icon(Icons.download_rounded, size: 18),
+            label: const Text('下载更新'),
           )
         else if (_phase == 'authorizing')
           FilledButton(onPressed: _install, child: const Text('重试安装'))

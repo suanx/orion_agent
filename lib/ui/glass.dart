@@ -26,32 +26,106 @@ Future<T?> showGlassDialog<T>({
     context: context,
     barrierDismissible: barrierDismissible,
     barrierColor: Colors.black26,
-    builder: (ctx) => Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 44, vertical: 28),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 400),
-        child: glassPanel(
-          context,
-          Theme(
-            data: Theme.of(context).copyWith(
-              dialogTheme: const DialogThemeData(
-                backgroundColor: Colors.transparent,
-                elevation: 0,
+    builder: (ctx) {
+      // ⚠️ 这里【不能用 Dialog】：Dialog 内部是
+      // `Align(alignment: center, child: ...)` 且 width/heightFactor 都是
+      // null —— Align 在有界约束下会撑到 constraints.maximum，于是玻璃
+      // 面板变成整屏高，内容被顶在中间、上下各留一大片空白
+      // （2026-10-06 用户截图反馈「弹窗显示太长」）。
+      // 改成 Align + widthFactor/heightFactor = 1：按子组件实际尺寸收缩，
+      // 居中显示；再用 maxWidth 400 / maxHeight 80% 兜住超长内容
+      // （AlertDialog 内部自带滚动，长表单不会被裁掉）。
+      final media = MediaQuery.sizeOf(ctx);
+      return Align(
+        alignment: Alignment.center,
+        widthFactor: 1.0,
+        heightFactor: 1.0,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 340,
+            maxHeight: media.height * 0.8,
+          ),
+          child: glassPanel(
+            ctx,
+            Theme(
+              data: Theme.of(ctx).copyWith(
+                dialogTheme: const DialogThemeData(
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                ),
+              ),
+              // 透明 Material：builder 里可能是裸表单（TextField/InkWell
+              // 都需要 Material 祖先），原来由 AlertDialog/Dialog 提供，
+              // 紧凑化后不强制 builder 返回它们，这里统一兜底。
+              child: Material(
+                type: MaterialType.transparency,
+                child: builder(ctx),
               ),
             ),
-            // 透明 Material：builder 里可能是裸表单（TextField/InkWell
-            // 都需要 Material 祖先），原来由 AlertDialog/Dialog 提供，
-            // 紧凑化后不强制 builder 返回它们，这里统一兜底。
-            child: Material(
-              type: MaterialType.transparency,
-              child: builder(ctx),
+            borderRadius: 24,
+          ),
+        ),
+      );
+    },
+  );
+}
+
+/// 紧凑弹窗内容（**替代 `AlertDialog`**）。
+///
+/// ⚠️ 为什么不用 `AlertDialog`：它内部同样是 `Dialog` → `Align(居中, 因子为
+/// null)`，在有界约束下会撑到 `constraints.maximum`。也就是说即使
+/// `showGlassDialog` 把高度上限压到 80%，AlertDialog 也会把这份上限吃满，
+/// 弹窗依旧又宽又长（2026-10-06 用户两次反馈「弹窗还是很宽很长」）。
+/// 这里用 `Column(mainAxisSize: MainAxisSize.min)` 真正按内容收缩：
+/// - 宽度：内容有多宽就多宽（上限由 showGlassDialog 的 maxWidth 兜底）；
+/// - 高度：随内容增长，超长内容（maxHeight 360）内部滚动；
+/// - actions 统一右对齐排布。
+///
+/// 参数与 `AlertDialog` 对齐（title / content / actions），
+/// 因此全项目 `AlertDialog(` 可以机械替换为本函数。
+/// [backgroundColor] 仅作兼容保留：玻璃面板自带底色，忽略即可。
+Widget glassAlertDialog({
+  Widget? title,
+  Widget? content,
+  List<Widget> actions = const [],
+  Color? backgroundColor,
+  double maxContentHeight = 360,
+}) {
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (title != null)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+          child: DefaultTextStyle(
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+            child: title,
+          ),
+        ),
+      if (content != null)
+        Padding(
+          padding: EdgeInsets.fromLTRB(20, title == null ? 18 : 0, 20, 0),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxHeight: maxContentHeight),
+            child: SingleChildScrollView(
+              // 内容通常是 Column(mainAxisSize: min)/Text/TextField：
+              // 垂直滚动给出无界高度，min 的 Column 不会报错。
+              child: content,
             ),
           ),
-          borderRadius: 24,
         ),
-      ),
-    ),
+      if (actions.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              for (final a in actions) ...[a, const SizedBox(width: 4)],
+            ],
+          ),
+        ),
+    ],
   );
 }
 
@@ -73,7 +147,7 @@ Future<String?> showGlassTextDialog({
   final ctrl = TextEditingController(text: initialText);
   return showGlassDialog<String>(
     context: context,
-    builder: (ctx) => AlertDialog(
+    builder: (ctx) => glassAlertDialog(
       title: Text(title),
       content: TextField(
         controller: ctrl,

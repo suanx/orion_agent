@@ -71,7 +71,7 @@ class _StorageSettingsScreenState
   }) async {
     final ok = await showGlassDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: Text(title),
         content: Text(message),
         actions: [
@@ -364,7 +364,7 @@ class _WorkspaceDirCardState extends State<_WorkspaceDirCard> {
     if (!mounted) return;
     final sel = await showGlassDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('选择工作区目录'),
         content: SizedBox(
           width: double.maxFinite,
