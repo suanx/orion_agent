@@ -141,7 +141,7 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
     final name = device.deviceName.isEmpty ? device.deviceId : device.deviceName;
     final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('解绑设备'),
         content: Text('确定解绑「$name」？解绑后该设备需重新登录。'),
         actions: [
@@ -170,7 +170,7 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
   Future<void> _logout() async {
     final confirmed = await showGlassDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('退出登录'),
         content: const Text('退出后云端搜索中继 / 云端任务 / 云端 MCP 将不可用，本地功能不受影响。'),
         actions: [

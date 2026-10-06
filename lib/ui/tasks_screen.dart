@@ -61,7 +61,7 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
     final notifier = ref.read(tasksProvider.notifier);
     final ok = await showGlassDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: Text('删除「${t.name}」？'),
         content: const Text('运行结果也会一并删除。'),
         actions: [
@@ -521,7 +521,7 @@ class _TaskEditorState extends State<_TaskEditor> {
         await notifier.upsert(row);
       }
 
-      return AlertDialog(
+      return glassAlertDialog(
         title: Text(widget.existing == null ? '新建自动任务' : '编辑任务'),
         content: SizedBox(
           width: double.maxFinite,

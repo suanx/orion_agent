@@ -153,7 +153,7 @@ class _UpdateDownloadDialogState extends ConsumerState<UpdateDownloadDialog> {
   @override
   Widget build(BuildContext context) {
     final info = widget.info;
-    return AlertDialog(
+    return glassAlertDialog(
       title: Text('发现新版本 v${info.version}'),
       content: SizedBox(
         width: double.maxFinite,

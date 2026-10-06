@@ -334,7 +334,7 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
     // 随 pop 带出 + whenComplete dispose（P2-6）。
     final saved = await showGlassDialog<(String, String)>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: const Text('新建快捷指令'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
@@ -388,7 +388,7 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
   Future<void> _deleteSkill(BuildContext context, SkillItem skill) async {
     final ok = await showGlassDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: Text('删除「${skill.name}」？'),
         actions: [
           TextButton(

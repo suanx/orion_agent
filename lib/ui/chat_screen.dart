@@ -1355,7 +1355,7 @@ class _CodeBlockState extends State<_CodeBlock> {
   Future<void> _showFull() async {
     await showGlassDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
+      builder: (ctx) => glassAlertDialog(
         title: Text(widget.language.isEmpty ? '代码' : widget.language),
         content: SizedBox(
           width: double.maxFinite,

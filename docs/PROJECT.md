@@ -950,15 +950,20 @@ artifact + 最近 5 条 run**，其余用 REST API 批量删（`DELETE
 远端不比当前大。发版纪律：**每次给正式版发版后，下一个 Beta 版本号必须
 高于它**（当前状态：正式版 0.2.14 → 下个 Beta 至少 0.2.19-beta）。
 
-**弹窗高度的正确做法**（2026-10-06 修，用户截图反馈「弹窗太长」）：
-`showGlassDialog` **不能包 `Dialog`**——`Dialog` 内部是
-`Align(alignment: center, child: …)` 且 width/heightFactor 均为 null，
-`Align` 在有界约束下会撑到 `constraints.maximum`，玻璃面板变成整屏高、
-内容顶在中间、上下各留一大片空白。正确写法：`Align` +
-`widthFactor: 1.0, heightFactor: 1.0`（按子组件实际尺寸收缩）+
-`ConstrainedBox(maxWidth: 400, maxHeight: 屏高*0.8)` 兜住超长内容
-（`AlertDialog` 自带滚动，长表单不会被裁）。全项目 23 个弹窗都走这个函数，
-改一处即全部生效；**不要写裸 `showDialog` / `showModalBottomSheet`**。
+**弹窗必须「按内容收缩」（2026-10-06 两次返工才对，用户连续反馈
+「弹窗还是很宽很长」）：**
+1. `showGlassDialog` **不能包 `Dialog`**：`Dialog` 内部是
+   `Align(alignment: center, child: …)` 且 width/heightFactor 均为 null，
+   `Align` 在有界约束下撑到 `constraints.maximum` → 面板变整屏高。
+   改用 `Align` + `widthFactor/heightFactor = 1.0` + `ConstrainedBox(maxWidth 340,
+   maxHeight 屏高*0.8)`。
+2. **更关键：弹窗内容也不能用 `AlertDialog`**——它内部同样是 `Dialog`，
+   会把上面那份 80% 上限吃满，于是「只修了外层还是又宽又长」。全项目
+   23 处 `AlertDialog(` 已机械替换为自研的 **`glassAlertDialog`**
+   （`Column(mainAxisSize: min)` + 内容区 `ConstrainedBox(maxHeight 360)`
+   内滚动 + actions 右对齐），参数与 AlertDialog 对齐（title/content/actions）。
+3. 口径：**弹窗一律 `showGlassDialog` + `glassAlertDialog`**，不写裸
+   `AlertDialog` / `showDialog` / `showModalBottomSheet`。
 
 **唯一工作流**：`.github/workflows/build.yml`
 （`push` 触发分支 **[main, beta]** + 手动 workflow_dispatch）

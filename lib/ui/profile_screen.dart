@@ -224,7 +224,7 @@ class ProfileScreen extends ConsumerWidget {
           onTap: () async {
             final ok = await showGlassDialog<bool>(
               context: context,
-              builder: (ctx) => AlertDialog(
+              builder: (ctx) => glassAlertDialog(
                 title: const Text('清空所有会话'),
                 content: const Text('将删除本机全部会话记录，不可恢复。'),
                 actions: [

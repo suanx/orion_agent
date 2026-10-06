@@ -771,7 +771,7 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen>
     final saved = await showGlassDialog<(String, String)>(
       context: context,
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDialog) => AlertDialog(
+        builder: (ctx, setDialog) => glassAlertDialog(
           title: Text(existing == null ? '新增任务' : '编辑任务'),
           content: Column(
             mainAxisSize: MainAxisSize.min,
