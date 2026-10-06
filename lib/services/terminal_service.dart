@@ -674,10 +674,19 @@ class TerminalService {
   // ---------------- 国内镜像拉取（Debian） ----------------
 
   /// 国内可匿名拉取的 Docker Registry 代理（依次尝试）。
+  /// 国内可用的 Docker Registry 镜像（按顺序尝试，失败自动换下一个）。
+  /// 2026-10-06 扩充：dockerproxy.net 的 bookworm-slim 层返回 404，
+  /// 会让 Debian 安装走到「全部镜像不可用」。任何一个源失效都不该
+  /// 阻断安装，所以候选给足并保持可追加。
   static const dockerMirrors = <String>[
     'https://docker.m.daocloud.io',
     'https://docker.1ms.run',
     'https://dockerproxy.net',
+    'https://hub.rat.dev',
+    'https://docker.chenby.cn',
+    'https://docker.anye.xyz',
+    'https://dockerhub.icu',
+    'https://docker.awsl9527.cn',
   ];
 
   Future<void> _downloadDebianFromMirror(
