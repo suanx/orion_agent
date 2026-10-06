@@ -6,6 +6,7 @@ import 'package:dio/dio.dart';
 
 import 'package:characters/characters.dart';
 
+import 'builtin_mcp.dart';
 import 'cloud_service.dart';
 import 'command_guard.dart';
 import 'memory_service.dart';
@@ -892,13 +893,15 @@ extension AgentPermissionX on AgentPermission {
   };
 
   /// 是否允许使用 [toolName]。内置名单之外的名字（MCP 扩展工具）
-  /// 仅在「完全访问」档放行。
+  /// 仅在「完全访问」档放行——例外：内置 MCP 服务器（builtin_mcp.dart，
+  /// 用户自建的可信端点）在工作区读写档即可调用。
   bool allows(String toolName) {
     switch (this) {
       case AgentPermission.readOnly:
         return _readOnlyTools.contains(toolName);
       case AgentPermission.workspace:
-        return _workspaceTools.contains(toolName);
+        return _workspaceTools.contains(toolName) ||
+            isBuiltinMcpTool(toolName);
       case AgentPermission.full:
         return true;
     }
