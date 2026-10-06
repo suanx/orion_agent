@@ -1,6 +1,5 @@
 // 文档文本提取单测（评估项 U1，v0.2.27-beta）：txt / docx / pdf 兼容提取。
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -67,7 +66,7 @@ void main() {
   });
 
   group('pdf（兼容提取）', () {
-    String buildPdf(String streamContent, {bool compress = false}) {
+    Uint8List buildPdf(String streamContent, {bool compress = false}) {
       var data = Uint8List.fromList(utf8.encode(streamContent));
       if (compress) {
         data = Uint8List.fromList(ZLibEncoder().encode(data));
@@ -75,14 +74,15 @@ void main() {
       final header = '%PDF-1.4\n';
       final body = '4 0 obj\n<< /Length ${data.length} >>\nstream\n';
       final footer = '\nendstream\nendobj\n%%EOF\n';
-      return utf8.encode(header + body) +
-          data +
-          utf8.encode(footer);
+      return Uint8List.fromList(<int>[
+        ...utf8.encode(header + body),
+        ...data,
+        ...utf8.encode(footer),
+      ]);
     }
 
     test('未压缩内容流：Tj 算子逐行提取', () {
-      final pdf = buildPdf('BT (Hello World) Tj (Second line of text) Tj ET');
-      final text = extractDocText('a.pdf', Uint8List.fromList(pdf));
+      final text = extractDocText('a.pdf', buildPdf('BT (Hello World) Tj (Second line of text) Tj ET'));
       expect(text, isNotNull, reason: '有文本层必须能提出内容');
       expect(text, contains('Hello World'));
       expect(text, contains('Second line of text'));
@@ -91,16 +91,16 @@ void main() {
     test('FlateDecode 压缩流：先 inflate 再提取', () {
       const content =
           'BT (压缩前的中文内容要能读出来，这一句足够长以越过最短门限的检查) Tj ET';
-      final pdf = buildPdf(content, compress: true);
-      final text = extractDocText('b.pdf', Uint8List.fromList(pdf));
+      final text = extractDocText('b.pdf', buildPdf(content, compress: true));
       expect(text, isNotNull);
       expect(text, contains('压缩前的中文内容'));
     });
 
     test('数组 TJ 算子', () {
-      final pdf = buildPdf(
-          'BT [(This is an) 120 (ar) 40 (ray)] TJ [(x) 40 (y with more text)] TJ ET');
-      final text = extractDocText('c.pdf', Uint8List.fromList(pdf));
+      final text = extractDocText(
+          'c.pdf',
+          buildPdf(
+              'BT [(This is an) 120 (ar) 40 (ray)] TJ [(x) 40 (y with more text)] TJ ET'));
       expect(text, isNotNull);
       expect(text, contains('array'));
       expect(text, contains('xy with more text'));
@@ -112,8 +112,7 @@ void main() {
               'empty.pdf', Uint8List.fromList(utf8.encode('%PDF-1.4\n%%EOF'))),
           isNull);
       expect(
-          extractDocText('tiny.pdf',
-              Uint8List.fromList(buildPdf('BT (ab) Tj ET'))),
+          extractDocText('tiny.pdf', buildPdf('BT (ab) Tj ET')),
           isNull,
           reason: '提取结果过短（<20 字符）视为失败：扫描件/CID 字体的兜底门限');
     });
