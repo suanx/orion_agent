@@ -10,6 +10,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'models/chat_session.dart';
 import 'providers/providers.dart';
 import 'services/app_log.dart';
+import 'services/command_guard.dart';
 import 'services/database.dart';
 import 'services/memory_service.dart';
 import 'services/navigation_service.dart';
@@ -19,7 +20,61 @@ import 'services/storage_service.dart';
 import 'services/terminal_service.dart';
 import 'theme.dart';
 import 'ui/about_screen.dart' show kAppVersion;
+import 'ui/glass.dart';
 import 'ui/home_shell.dart';
+
+/// 根导航器 key：高危命令确认弹窗从这里弹出（任意页面都覆盖）。
+final GlobalKey<NavigatorState> _rootNavKey = GlobalKey<NavigatorState>();
+
+/// run_command 高危命令的用户确认（S1/F7）。
+/// 返回 true 放行；导航器未就绪（冷启动期间的后台任务）按拒绝处理——
+/// fail-closed，宁可任务失败也不悄悄执行高危命令。
+Future<bool> _confirmRiskyCommand(String command) async {
+  final ctx = _rootNavKey.currentContext;
+  if (ctx == null) return false;
+  final ok = await showGlassDialog<bool>(
+    context: ctx,
+    barrierDismissible: false,
+    builder: (dialogCtx) => glassAlertDialog(
+      title: const Text('高危命令确认'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('AI 请求执行以下命令（涉及安装/删除/下载/写入等操作）：',
+              style: TextStyle(fontSize: 13, color: onSurface(dialogCtx, 0.45))),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: onSurface(dialogCtx, 0.05),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SelectableText(
+              command,
+              style: TextStyle(
+                  fontSize: 12.5,
+                  fontFamily: 'monospace',
+                  color: onSurface(dialogCtx, 0.85)),
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogCtx).pop(false),
+          child: const Text('拒绝'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(dialogCtx).pop(true),
+          child: const Text('允许执行'),
+        ),
+      ],
+    ),
+  );
+  return ok ?? false;
+}
 
 /// 开启沉浸式状态栏：内容延伸到状态栏与手势导航条下方。
 ///
@@ -187,6 +242,9 @@ Future<void> main() async {
   // 错过的任务在下次启动时补跑（见 TasksNotifier._catchUpMissed）。
   unawaited(container.read(tasksProvider.notifier).start());
 
+  // 高危 run_command 的用户确认卡（S1/F7）：注册全局处理器
+  CommandGuard.instance.handler = _confirmRiskyCommand;
+
   runApp(UncontrolledProviderScope(
     container: container,
     child: const OrionAgentApp(),
@@ -219,6 +277,7 @@ class OrionAgentApp extends ConsumerWidget {
     return MaterialApp(
       title: 'Orion Agent',
       debugShowCheckedModeBanner: false,
+      navigatorKey: _rootNavKey,
       theme: buildAppTheme(accent),
       darkTheme: buildAppTheme(accent, dark: true),
       themeMode: mode,

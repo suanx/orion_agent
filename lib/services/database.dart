@@ -303,7 +303,8 @@ ChatMessage messageFromRow(MessageRow r) => ChatMessage(
       createdAt: DateTime.fromMillisecondsSinceEpoch(r.createdAt),
     );
 
-MessageRowsCompanion messageToCompanion(String sessionId, ChatMessage m) =>
+MessageRowsCompanion messageToCompanion(String sessionId, ChatMessage m,
+        {List<String>? imageRefs}) =>
     MessageRowsCompanion(
       mid: Value(m.id),
       sessionId: Value(sessionId),
@@ -312,7 +313,9 @@ MessageRowsCompanion messageToCompanion(String sessionId, ChatMessage m) =>
       toolCallsJson: Value(encodeToolCalls(m.toolCalls)),
       toolCallId: Value(m.toolCallId),
       toolName: Value(m.toolName),
-      imagesJson: Value(jsonEncode(m.images)),
+      // imageRefs：落盘后的文件引用列表（P2，v0.2.27-beta）；null 时
+      // 原样存 data URL（兼容备份导入等未经落盘的调用方）
+      imagesJson: Value(jsonEncode(imageRefs ?? m.images)),
       reasoning: Value(m.reasoning),
       createdAt: Value(m.createdAt.millisecondsSinceEpoch),
     );

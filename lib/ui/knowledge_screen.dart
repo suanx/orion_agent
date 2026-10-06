@@ -1,10 +1,14 @@
-import '../theme.dart';
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../theme.dart';
 import 'glass.dart';
 import '../providers/providers.dart';
 import '../services/database.dart';
+import '../services/doc_extract.dart';
 
 /// 知识库管理页：导入文档（粘贴文本）、查看、删除。
 class KnowledgeScreen extends ConsumerStatefulWidget {
@@ -30,6 +34,86 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
   }
 
   Future<void> _addDocument() async {
+    // 入口二选一（评估项 U1，v0.2.27-beta）：文件导入（txt/md/代码日志、
+    // docx、pdf）或传统的粘贴文本。
+    final choice = await showGlassDialog<String>(
+      context: context,
+      builder: (ctx) => glassAlertDialog(
+        backgroundColor: Colors.transparent,
+        title: const Text('导入文档'),
+        content: Text(
+          '支持 txt / md / 代码日志（UTF-8）、docx、pdf。\n'
+          'pdf 为尽力提取，扫描件与加密文档提不出文本，请改用粘贴。',
+          style: TextStyle(fontSize: 13, color: onSurface(ctx, 0.45)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop('file'),
+            child: const Text('选择文件'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop('paste'),
+            child: const Text('粘贴文本'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (choice == 'file') {
+      await _importFromFile();
+    } else if (choice == 'paste') {
+      await _importByPaste();
+    }
+  }
+
+  /// 文件导入：选择 → 按类型提取文本 → 走统一的分块向量化。
+  Future<void> _importFromFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        withData: false,
+      );
+      if (!mounted) return;
+      final file = result?.files.singleOrNull;
+      if (file == null) return;
+      if (file.size > 20 * 1024 * 1024) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('文件超过 20MB 上限')));
+        return;
+      }
+      setState(() => _ingesting = true);
+      try {
+        final bytes = await File(file.path!).readAsBytes();
+        final text = extractDocText(file.name, bytes);
+        if (text == null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('没能从该 PDF 提取出文本（可能是扫描件或加密），'
+                    '请改用「粘贴文本」导入')));
+          }
+          return;
+        }
+        final dot = file.name.lastIndexOf('.');
+        final title = dot > 0 ? file.name.substring(0, dot) : file.name;
+        await _ingest(title: title.isEmpty ? file.name : title, text: text);
+      } finally {
+        if (mounted) setState(() => _ingesting = false);
+      }
+    } on DocExtractException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('导入失败：$e')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('导入失败：${e.toString().replaceFirst('Exception: ', '')}')));
+      }
+    }
+  }
+
+  /// 粘贴文本导入（原入口）。
+  Future<void> _importByPaste() async {
     final titleCtrl = TextEditingController();
     final textCtrl = TextEditingController();
 
@@ -87,12 +171,25 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
           .showSnackBar(const SnackBar(content: Text('标题和内容不能为空')));
       return;
     }
+    await _ingest(title: title, text: text);
+  }
 
+  /// 统一入库：分块 → 向量化 → 刷新列表。超长文本截断并提示。
+  Future<void> _ingest({required String title, required String text}) async {
+    var content = text;
+    const maxChars = 500000;
+    if (content.length > maxChars) {
+      content = content.substring(0, maxChars);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('文本超长，已截断到前 $maxChars 字符')));
+      }
+    }
     setState(() => _ingesting = true);
     try {
       final rag = ref.read(ragServiceProvider);
       final embed = ref.read(batchEmbedProvider);
-      await rag.addDocument(title: title, text: text, embed: embed);
+      await rag.addDocument(title: title, text: content, embed: embed);
       await _reload();
       if (mounted) {
         ScaffoldMessenger.of(context)

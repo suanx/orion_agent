@@ -3,6 +3,7 @@ import 'package:drift/drift.dart';
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 import 'database.dart';
+import 'message_image_store.dart';
 
 /// 会话持久化：Drift(SQLite)，按会话/消息粒度写穿保存。
 class StorageService {
@@ -10,29 +11,47 @@ class StorageService {
 
   final AppDatabase _db;
 
-  /// 启动时全量加载（会话按 updatedAt 倒序，消息按插入顺序）。
+  /// 启动加载：**只取会话元信息，不加载消息**（评估项 P1，v0.2.27-beta）。
   ///
-  /// 原实现对每个会话单独查一次消息（N+1）。messageRows.sessionId 没有索引，
-  /// 于是加载 200 个会话 = 1 + 200 次查询，每次都是 messageRows 全表扫描+排序。
-  /// 而 main.dart 在 runApp 之前 await本方法，数据量积累后启动会出现长白屏。
-  /// 改为一次性取出全部消息再按 sessionId 分组。
+  /// 消息改为进入会话时按需加载（[loadMessages]）。此前启动把所有会话的
+  /// 全部消息（含图片 JSON）一次性载入内存，数据量积累后启动时间与内存
+  /// 随历史线性增长——这是长期使用的头号瓶颈。
   Future<List<ChatSession>> loadSessions() async {
     final rows = await (_db.select(_db.sessionRows)
           ..orderBy([(s) => OrderingTerm.desc(s.updatedAt)]))
         .get();
+    return [
+      for (final s in rows) sessionFromRow(s, const []),
+    ];
+  }
 
-    final allMsgs = await (_db.select(_db.messageRows)
+  /// 按需加载单个会话的消息（进入会话时调用，图片从落盘文件还原）。
+  Future<List<ChatMessage>> loadMessages(String sessionId) async {
+    final rows = await (_db.select(_db.messageRows)
+          ..where((m) => m.sessionId.equals(sessionId))
           ..orderBy([(m) => OrderingTerm.asc(m.id)]))
         .get();
-    final bySession = <String, List<ChatMessage>>{};
-    for (final m in allMsgs) {
-      (bySession[m.sessionId] ??= []).add(messageFromRow(m));
+    final msgs = <ChatMessage>[];
+    for (final r in rows) {
+      final base = messageFromRow(r);
+      if (base.images.isEmpty) {
+        msgs.add(base);
+        continue;
+      }
+      // 图片落盘后 DB 里存的是文件引用，这里还原成 data URL 供 UI 使用
+      msgs.add(ChatMessage(
+        id: base.id,
+        role: base.role,
+        content: base.content,
+        toolCalls: base.toolCalls,
+        toolCallId: base.toolCallId,
+        toolName: base.toolName,
+        images: await MessageImageStore.instance.resolve(base.images),
+        reasoning: base.reasoning,
+        createdAt: base.createdAt,
+      ));
     }
-
-    return [
-      for (final s in rows)
-        sessionFromRow(s, bySession[s.id] ?? const <ChatMessage>[]),
-    ];
+    return msgs;
   }
 
   Future<void> insertSession(ChatSession s) =>
@@ -47,8 +66,14 @@ class StorageService {
         ),
       );
 
-  Future<void> insertMessage(String sessionId, ChatMessage m) =>
-      _db.into(_db.messageRows).insert(messageToCompanion(sessionId, m));
+  Future<void> insertMessage(String sessionId, ChatMessage m) async {
+    // 图片先落盘，DB 里只存文件引用（P2）。失败时 store 内部降级为
+    // 原样存 data URL，不影响消息本身落库。
+    final refs = await MessageImageStore.instance.store(m.id, m.images);
+    await _db
+        .into(_db.messageRows)
+        .insert(messageToCompanion(sessionId, m, imageRefs: refs));
+  }
 
   /// 整体替换一个会话的消息（上下文自动压缩用：
   /// 旧历史 + 摘要消息 → 摘要消息 + 保留的近期消息）。
@@ -58,9 +83,11 @@ class StorageService {
               ..where((m) => m.sessionId.equals(sessionId)))
             .go();
         for (final m in msgs) {
+          final refs =
+              await MessageImageStore.instance.store(m.id, m.images);
           await _db
               .into(_db.messageRows)
-              .insert(messageToCompanion(sessionId, m));
+              .insert(messageToCompanion(sessionId, m, imageRefs: refs));
         }
       });
 

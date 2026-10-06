@@ -41,26 +41,32 @@ void main() {
     }
   }
 
-  test('会话与消息写入后可完整读回', () async {
+  test('会话与消息写入后可完整读回（消息按需加载，v0.2.27-beta）', () async {
     final s = buildSession();
     await seedSession(s);
     s.title = '改过的标题';
     await storage.updateSessionMeta(s);
 
+    // 启动路径：列表只含元信息，不带消息（P1）
     final loaded = await storage.loadSessions();
     expect(loaded, hasLength(1));
     final first = loaded.first;
     expect(first.id, 's1');
     expect(first.title, '改过的标题');
-    expect(first.messages, hasLength(2));
-    expect(first.messages[0].content, '你好');
-    expect(first.messages[1].toolCalls.single.name, 'calc');
+    expect(first.messages, isEmpty,
+        reason: '列表路径不加载消息，消息进会话时才按需读');
+
+    // 进入会话：按需加载消息（含工具调用）
+    final msgs = await storage.loadMessages('s1');
+    expect(msgs, hasLength(2));
+    expect(msgs[0].content, '你好');
+    expect(msgs[1].toolCalls.single.name, 'calc');
   });
 
-  test('消息按插入顺序读回', () async {
+  test('消息按插入顺序读回（loadMessages）', () async {
     await seedSession(buildSession());
-    final loaded = await storage.loadSessions();
-    expect(loaded.first.messages.map((m) => m.id).toList(), ['m1', 'm2']);
+    final msgs = await storage.loadMessages('s1');
+    expect(msgs.map((m) => m.id).toList(), ['m1', 'm2']);
   });
 
   test('删除会话同时删除其消息', () async {

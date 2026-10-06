@@ -6,6 +6,7 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'database.dart';
+import 'message_image_store.dart';
 
 /// 备份与恢复：把用户选中的数据域导出为 JSON 文件，或从文件导入。
 ///
@@ -66,7 +67,11 @@ class BackupService {
             'toolCallsJson': m.toolCallsJson,
             'toolCallId': m.toolCallId,
             'toolName': m.toolName,
-            'imagesJson': m.imagesJson,
+            // 图片自 v0.2.27-beta 起落盘为文件、DB 存引用；导出时还原为
+            // data URL，保证备份文件自包含（导入到任何设备都能用）
+            'imagesJson':
+                jsonEncode(await MessageImageStore.instance
+                    .resolveJson(m.imagesJson)),
             'reasoning': m.reasoning,
             'createdAt': m.createdAt,
           }
@@ -123,15 +128,19 @@ class BackupService {
               ));
         }
         for (final m in (backup['messages'] as List).cast<Map>()) {
+          final mid = m['mid'] as String? ?? '';
+          // 备份里是 data URL（自包含），导入时转回文件引用
+          final imagesJson = await MessageImageStore.instance
+              .storeJson(mid, m['imagesJson'] as String? ?? '[]');
           await _db.into(_db.messageRows).insert(MessageRowsCompanion.insert(
-                mid: m['mid'] as String? ?? '',
+                mid: mid,
                 sessionId: m['sessionId'] as String? ?? '',
                 role: m['role'] as String? ?? 'user',
                 content: m['content'] as String? ?? '',
                 toolCallsJson: Value(m['toolCallsJson'] as String? ?? '[]'),
                 toolCallId: Value(m['toolCallId'] as String?),
                 toolName: Value(m['toolName'] as String?),
-                imagesJson: Value(m['imagesJson'] as String? ?? '[]'),
+                imagesJson: Value(imagesJson),
                 reasoning: Value(m['reasoning'] as String?),
                 createdAt: (m['createdAt'] as num?)?.toInt() ?? 0,
               ));

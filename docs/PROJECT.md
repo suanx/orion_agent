@@ -386,7 +386,17 @@ abstract class Tool {
 | `web_search` | `WebSearchTool` | DuckDuckGo 搜索，无需 Key |
 | `save_memory` | `SaveMemoryTool` | 写入长期记忆 |
 | `search_knowledge` | `SearchKnowledgeTool` | 知识库语义检索 |
-| `run_command` | `RunCommandTool` | 终端执行 shell 命令 |
+| `run_command` | `RunCommandTool` | 终端执行 shell 命令；风险分级确认（见下） |
+
+**run_command 风险分级**（`command_guard.dart`，v0.2.27-beta，评估项 S1/F7）：
+
+- 只读白名单（ls/cat/grep/find/ps/mkdir…约 40 个）直接执行；
+- 其余（安装/删除/下载/写重定向 `>`、命令替换、未知命令）先弹玻璃
+  确认卡（main.dart 注册 `CommandGuard.instance.handler`，根 navigatorKey
+  弹出），拒绝则把拒绝原因回给模型，要求它调整而不是原样重试；
+- **fail-closed**：无处理器（App 不在前台的后台任务）一律拒绝；
+- 判定规则纯函数 `CommandGuard.isRisky`，单测 `command_guard_test.dart`。
+  保守性优先：判断不了的一律判为高风险（sed/python/tar/unzip 均需确认）。
 
 **计算器** (`:99-197`)：
 
@@ -434,9 +444,12 @@ abstract class Tool {
 > 会劈开代理对（emoji/扩展汉字），Dart 在 `jsonEncode`/`utf8.encode` 时
 > 把它静默替换为 `U+FFFD` —— 不报错，emoji 变成 "�"。
 
-> ⚠️ **当前无文件导入能力**：`knowledge_screen.dart` 只提供两个 `TextField`
-> （标题 + 正文），**没有 file_picker / PDF / Word 解析**。图标用了
-> `Icons.upload_file` 但功能是纯文本粘贴，容易误解。
+> ⚠️ ~~**当前无文件导入能力**~~ ✅ **v0.2.27-beta 已支持文件导入**：
+> `knowledge_screen.dart` 导入入口二选一（选择文件 / 粘贴文本）。
+> 文件走 `doc_extract.dart`：文本类（txt/md/代码/日志…）UTF-8 直读；
+> docx 解包 `word/document.xml` 提取段落；pdf 尽力提取（inflate 内容流 +
+> Tj/TJ 算子，扫描件/加密/CID 字体提不出 → 提示改用粘贴）；上限 20MB、
+> 正文 50 万字符截断。配套单测 `doc_extract_test.dart`。
 
 ### 5.5 长期记忆 (`memory_service.dart`)
 
@@ -925,7 +938,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | `sessions_drawer` | ✅ 会话列表、切换、删除 |
 | `skills_screen` | ✅ 18 内置 + 自定义 |
 | `roles_screen` | ✅ CRUD（无预置） |
-| `knowledge_screen` | ⚠️ 仅文本粘贴，无文件导入 |
+| `knowledge_screen` | ✅ 文件导入（txt/md/docx/pdf，见 §5.4）+ 粘贴文本（v0.2.27-beta） |
 | `mcp_screen` | ✅ 添加/编辑/启用/删除 + 重连（2026-10-05 增编辑） |
 | `log_screen` | ✅ 诊断日志：AppLog 环形缓冲查看/复制/导出（入口：关于→日志） |
 | `backup_screen` | ✅ 备份与恢复：四类数据域开关 + 导出/导入 JSON |
@@ -1780,11 +1793,11 @@ v0.2.5 修的 Markdown 空断言是并存的另一个真实隐患（列表渲染
 |---|---|---|---|
 | 5 | 冷启动任务不精确 | `main.dart:100-103` | `autostartTasks` 在首帧后立即执行，但此时 proot 可能还在安装中；且任务耗时较长时与首屏渲染竞争 |
 | 6 | RAG 全表扫描 | `rag_service.dart:140` | 每次检索加载全部分块的向量 JSON。数据量上千块后明显变慢。注释提到"后续可换 sqlite-vec" |
-| 7 | 会话无分页加载 | `storage_service.dart:18-38` | 启动时全量加载所有会话的所有消息。会话多时占用内存大 |
+| 7 | ~~会话无分页加载~~ ✅ 已解决（v0.2.27-beta） | `storage_service.dart` | 启动只载会话元信息，消息进入会话时按需加载（`loadMessagesInto`，P1） |
 | 8 | 知识库检索无 docId 过滤 | `rag_service.dart` | 只能全库检索，无法限定文档范围 |
 | 9 | TTS 音色不可试听 | `settings_screen.dart` | 7 个音色只能靠猜，无试听按钮 |
 | 10 | 无导出/分享功能 | — | 对话不能导出为文本/Markdown，技能不能分享 |
-| 11 | 图片仅 base64 存库 | `message_rows.images_json` | 大图会让 `message_rows` 膨胀，且 JSON 存储无压缩 |
+| 11 | ~~图片仅 base64 存库~~ ✅ 已解决（v0.2.27-beta） | `message_rows.images_json` | 图片落盘 `message_images/`（`MessageImageStore`），DB 只存 `img/` 文件引用；备份导出还原为 data URL 保持自包含（P2） |
 | 12 | Edge TTS 无重试 | `voice_service.dart` | WebSocket 失败直接回退系统 TTS，中间不留重试 |
 
 ### P2 — 工程改进
