@@ -160,12 +160,16 @@ String? _extractPdf(Uint8List bytes) {
 /// 从 PDF 内容流里抠文本显示算子的字符串字面量。
 String _pdfShowOperators(String content) {
   final buf = StringBuffer();
-  // 数组形式 [(He) 250 (llo)] TJ 与单串 (…) Tj / ' / "
+  // 数组形式 [(He) 250 (llo)] TJ：数组内的字符串后跟的是字距数字而非
+  // 算子名，不能要求 Tj 后缀，直接取数组内所有 (...) 字面量
   final arrayRe = RegExp(r'\[(.*?)\]\s*TJ', dotAll: true);
+  final strRe = RegExp(r'\(((?:[^()\\]|\\.)*)\)');
+  // 单串形式 (…) Tj（含换行变体 ' 与 "）；带后缀要求是为了不把
+  // 非显示算子的 operand 字符串误当正文
   final singleRe = RegExp(r'''\(((?:[^()\\]|\\.)*)\)\s*(?:Tj|'|")''');
   for (final m in arrayRe.allMatches(content)) {
-    final inner = m.group(1)!;
-    final parts = singleRe.allMatches(inner).map((x) => _pdfUnescape(x.group(1)!));
+    final parts =
+        strRe.allMatches(m.group(1)!).map((x) => _pdfUnescape(x.group(1)!));
     final line = parts.join();
     if (line.trim().isNotEmpty) buf.writeln(line);
   }
