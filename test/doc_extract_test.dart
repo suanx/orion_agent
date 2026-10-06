@@ -48,8 +48,7 @@ void main() {
             utf8.encode(xml)));
       final docx = ZipEncoder().encode(archive)!;
 
-      final text = extractDocText('doc.docx', Uint8List.fromList(docx));
-      expect(text, isNotNull);
+      final text = extractDocText('doc.docx', Uint8List.fromList(docx))!;
       expect(text, contains('第一段 & 说明'),
           reason: '段内多个 <w:t> 要拼接、&amp; 要还原，got: $text');
       expect(text, contains('second <line>'));
@@ -69,9 +68,9 @@ void main() {
 
   group('pdf（兼容提取）', () {
     String buildPdf(String streamContent, {bool compress = false}) {
-      var data = utf8.encode(streamContent);
+      var data = Uint8List.fromList(utf8.encode(streamContent));
       if (compress) {
-        data = ZLibEncoder().encode(data);
+        data = Uint8List.fromList(ZLibEncoder().encode(data));
       }
       final header = '%PDF-1.4\n';
       final body = '4 0 obj\n<< /Length ${data.length} >>\nstream\n';
