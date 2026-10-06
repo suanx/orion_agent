@@ -59,7 +59,7 @@ class MessageImageStore {
         await f.writeAsBytes(bytes, flush: true);
         out.add(rel);
       } catch (e) {
-        AppLog.w('消息图片写盘失败，降级为内联存储', e);
+        AppLog.e('消息图片写盘失败，降级为内联存储', e);
         out.add(img);
       }
     }
@@ -83,7 +83,7 @@ class MessageImageStore {
             .readAsBytes();
         out.add('data:image/jpeg;base64,${base64Encode(bytes)}');
       } catch (e) {
-        AppLog.w('消息图片读取失败，已跳过：$ref', e);
+        AppLog.e('消息图片读取失败，已跳过：$ref', e);
       }
     }
     return out;
@@ -97,7 +97,7 @@ class MessageImageStore {
           .toList();
       return resolve(list);
     } catch (e) {
-      AppLog.w('imagesJson 解析失败，按空图片处理', e);
+      AppLog.e('imagesJson 解析失败，按空图片处理', e);
       return const [];
     }
   }
@@ -110,7 +110,7 @@ class MessageImageStore {
           .toList();
       return jsonEncode(await store(messageId, list));
     } catch (e) {
-      AppLog.w('imagesJson 落盘转换失败，按空图片处理', e);
+      AppLog.e('imagesJson 落盘转换失败，按空图片处理', e);
       return '[]';
     }
   }
