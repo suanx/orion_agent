@@ -317,13 +317,17 @@ class ConfigState {
 
   /// 实际用于对话的配置。
   ///
-  /// 规则：**第一个「已启用且可用」的配置**。多选启用是允许的
-  /// （列表页就是多个「已启用」徽标），但一次对话只能用一个提供商，
-  /// 所以取列表顺序里的第一个。
+  /// 规则：**优先用用户在对话页选中的那条**（[activeId]，模型选择浮层
+  /// 跨提供商选模型时写入）；没有记录或该条已停用/未就绪时，退回
+  /// **列表顺序里第一个「已启用且可用」的配置**。多选启用是允许的
+  /// （列表页就是多个「已启用」徽标），但一次对话只能用一个提供商。
   ///
   /// 逐级降级，保证老数据不会因为没人勾选 enabled 而彻底用不了：
-  /// 已启用且可用 → 已启用 → 任意一条 → null。
+  /// 用户选中的已启用且可用 → 已启用且可用 → 已启用 → 任意一条 → null。
   LlmConfig? get activeConfig {
+    for (final c in configs) {
+      if (c.id == activeId && c.enabled && c.ready) return c;
+    }
     for (final c in configs) {
       if (c.enabled && c.ready) return c;
     }
@@ -491,9 +495,16 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     _schedulePersist();
   }
 
+  /// 记下用户在对话页模型浮层选中的提供商（activeConfig 优先用它）。
+  /// 该条配置之后被停用/删除时，activeConfig 自动按降级链回退。
+  void setActive(String id) {
+    _localTouched = true;
+    state = state.copyWith(activeId: id);
+    _schedulePersist();
+  }
+
   /// 覆盖某条配置的模型列表（「拉取模型」用）。
-  void setModels(String id, List<ProviderModel> models) {
-    final c = byId(id);
+  void setModels(String id, List<ProviderModel> models) {    final c = byId(id);
     if (c == null) return;
     upsert(c.copyWith(models: models));
   }

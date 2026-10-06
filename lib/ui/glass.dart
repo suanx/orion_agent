@@ -375,7 +375,18 @@ class _AnchoredGlassRoute<T> extends PopupRoute<T> {
                 ctx,
                 Material(
                   type: MaterialType.transparency,
-                  child: builder(ctx),
+                  // 选项多时（如几十个模型的对话页模型列表）面板不能撑爆
+                  // 屏幕，也不能像原来那样直接溢出裁掉——限高 62% 并内部
+                  // 滚动（2026-10-06 用户反馈「这个页面不能滑动选择」）。
+                  child: ConstrainedBox(
+                    // 选项多时（如几十个模型的对话页模型列表）面板不能
+                    // 撑爆屏幕——限高 62% 并内部滚动（2026-10-06 用户反馈
+                    // 「这个页面不能滑动选择」）。ConstrainedBox 必须在
+                    // SingleChildScrollView 外层：内层会收到无界高度，
+                    // Column 才能按内容收缩且超出部分走滚动而非溢出。
+                    constraints: BoxConstraints(maxHeight: screenH * 0.62),
+                    child: SingleChildScrollView(child: builder(ctx)),
+                  ),
                 ),
                 borderRadius: 20,
               ),

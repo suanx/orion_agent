@@ -2,30 +2,29 @@
 
 ## 推送与发版规则（用户指令，最高优先级，每次必须遵守）
 
-0. **「推送」一律指发布正式版（main 分支）**（2026-10-06 用户明确要求：
-   「以后发推送都是发布正式版本」）。只有用户**明确说「推送到测试版 /
-   Beta / beta 分支」**时才发预发布。**不要因为"之前发过 beta"就默认
-   走 beta**——默认通道是 main。
+0. **「推送」一律推送到 beta 分支**（2026-10-06 用户再次明确要求：
+   「以后只要发推送就推送到beta分支」，取代此前"默认 main"的规则）。
+   推送到 beta 后 CI 自动发**预发布** Release（prerelease=true）。
    ⚠️ 版本号纪律：版本比较是纯数字逐段比较（`-beta` 后缀被忽略），**Beta
    号必须高于当时最新正式版**，否则 Beta 用户收不到任何更新提示。发完
    正式版后，下一个 Beta 至少要 `正式版号 + 5`（留出余量）。
 1. **未经用户明确指令，禁止推送**。改完代码先本地验证（`ci_check/brace_check.js`），
    停下等用户说「推送」。
-2. **用户说「推送」= 发正式版本**（main 分支），每次都必须完成：
+2. **用户说「推送」= 推 beta 分支发预发布**，每次都必须完成：
    1. **版本号递增**：`pubspec.yaml` 的 `version:`（如 `0.2.0+11` → `0.2.1+12`，
       `+` 后 build 号 +1）**同时**把 `lib/ui/about_screen.dart` 的 `kAppVersion`
       改成同版本号（不带 build 号）。只改 pubspec 不改 kAppVersion →
       应用自报版本落后，装了最新版也会一直提示更新同版本（见 docs/PROJECT.md §11.17）。
    2. `RELEASE_NOTES.md` 顶部新增本版更新说明
-   3. 推送到 main → 等 CI（flutter analyze/test/build）全绿
-      **注意：build.yml 已内置自动发版**——CI 绿了之后 GitHub Actions bot
-      会自动创建 tag `vX.Y.Z` 的 Release（正文取 RELEASE_NOTES.md 顶部段落）
-      并上传 `orion-agent-vX.Y.Z.apk`，无需手动发版；
+   3. 推送到 beta（`PUSH_BRANCH=beta`）→ 等 CI（flutter analyze/test/build）全绿
+      **注意：build.yml 已内置自动发版**——beta 分支 CI 绿了之后 GitHub
+      Actions bot 会自动创建 tag `vX.Y.Z` 的预发布 Release（正文取
+      RELEASE_NOTES.md 顶部段落）并上传 `orion-agent-vX.Y.Z.apk`，无需手动发版；
    4. （兜底）若 CI 没自动发版，用 `ci_check/make_release.mjs <run_id> <版本>`
       手动完成：下载 APK artifact → 创建 Release → 上传 APK。
-      推送用 `ci_check/push_update.mjs`（Git Data API 单 commit 快进 main，
-      支持 GITHUB_TOKEN 环境变量或 credential manager 凭据，
-      永远不要回显密码）
+      推送用 `ci_check/push_update.mjs`（Git Data API 单 commit 快进目标分支，
+      目标分支用环境变量 `PUSH_BRANCH` 指定、默认 main；支持 GITHUB_TOKEN
+      环境变量或 credential manager 凭据，永远不要回显密码）
 
 注意：本机 git 直连 github.com 不通，推送/发版一律走 GitHub REST API
 （可复用工作区的 `push_update.mjs` 与 credential manager 中的凭据，
