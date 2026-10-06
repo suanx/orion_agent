@@ -26,32 +26,47 @@ Future<T?> showGlassDialog<T>({
     context: context,
     barrierDismissible: barrierDismissible,
     barrierColor: Colors.black26,
-    builder: (ctx) => Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 44, vertical: 28),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 400),
-        child: glassPanel(
-          context,
-          Theme(
-            data: Theme.of(context).copyWith(
-              dialogTheme: const DialogThemeData(
-                backgroundColor: Colors.transparent,
-                elevation: 0,
+    builder: (ctx) {
+      // ⚠️ 这里【不能用 Dialog】：Dialog 内部是
+      // `Align(alignment: center, child: ...)` 且 width/heightFactor 都是
+      // null —— Align 在有界约束下会撑到 constraints.maximum，于是玻璃
+      // 面板变成整屏高，内容被顶在中间、上下各留一大片空白
+      // （2026-10-06 用户截图反馈「弹窗显示太长」）。
+      // 改成 Align + widthFactor/heightFactor = 1：按子组件实际尺寸收缩，
+      // 居中显示；再用 maxWidth 400 / maxHeight 80% 兜住超长内容
+      // （AlertDialog 内部自带滚动，长表单不会被裁掉）。
+      final media = MediaQuery.sizeOf(ctx);
+      return Align(
+        alignment: Alignment.center,
+        widthFactor: 1.0,
+        heightFactor: 1.0,
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 400,
+            maxHeight: media.height * 0.8,
+          ),
+          child: glassPanel(
+            ctx,
+            Theme(
+              data: Theme.of(ctx).copyWith(
+                dialogTheme: const DialogThemeData(
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                ),
+              ),
+              // 透明 Material：builder 里可能是裸表单（TextField/InkWell
+              // 都需要 Material 祖先），原来由 AlertDialog/Dialog 提供，
+              // 紧凑化后不强制 builder 返回它们，这里统一兜底。
+              child: Material(
+                type: MaterialType.transparency,
+                child: builder(ctx),
               ),
             ),
-            // 透明 Material：builder 里可能是裸表单（TextField/InkWell
-            // 都需要 Material 祖先），原来由 AlertDialog/Dialog 提供，
-            // 紧凑化后不强制 builder 返回它们，这里统一兜底。
-            child: Material(
-              type: MaterialType.transparency,
-              child: builder(ctx),
-            ),
+            borderRadius: 24,
           ),
-          borderRadius: 24,
         ),
-      ),
-    ),
+      );
+    },
   );
 }
 
