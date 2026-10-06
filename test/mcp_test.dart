@@ -121,7 +121,11 @@ void main() {
     test('connectAll：无服务器时返回 0 且不注册工具', () async {
       final reg = ToolRegistry(memoryService: MemoryService(db));
       final service = McpService(db, reg);
-      expect(await service.connectAll(timeout: const Duration(seconds: 1)), 0);
+      // includeBuiltin: false —— 内置 MCP 是真实网络调用，单测保持无网络依赖
+      expect(
+          await service.connectAll(
+              timeout: const Duration(seconds: 1), includeBuiltin: false),
+          0);
       expect(reg.all.any((t) => t.name.startsWith('mcp')), isFalse);
     });
   });

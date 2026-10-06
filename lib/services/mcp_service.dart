@@ -69,8 +69,12 @@ class McpService {
   /// **内置服务器先于用户配置连接**（builtinMcpServers 顺序即优先级）：
   /// 先注册者在系统提示词的扩展工具清单中排在前面，与用户自配功能重叠时
   /// 优先被调用。
+  ///
+  /// [includeBuiltin] 供单测关闭内置连接（内置端点是真实网络调用，
+  /// 单测必须保持无网络依赖）；生产入口一律走默认的 true。
   Future<int> connectAll({
     Duration timeout = const Duration(seconds: 8),
+    bool includeBuiltin = true,
   }) async {
     final servers = await listServers();
 
@@ -79,9 +83,11 @@ class McpService {
     // 被永久保留，新建的连接被丢弃。用户反复点「连接」或把开关 off→on，
     // 工具调用仍走旧会话。同样，停用/删除服务器后工具也不会消失，
     // 用户明明关掉了它，Agent 却还在调用。
-    for (final b in builtinMcpServers) {
-      _registry.unregisterPrefix('${McpTool.sanitizePublic(b.name)}__');
-      _clients.remove(b.id)?.close();
+    if (includeBuiltin) {
+      for (final b in builtinMcpServers) {
+        _registry.unregisterPrefix('${McpTool.sanitizePublic(b.name)}__');
+        _clients.remove(b.id)?.close();
+      }
     }
     for (final s in servers) {
       _registry.unregisterPrefix('${McpTool.sanitizePublic(s.name)}__');
@@ -90,8 +96,10 @@ class McpService {
     }
 
     var count = 0;
-    for (final b in builtinMcpServers) {
-      count += await _connectOne(b.id, b.name, b.url, timeout);
+    if (includeBuiltin) {
+      for (final b in builtinMcpServers) {
+        count += await _connectOne(b.id, b.name, b.url, timeout);
+      }
     }
     for (final s in servers) {
       if (!s.enabled) continue;
