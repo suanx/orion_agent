@@ -90,6 +90,16 @@ class TerminalService {
 
   static const _tuna = 'https://mirrors.tuna.tsinghua.edu.cn';
 
+  /// 各发行版 rootfs 的自有 R2 源（Cloudflare R2 公开访问的完整文件 URL）。
+  /// 留空 = 不启用（回退镜像源）；部署 R2 后填入即成为下载链第一优先级
+  /// （自有 R2 → 镜像源 → 兜底）。R2 上放与下载源相同的产物：
+  /// alpine 为 tar.gz、debian 为 tar.xz（压缩格式与 spec.isGzip 一致，
+  /// 走 R2 时无需改 isGz 判断）。
+  static const alpineR2Url =
+      'https://gr.suen.us.ci/alpine-minirootfs-3.22.6-aarch64.tar.gz';
+  static const debianR2Url =
+      'https://gr.suen.us.ci/debian-bookworm-arm64-rootfs.tar.xz';
+
   /// 组件全集（打叉的 agent CLI——codex/Claude Code/DeepSeek/Kimi——不装）。
   static const alpinePackages = [
     'nodejs', 'npm', 'git', 'python3', 'py3-pip', 'uv', 'openssh', 'sshpass',
@@ -382,7 +392,22 @@ class TerminalService {
     var renamed = false;
     try {
       report('下载 ${spec.displayName} 基础系统…');
-      if (d == TerminalDistro.debian) {
+      // 下载链：自有 R2 源（配置了地址时，第一优先）→ 各发行版的镜像/备用源
+      var r2Ok = false;
+      final r2Url =
+          d == TerminalDistro.debian ? debianR2Url : alpineR2Url;
+      if (r2Url.isNotEmpty) {
+        try {
+          report('尝试自有 R2 源…');
+          await _dio.download(r2Url, archivePath);
+          // R2 上放的是与 spec 下载源相同的产物，压缩格式一致，
+          // isGz 维持 spec.isGzip 不变
+          r2Ok = true;
+        } catch (e) {
+          report('R2 源不可用（${e.toString().split('\n').first}），转镜像源…');
+        }
+      }
+      if (!r2Ok && d == TerminalDistro.debian) {
         var mirrorOk = false;
         try {
           await _downloadDebianFromMirror(report, archivePath);
@@ -397,11 +422,11 @@ class TerminalService {
             isGz = false;
           } catch (e) {
             throw Exception(
-                'Debian 基础系统下载失败：国内镜像与备用源（GitHub）均不可用。'
-                '请检查网络后重试（${e.toString().split('\n').first}）');
+                'Debian 基础系统下载失败：自有 R2 源、国内镜像与备用源（GitHub）'
+                '均不可用。请检查网络后重试（${e.toString().split('\n').first}）');
           }
         }
-      } else {
+      } else if (!r2Ok) {
         await _dio.download(spec.downloadUrl, archivePath);
       }
 
