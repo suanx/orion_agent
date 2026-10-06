@@ -164,11 +164,12 @@ void main() {
     expect(answers, hasLength(1));
     expect(answers.single.message.content, '10 轮调研完成');
     expect(llm.call, 11, reason: '10 轮工具调用 + 1 轮最终回答');
-    // 工具结果按 tool_call_id 逐轮回填，不残留未回填调用
+    // 工具结果按 tool_call_id 逐轮回填：第 r 次 LLM 调用时已累积 r 条
+    // tool 回复（每轮恰好回填一条，不残留未回填调用）
     for (var r = 1; r < llm.seenMessages.length; r++) {
       final toolMsgs =
           llm.seenMessages[r].where((m) => m['role'] == 'tool').toList();
-      expect(toolMsgs, hasLength(1), reason: 'round $r');
+      expect(toolMsgs, hasLength(r), reason: 'round $r');
     }
   });
 

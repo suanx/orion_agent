@@ -957,7 +957,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | `chat_screen` | ✅ 完整（无气泡正文 + 思考行 + 代码块卡片） |
 | `cloud_account_screen` | ✅ 云端登录页 + 个人中心（卡密/设备/用量）；2026-10-06 两张头部卡片由主色渐变换成 `glassPanel` 液态玻璃（白字改 onSurface 体系） |
 | `sessions_drawer` | ✅ 会话列表、切换、删除 |
-| `skills_screen` | ✅ 42 内置（v0.2.28-beta 扩充：开发者工具 16 个含 soushen 三件套/写测试/代码审查/Git 助手等）+ 自定义；`skill_catalog_test.dart` 常驻校验目录完整性 |
+| `skills_screen` | ✅ 42 内置（v0.2.28-beta 扩充：开发者工具 16 个含 soushen 三件套/写测试/代码审查/Git助手等）+ 自定义；`skill_catalog_test.dart` 常驻校验目录完整性 |
 | `roles_screen` | ✅ CRUD（无预置） |
 | `knowledge_screen` | ✅ 文件导入（txt/md/docx/pdf，见 §5.4）+ 粘贴文本（v0.2.27-beta） |
 | `mcp_screen` | ✅ 添加/编辑/启用/删除 + 重连（2026-10-05 增编辑） |

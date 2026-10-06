@@ -381,7 +381,7 @@ const List<BuiltinSkill> builtinSkills = [
   BuiltinSkill(
     key: 'sql_helper',
     emoji: '🗄️',
-    name: '写 SQL',
+    name: '写SQL',
     summary: '按需求写 SQL 并解释执行思路',
     category: '开发者工具',
     template: '帮我写 SQL：\n'
@@ -395,7 +395,7 @@ const List<BuiltinSkill> builtinSkills = [
   BuiltinSkill(
     key: 'git_helper',
     emoji: '🌿',
-    name: 'Git 助手',
+    name: 'Git助手',
     summary: '在终端里完成 Git 操作与提交信息',
     category: '开发者工具',
     needsTerminal: true,
@@ -455,7 +455,7 @@ const List<BuiltinSkill> builtinSkills = [
   BuiltinSkill(
     key: 'shell_helper',
     emoji: '🐚',
-    name: '写 Shell 脚本',
+    name: '写Shell脚本',
     summary: '写健壮、可维护的 Bash 脚本',
     category: '开发者工具',
     template: '帮我写一个 Bash 脚本：\n'
