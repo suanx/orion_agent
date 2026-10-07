@@ -39,6 +39,28 @@ jobs:
         # 本地不提交平台目录，在 CI 中按当前 Flutter stable 生成，保证版本一致
         run: flutter create --platforms android --project-name orion_agent .
 
+      - name: Sync kAppVersion from pubspec
+        # 版本号单一事实来源（§11.17/§11.21 的根治）：应用自报版本的
+        # kAppVersion 是手写常量，历史上两次因「只升 pubspec 忘升常量」
+        # 导致装了新版仍反复弹更新提示的循环。这里在 CI 里用 pubspec 的
+        # version 强制覆写源码常量——本地忘了同步，构建产物也会被纠正；
+        # 自检不匹配直接 fail，不会带病出包。
+        run: |
+          set -e
+          VN=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
+          F=lib/ui/about_screen.dart
+          grep -q "const String kAppVersion" "$F" || {
+            echo "::error ::未找到 kAppVersion 常量（about_screen.dart 结构可能已变化）"
+            exit 1
+          }
+          sed -i "s/const String kAppVersion = '[^']*';/const String kAppVersion = '$VN';/" "$F"
+          ACTUAL=$(grep -o "const String kAppVersion = '[^']*'" "$F" | sed "s/.*= '\([^']*\)'.*/\1/")
+          if [ "$ACTUAL" != "$VN" ]; then
+            echo "::error ::kAppVersion 同步失败（$ACTUAL != $VN）"
+            exit 1
+          fi
+          echo "kAppVersion 已从 pubspec 同步为 $VN"
+
       - name: Inject MainActivity with system MethodChannel
         run: cp ci/MainActivity.kt android/app/src/main/kotlin/com/example/orion_agent/MainActivity.kt
 
