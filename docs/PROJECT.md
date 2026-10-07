@@ -390,13 +390,13 @@ abstract class Tool {
 | `run_command` | `RunCommandTool` | 终端执行 shell 命令；风险分级确认（见下） |
 
 **run_command 风险分级**（`command_guard.dart` + `ToolRegistry.execute`，
-v0.2.27-beta 引入，v0.2.31-beta 调档，评估项 S1/F7）：
+v0.2.27-beta 引入，v0.2.31 调档，评估项 S1/F7）：
 
 - 只读白名单（ls/cat/grep/find/ps/mkdir…约 40 个）直接执行；
 - 其余（安装/删除/下载/写重定向 `>`、命令替换、未知命令）先弹玻璃
   确认卡（main.dart 注册 `CommandGuard.instance.handler`，根 navigatorKey
   弹出），拒绝则把拒绝原因回给模型，要求它调整而不是原样重试；
-- **「完全访问」档全程免打扰**（v0.2.31-beta 用户要求）：高危硬黑名单
+- **「完全访问」档全程免打扰**（v0.2.31 用户要求）：高危硬黑名单
   （`matchDangerousCommand`）与弹窗确认都在 `ToolRegistry.execute` 里按
   档位拦截——`permission == AgentPermission.full` 时两者全部跳过，默认
   放行不弹窗（用户选了完全访问即自行承担风险）；工具层（RunCommandTool）
@@ -578,7 +578,7 @@ initState 只跑一次，故必须挂生命周期）。终端页是 push 页面�
    提速，又避免竞争）。
 3. **Debian 下载镜像要冗余 + 只留活源**：`dockerproxy.net` 的
    bookworm-slim 层返回 404 会让安装走到「全部镜像不可用」。2026-10-06
-   按存活探测修剪（v0.2.31-beta）：移除 404 的 dockerproxy.net、302 的
+   按存活探测修剪（v0.2.31）：移除 404 的 dockerproxy.net、302 的
    hub.rat.dev、连不通的 docker.chenby.cn / docker.anye.xyz，新增
    docker.xuanyuan.me，`dockerMirrors` 保持 5 个活源（daocloud / 1ms.run /
    xuanyuan / dockerhub.icu / awsl9527）；**每个源失败重试 1 次**再换下一个；
@@ -949,10 +949,13 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
   所有锚定浮层内容限高屏高 62%、超出内部滚动（ConstrainedBox 必须套在
   SingleChildScrollView 外层）——修复模型列表几十项时浮层「不能滑动选择、
   超出部分直接被裁掉」
-- **消息选择工具条（全选 / 复制 / 引用 / 发送）**（v0.2.31-beta，
+- **消息选择工具条（全选 / 复制 / 引用 / 发送）**（v0.2.31，
   取代 v0.2.28-beta 的长按菜单）：用户/助手消息（含流式气泡、思考面板、
   代码块）统一包 Material `SelectionArea`（`chat_screen.dart` 顶层
-  `_selectionArea`），长按/拖动进入**系统原生选择手柄**，弹自定义工具条：
+  `_selectionArea` → 有状态壳 `_SelectionAreaShell`，选中文字经
+  `onSelectionChanged` 回调缓存成字符串——CI 的 Flutter 3.47.6 里
+  `SelectableRegionState` 没有公开 `getSelectedContent()`），
+  长按/拖动进入**系统原生选择手柄**，弹自定义工具条：
   - 「全选」→ `state.selectAll`；「复制」→ 选区进剪贴板（复制后清选区，
     与原生 Android 一致）+「已复制」提示；
   - 「引用」（v0.2.28 语义保留）：markdown 块引用填入输入框；
