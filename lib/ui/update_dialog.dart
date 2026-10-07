@@ -157,11 +157,12 @@ class _UpdateDownloadDialogState extends ConsumerState<UpdateDownloadDialog> {
       title: Text('发现新版本 v${info.version}'),
       content: SizedBox(
         width: double.maxFinite,
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+        // 不包 SingleChildScrollView：外层 glassAlertDialog 已滚动，
+        // 嵌套滚动组件会抢走拖动手势（2026-10-08 弹窗滑动修复）
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
               if (info.changelog != null && info.changelog!.isNotEmpty)
                 Text(
                   info.changelog!,
@@ -234,7 +235,6 @@ class _UpdateDownloadDialogState extends ConsumerState<UpdateDownloadDialog> {
             ],
           ),
         ),
-      ),
       actions: [
         TextButton(
           onPressed: () {

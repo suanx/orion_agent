@@ -1546,14 +1546,14 @@ class _CodeBlockState extends State<_CodeBlock> {
       context: context,
       builder: (ctx) => glassAlertDialog(
         title: Text(widget.language.isEmpty ? '代码' : widget.language),
+        // 不包 SingleChildScrollView：glassAlertDialog 外层已负责滚动，
+        // 嵌套的内层滚动组件会抢走拖动手势（2026-10-08 弹窗滑动修复）
         content: SizedBox(
           width: double.maxFinite,
-          child: SingleChildScrollView(
-            child: SelectableText(
-              widget.code,
-              style: const TextStyle(
-                  fontFamily: 'monospace', fontSize: 13, height: 1.55),
-            ),
+          child: SelectableText(
+            widget.code,
+            style: const TextStyle(
+                fontFamily: 'monospace', fontSize: 13, height: 1.55),
           ),
         ),
         actions: [

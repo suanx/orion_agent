@@ -738,7 +738,7 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
       context: context,
       builder: (ctx) => glassAlertDialog(
         title: const Text('测试连接'),
-        content: SingleChildScrollView(child: Text(result)),
+        content: Text(result),
         actions: [
           FilledButton(
             onPressed: () => Navigator.of(ctx).pop(),
@@ -1084,7 +1084,11 @@ class _FetchResultDialogState extends State<_FetchResultDialog> {
       title: Text('发现 ${all.length} 个模型'),
       content: SizedBox(
         width: double.maxFinite,
-        height: MediaQuery.of(context).size.height * 0.5,
+        // 高度必须小于 glassAlertDialog 的 maxContentHeight(360)：
+        // 超过后外层 SingleChildScrollView 与内层列表形成嵌套滚动，
+        // 内层抢走拖动手势但外层的溢出部分永远滚不到（真机 2026-10-08）。
+        // 300 < 360 时外层 maxScrollExtent=0 不参与手势，列表独自滚动。
+        height: 300,
         child: Column(
           children: [
             Row(

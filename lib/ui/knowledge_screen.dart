@@ -124,12 +124,13 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
       builder: (ctx) => glassAlertDialog(
         backgroundColor: Colors.transparent,
         title: const Text('导入文档'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('粘贴文档或笔记文本，导入后会自动分块并向量化。',
+        // 内层不包 SingleChildScrollView（外层 glassAlertDialog 已滚动，
+        // 嵌套会抢手势）：Column 直接交给外层
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('粘贴文档或笔记文本，导入后会自动分块并向量化。',
                   style: TextStyle(
                       fontSize: 13, color: onSurface(context, 0.45))),
               const SizedBox(height: 12),
@@ -149,13 +150,12 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
                 ),
               ),
               const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () => Navigator.of(ctx)
-                    .pop((titleCtrl.text.trim(), textCtrl.text.trim())),
-                child: const Text('导入并向量化'),
-              ),
-            ],
-          ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx)
+                  .pop((titleCtrl.text.trim(), textCtrl.text.trim())),
+              child: const Text('导入并向量化'),
+            ),
+          ],
         ),
       ),
     ).whenComplete(() {
