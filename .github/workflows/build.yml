@@ -598,3 +598,167 @@ jobs:
               $PRERELEASE_FLAG
           fi
           echo "已发布 $TAG（beta=$IS_BETA）"
+
+      # ---- R2 分发链（仅 main push 的正式发布；beta 走 GitHub 预发布通道）----
+      #
+      # 三步顺序有硬约束，不能调换：
+      #   ① 传 APK（版本化文件名）→ ② 校验远端大小一致 → ③ 最后写
+      #   latest.json 更新清单。清单是「原子切换点」：应用侧只认这个
+      #   固定地址（lib/services/update_service.dart 的 _r2ManifestUrl），
+      #   清单一写入，所有用户的下一次更新检查立刻指向新 APK。
+      #   若先写清单后传 APK，存在一个窗口期：清单已指向尚不存在的
+      #   文件，用户会下载 404。APK 校验失败则直接 fail，清单保持
+      #   指向旧版（用户继续收到旧版更新，不会拿到坏包）。
+      #
+      # 配置项（Repo Settings → Secrets and variables → Actions）：
+      #   R2_ENDPOINT        https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+      #                      （Cloudflare 控制台 R2 概览页右侧可见）
+      #   R2_ACCESS_KEY_ID   R2 API Token 生成的 S3 凭证（只读+写该 bucket）
+      #   R2_SECRET_ACCESS_KEY  同上
+      #   R2_BUCKET          bucket 名（rootfs 与 APK 可同桶不同前缀）
+      #   R2_PUBLIC_BASE     自定义域名根，如 https://gr.suen.us.ci
+      #                      （需在 R2 bucket 的 Public Development URL /
+      #                       自定义域中绑定；国内可达性依赖该域名）
+      #
+      # R2 对象布局：
+      #   orion/orion-agent-v<X.Y.Z>.apk   各正式版本 APK（版本化文件名）
+      #   orion/latest.json                更新清单（version/apkUrl/notes/
+      #                                    buildNumber/sha256）
+      - name: Upload APK to R2
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -e
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          test -s "$APK" || { echo "APK 不存在"; exit 1; }
+          VN=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
+          KEY="orion/orion-agent-v$VN.apk"
+          echo "上传 $APK → s3://$R2_BUCKET/$KEY"
+          # 版本化文件名内容不可变 → 长 cache；同版本重发（--force 覆盖）
+          # 场景下 CDN 可能短暂返回旧缓存，可接受（同版本内容应一致）
+          aws s3 cp "$APK" "s3://$R2_BUCKET/$KEY" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/vnd.android.package-archive"
+          # 自检：远端对象大小与本地一致，防止静默截断的半截 APK
+          # 进入更新链（下载端表现为安装包解析失败，难排查）
+          REMOTE_SIZE=$(aws s3api head-object --bucket "$R2_BUCKET" \
+            --key "$KEY" --endpoint-url "$R2_ENDPOINT" \
+            --query 'ContentLength' --output text)
+          LOCAL_SIZE=$(stat -c%s "$APK")
+          if [ "$REMOTE_SIZE" != "$LOCAL_SIZE" ]; then
+            echo "::error ::R2 对象大小不一致 remote=$REMOTE_SIZE local=$LOCAL_SIZE"
+            exit 1
+          fi
+          echo "R2 上传与校验通过：$KEY（$LOCAL_SIZE 字节）"
+
+      - name: Publish update manifest to R2
+        # 清单最后写（原子切换点，见上方顺序约束说明）。缓存策略必须是
+        # no-cache：清单每次发版都变，若被 CDN 缓存，部分用户会延迟
+        # 收到更新（APK 是版本化文件名可以长 cache，清单不行）。
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+          R2_PUBLIC_BASE: ${{ secrets.R2_PUBLIC_BASE }}
+        run: |
+          set -e
+          VN=$(grep '^version:' pubspec.yaml | cut -d' ' -f2 | cut -d'+' -f1)
+          TAG="v$VN"
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          APK_URL="$R2_PUBLIC_BASE/orion/orion-agent-v$VN.apk"
+          APK_SHA=$(sha256sum "$APK" | cut -d' ' -f1)
+          # 更新说明与 Release 正文同源（顶部当前版本段落，提取逻辑一致）
+          awk -v ver="$TAG" 'BEGIN{p=0} /^# Orion Agent /{if(p)exit; if(index($0,ver)>0)p=1} p' \
+            RELEASE_NOTES.md > /tmp/rel_notes.md
+          test -s /tmp/rel_notes.md || cp RELEASE_NOTES.md /tmp/rel_notes.md
+          export VN APK_URL APK_SHA BUILD_NUM="$GITHUB_RUN_NUMBER"
+          # JSON 用 python 生成：notes 是多行中文文本，shell 手拼 JSON
+          # 转义必出错（引号/换行），json.dumps 一次搞定
+          python3 - <<'PY'
+          import json, os
+          manifest = {
+              'version': os.environ['VN'],
+              'apkUrl': os.environ['APK_URL'],
+              'notes': open('/tmp/rel_notes.md', encoding='utf-8').read().strip(),
+              'buildNumber': int(os.environ['BUILD_NUM']),
+              'sha256': os.environ['APK_SHA'],
+          }
+          with open('/tmp/latest.json', 'w', encoding='utf-8') as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+          print(open('/tmp/latest.json', encoding='utf-8').read())
+          PY
+          aws s3 cp /tmp/latest.json "s3://$R2_BUCKET/orion/latest.json" \
+            --endpoint-url "$R2_ENDPOINT" \
+            --cache-control "no-cache" \
+            --content-type "application/json"
+          echo "更新清单已发布：$APK_URL（sha256=$APK_SHA）"
+
+      - name: Cleanup old R2 APKs (keep latest 2)
+        # 清理判断逻辑（python 逐段数字排序，与 Dart 端 isNewer 同规则）：
+        #   1. ListObjectsV2 列出 orion/ 前缀下全部对象
+        #   2. 只取匹配 orion/orion-agent-v<X.Y.Z>.apk 的 .apk，
+        #      版本号从文件名解析为整数元组（补齐段数）后降序排序
+        #   3. 保留最新 KEEP 个（默认 2：当前版 + 上一版回滚位），
+        #      其余走 DeleteObjects 逐个删除
+        #   4. 不匹配命名模式的对象（含 latest.json）一律不动——
+        #      来历不明的文件不自动删，需要人工处理
+        # 执行时机：每次正式发布（main push）的清单发布成功之后。
+        # 用 continue-on-error：清理失败只是多占空间，绝不能让已
+        # 成功的发布整体标红/触发重试。
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        continue-on-error: true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          set -e
+          # 每次发布清到只剩 2 个，总量恒小；ListObjectsV2 单页上限
+          # 1000，当前量级无需翻页（注释留存：若未来有历史积压，
+          # 先手工清一次再让本步骤接管增量）
+          aws s3api list-objects-v2 --bucket "$R2_BUCKET" \
+            --prefix "orion/" --endpoint-url "$R2_ENDPOINT" \
+            --output json > /tmp/objects.json
+          export KEEP=2
+          python3 - <<'PY'
+          import json, os, re, subprocess, sys
+          data = json.load(open('/tmp/objects.json'))
+          objs = data.get('Contents') or []
+          pat = re.compile(r'^orion/orion-agent-v(\d+(?:\.\d+)*)\.apk$')
+          cands = []
+          for o in objs:
+              m = pat.match(o['Key'])
+              if m:
+                  ver = tuple(int(x) for x in m.group(1).split('.'))
+                  cands.append((ver, o['Key']))
+          cands.sort(reverse=True)
+          keep = int(os.environ['KEEP'])
+          stale = [k for _, k in cands[keep:]]
+          skipped = len(objs) - len(cands)
+          if not stale:
+              print(f'R2 正式版 APK 共 {len(cands)} 个，未超过保留数 {keep}，无需清理')
+              sys.exit(0)
+          for _, k in cands[:keep]:
+              print(f'保留 {k}')
+          endpoint = os.environ['R2_ENDPOINT']
+          bucket = os.environ['R2_BUCKET']
+          for k in stale:
+              print(f'删除旧版本 {k}')
+              subprocess.run(
+                  ['aws', 's3api', 'delete-objects', '--bucket', bucket,
+                   '--endpoint-url', endpoint,
+                   '--delete', json.dumps({'Objects': [{'Key': k}]}),
+                   '--output', 'text'],
+                  check=True)
+          print(f'清理完成：删除 {len(stale)} 个，'
+                f'保留最新 {min(keep, len(cands))} 个，'
+                f'跳过非 APK 对象 {skipped} 个')
+          PY

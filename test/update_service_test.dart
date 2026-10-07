@@ -90,4 +90,57 @@ void main() {
     expect(UpdateService.isNewer('0.2.10', '0.2.10'), isFalse);
     expect(UpdateService.isNewer('0.2.9', '0.2.10'), isFalse);
   });
+
+  // ---- R2 更新清单（CI 正式发版上传的 latest.json）解析 ----
+
+  Map<String, dynamic> manifest({
+    required String version,
+    String? apkUrl = 'https://gr.suen.us.ci/orion/orion-agent-vX.apk',
+    String notes = '更新说明',
+  }) =>
+      {
+        'version': version,
+        'apkUrl': apkUrl,
+        'notes': notes,
+        'buildNumber': 109,
+        'sha256': 'deadbeef',
+      };
+
+  test('R2 清单：比当前新的版本解析出版本、APK 地址与更新日志', () {
+    final info = UpdateService.parseR2Manifest(
+      manifest(version: '0.3.0', apkUrl: 'https://gr.suen.us.ci/orion/a.apk'),
+      currentVersion: '0.2.10',
+    );
+    expect(info, isNotNull, reason: '0.3.0 > 0.2.10 应命中');
+    expect(info!.version, '0.3.0');
+    expect(info.apkUrl, 'https://gr.suen.us.ci/orion/a.apk');
+    expect(info.changelog, '更新说明');
+  });
+
+  test('R2 清单：等于或旧于当前版本返回 null（不提示更新）', () {
+    expect(
+      UpdateService.parseR2Manifest(
+          manifest(version: '0.2.10'), currentVersion: '0.2.10'),
+      isNull,
+      reason: '同版本不应提示更新（Beta 同号规则同源 isNewer）');
+    expect(
+      UpdateService.parseR2Manifest(
+          manifest(version: '0.2.9'), currentVersion: '0.2.10'),
+      isNull,
+      reason: '旧版本不应提示更新');
+  });
+
+  test('R2 清单：非 Map / 缺 version / 空 apkUrl 的降级行为', () {
+    expect(UpdateService.parseR2Manifest(null, currentVersion: '0.2.10'),
+        isNull, reason: '响应非 JSON 对象应返回 null');
+    expect(UpdateService.parseR2Manifest({'apkUrl': 'x'}, currentVersion: '0'),
+        isNull, reason: '缺 version 应返回 null');
+    final noApk = UpdateService.parseR2Manifest(
+        manifest(version: '0.3.0', apkUrl: ''), currentVersion: '0.2.10');
+    expect(noApk, isNotNull);
+    expect(noApk!.apkUrl, isNull, reason: '空 apkUrl 置 null，UI 引导去 releases 页');
+    final noNotes = UpdateService.parseR2Manifest(
+        manifest(version: '0.3.0', notes: ''), currentVersion: '0.2.10');
+    expect(noNotes!.changelog, isNull, reason: '空 notes 置 null');
+  });
 }

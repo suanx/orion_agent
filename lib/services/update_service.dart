@@ -4,8 +4,10 @@ import 'cloud_service.dart';
 
 /// 应用内更新检查。
 ///
-/// 优先走自建云端（orion_agent_cloud 的 /update/check，国内可达、APK 下载快），
-/// 未配置云端或云端检查失败时回退 GitHub Releases latest。
+/// 优先走自有 R2 更新清单（CI 正式发版时上传，国内可达、APK 下载快），
+/// 依次回退自建云端（orion_agent_cloud 的 /update/check）与 GitHub
+/// Releases latest。Beta 通道不受影响：仍直查 GitHub releases 列表
+/// （R2 清单只承载正式版，Beta 用户继续吃预发布通道）。
 /// 弹窗与「关于」页共用同一实现，避免两套解析将来改岔。
 /// 版本号比较规则：逐段数字比较，段数不足补 0。
 class UpdateService {
@@ -18,6 +20,15 @@ class UpdateService {
   /// 取前 5 条：预发布可能连续多个，足够覆盖到第一条比当前新的版本。
   static const _listApi =
       'https://api.github.com/repos/suanx/orion_agent/releases?per_page=5';
+
+  /// 自有 R2 更新清单（与终端 rootfs 同一域名体系，见 terminal_service）。
+  ///
+  /// 由 CI 在正式发版流程的**最后**写入：先传版本化 APK、校验一致后才
+  /// 覆盖此清单，所以清单内容是原子切换的——应用侧这个地址永远不变，
+  /// 「更新指向的替换」通过每次发版重写清单完成，无需重新发版。
+  /// 清单格式见 [parseR2Manifest]；请求失败静默回退云端/GitHub。
+  static const _r2ManifestUrl =
+      'https://gr.suen.us.ci/orion/latest.json';
 
   static const _defaultTimeout = Duration(seconds: 15);
 
@@ -36,10 +47,30 @@ class UpdateService {
     if (includePrereleases) {
       return _checkViaGithubList(currentVersion, timeout: timeout);
     }
-    // 云端优先：国内网络下 GitHub API 与 Releases 下载都不可靠
+    // 检查链：R2 清单（最快，CI 发版最后一步写入）→ 自建云端 → GitHub。
+    // 每一级失败都静默降级，任何一环挂掉不影响更新检查可用性。
+    final viaR2 = await _checkViaR2(currentVersion, timeout: timeout);
+    if (viaR2 != null) return viaR2;
+    // 云端兜底：国内网络下 GitHub API 与 Releases 下载都不可靠
     final viaCloud = await _checkViaCloud(currentVersion);
     if (viaCloud != null) return viaCloud;
     return _checkViaGithub(currentVersion, timeout: timeout);
+  }
+
+  Future<UpdateInfo?> _checkViaR2(String currentVersion,
+      {required Duration timeout}) async {
+    try {
+      final resp = await _dio.get<Map<String, dynamic>>(
+        _r2ManifestUrl,
+        options: Options(
+          responseType: ResponseType.json,
+          receiveTimeout: timeout,
+        ),
+      );
+      return parseR2Manifest(resp.data, currentVersion: currentVersion);
+    } catch (_) {
+      return null; // R2 清单不可用（未部署/网络失败）静默回退
+    }
   }
 
   Future<UpdateInfo?> _checkViaCloud(String currentVersion) async {
@@ -109,6 +140,37 @@ class UpdateService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// 把 R2 更新清单 JSON 解析为 UpdateInfo；不可用（非 Map / 缺版本 /
+  /// 不比 [currentVersion] 新）返回 null。
+  ///
+  /// 清单由 CI 正式发版流程生成，格式：
+  /// ```json
+  /// {
+  ///   "version": "0.2.31",
+  ///   "apkUrl": "https://gr.suen.us.ci/orion/orion-agent-v0.2.31.apk",
+  ///   "notes": "……（与 Release 正文同源）",
+  ///   "buildNumber": 109,
+  ///   "sha256": "…"
+  /// }
+  /// ```
+  /// 纯函数（无网络），供单元测试直接构造 JSON 断言；版本比较复用
+  /// [isNewer] 的「逐段数字」规则。
+  static UpdateInfo? parseR2Manifest(dynamic data,
+      {required String currentVersion}) {
+    if (data is! Map) return null;
+    final m = data.cast<String, dynamic>();
+    final version = m['version']?.toString() ?? '';
+    if (version.isEmpty) return null;
+    if (!isNewer(version, currentVersion)) return null;
+    final apkUrl = m['apkUrl']?.toString() ?? '';
+    final changelog = (m['notes']?.toString() ?? '').trim();
+    return UpdateInfo(
+      version: version,
+      changelog: changelog.isEmpty ? null : changelog,
+      apkUrl: apkUrl.isEmpty ? null : apkUrl,
+    );
   }
 
   /// 把一条 GitHub release JSON 解析为 UpdateInfo；不可用（draft / 无
