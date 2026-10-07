@@ -1,10 +1,11 @@
 #!/usr/bin/env node
-// 推送脚本: 把本地指定文件以一次 commit 推到 GitHub main（Git Data API）。
+// 推送脚本: 把本地指定文件以一次 commit 推到 GitHub（Git Data API）。
 // 本机 git 直连 github.com 不通，凭据走 credential manager（永不回显）。
 //
 // 用法:
-//   node push_update.mjs                 # 按 push_files.txt 清单推送
+//   node push_update.mjs                 # 按 push_files.txt 清单推到 main
 //   node push_update.mjs f1 f2 ...       # 命令行指定文件（仓库相对路径）
+//   PUSH_BRANCH=beta node push_update.mjs ...   # 推到指定分支（默认 main）
 //
 // push_files.txt 每行一个仓库相对路径，# 开头为注释。
 import { execFileSync, execSync } from "node:child_process";
@@ -12,7 +13,7 @@ import { readFileSync } from "node:fs";
 
 const REPO = "suanx/orion_agent";
 const API = "https://api.github.com";
-const BRANCH = "main";
+const BRANCH = process.env.PUSH_BRANCH || "main";
 
 // 凭据: 优先环境变量 GITHUB_TOKEN（git credential fill 在部分 Windows
 // 沙箱下 spawnSync 会报 EBUSY），否则走 credential manager（永不回显）。
@@ -49,6 +50,27 @@ if (files.length === 0) {
     .filter((l) => l && !l.startsWith("#"));
 }
 if (files.length === 0) { console.error("没有要推送的文件"); process.exit(1); }
+
+// 版本一致性校验（发版纪律的机器兜底，§11.17 教训）：
+// pubspec version 与 about_screen kAppVersion 必须一致，且
+// RELEASE_NOTES.md 顶部要有本版说明——漏掉任何一个，应用内更新
+// 检查就会失效（自报版本落后 / Release 正文空）。
+const pubspec = readFileSync("pubspec.yaml", "utf8");
+const versionMatch = /^version:\s*(\S+)\s*$/m.exec(pubspec);
+if (!versionMatch) { console.error("pubspec.yaml 里读不到 version:"); process.exit(1); }
+const version = versionMatch[1].split("+")[0];
+const about = readFileSync("lib/ui/about_screen.dart", "utf8");
+if (!about.includes(`kAppVersion = '${version}'`)) {
+  console.error(`版本不一致：pubspec=${version}，但 lib/ui/about_screen.dart 的 kAppVersion 没同步成这个值。`);
+  console.error("请两处一起递增后再推送（否则应用自报版本落后，装了新版仍提示更新）。");
+  process.exit(1);
+}
+const notes = readFileSync("RELEASE_NOTES.md", "utf8");
+if (!notes.includes(`# Orion Agent v${version}`)) {
+  console.error(`RELEASE_NOTES.md 顶部没有 v${version} 的更新说明段落（发布步骤按版本号提取正文，缺失则 Release 说明为空）。`);
+  process.exit(1);
+}
+console.log(`版本一致性校验通过：${version}`);
 
 // 1. 基准: 远端 main 当前 commit
 const ref = await gh("GET", `/repos/${REPO}/git/ref/heads/${BRANCH}`);

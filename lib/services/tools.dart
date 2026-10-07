@@ -6,7 +6,9 @@ import 'package:dio/dio.dart';
 
 import 'package:characters/characters.dart';
 
+import 'builtin_mcp.dart';
 import 'cloud_service.dart';
+import 'command_guard.dart';
 import 'memory_service.dart';
 import 'rag_service.dart';
 import 'skill_search_service.dart';
@@ -401,9 +403,16 @@ class WebFetchTool extends Tool {
   }
 }
 
-/// 联网搜索工具（DuckDuckGo HTML 版，无需 API Key）。
+/// 联网搜索工具。
+///
+/// 搜索后端优先级（2026-10-07 用户要求接入 soushen-hunter）：
+/// 1. 云端中继（配置了云服务时）
+/// 2. **soushen-hunter**（用户指定）：Debian 终端环境里装了
+///    `/root/soushen-hunter`（Playwright 驱动系统 chromium 抓 Bing/Google，
+///    零 API 费用）时优先走它，输出为 JSON
+/// 3. DuckDuckGo HTML 直连（无终端/未装 soushen 时的兜底，保证搜索永不断）
 class WebSearchTool extends Tool {
-  WebSearchTool(this._dio, [this._cloud]);
+  WebSearchTool(this._dio, [this._cloud, this._terminal]);
 
   final Dio _dio;
 
@@ -411,11 +420,18 @@ class WebSearchTool extends Tool {
   /// 优先经边缘节点搜索；null（未配置/未登录/网络失败）回退直连。
   final CloudService? _cloud;
 
+  /// 终端环境：装了 soushen-hunter 时作为搜索后端（可为 null）。
+  final TerminalService? _terminal;
+
+  static const _soushenDir = '/root/soushen-hunter';
+
   @override
   String get name => 'web_search';
 
   @override
-  String get description => '联网搜索。当需要实时信息、新闻、事实查询时调用。';
+  String get description =>
+      '联网搜索。当需要实时信息、新闻、事实查询时调用。'
+      '终端环境装有 soushen-hunter（搜神猎手）时自动用 Bing/Google 深度搜索。';
 
   @override
   Map<String, dynamic> get parameters => {
@@ -435,6 +451,62 @@ class WebSearchTool extends Tool {
     if (viaCloud != null) {
       return _wrapExternal(_truncate(viaCloud, 4000));
     }
+    // soushen-hunter（用户指定的搜索后端）：终端可用且已安装时优先。
+    // 任何一步失败都静默回退 DDG，搜索永不因增强组件而失效。
+    final viaSoushen = await _soushenSearch(query);
+    if (viaSoushen != null) {
+      return _wrapExternal(_truncate(viaSoushen, 4000));
+    }
+    return _ddgSearch(query);
+  }
+
+  /// 用终端里的 soushen-hunter 搜索；不可用/失败返回 null（调用方回退）。
+  Future<String?> _soushenSearch(String query) async {
+    final terminal = _terminal;
+    if (terminal == null) return null;
+    try {
+      if (!await terminal.isInstalled(TerminalDistro.debian)) return null;
+      final probe = await terminal.runOn(TerminalDistro.debian,
+          'test -x $_soushenDir/soushen && echo OK');
+      if (!probe.output.contains('OK')) return null;
+      // 单引号安全转义后交给 soushen；--num 8 控制耗时
+      final escaped = query.replaceAll("'", r"'\''");
+      final r = await terminal.runOn(
+        TerminalDistro.debian,
+        "cd $_soushenDir && ./soushen '$escaped' --num 8 2>/dev/null",
+        timeout: const Duration(seconds: 120),
+      );
+      final out = r.output;
+      final start = out.indexOf('{');
+      final end = out.lastIndexOf('}');
+      if (start < 0 || end <= start) return null;
+      final json = jsonDecode(out.substring(start, end + 1)) as Map?;
+      final results = json?['results'] as List?;
+      if (results == null || results.isEmpty) return null;
+      final buf = StringBuffer();
+      var used = 0;
+      for (final raw in results) {
+        if (used >= 8) break;
+        final item = raw as Map;
+        final title = item['title']?.toString() ?? '';
+        final url = item['url']?.toString() ?? '';
+        final snippet = item['snippet']?.toString() ?? '';
+        if (title.isEmpty) continue;
+        buf.writeln('${used + 1}. $title');
+        if (url.startsWith('http')) buf.writeln('   链接: $url');
+        if (snippet.isNotEmpty) buf.writeln('   摘要: $snippet');
+        buf.writeln();
+        used++;
+      }
+      if (buf.isEmpty) return null;
+      return buf.toString();
+    } catch (_) {
+      return null; // 静默回退 DDG
+    }
+  }
+
+  /// DuckDuckGo HTML 直连（兜底后端，无需任何安装）。
+  Future<String> _ddgSearch(String query) async {
     try {
       final resp = await _dio.get<String>(
         'https://html.duckduckgo.com/html/',
@@ -599,7 +671,8 @@ class RunCommandTool extends Tool {
   String get description =>
       '在应用内置的 Linux 环境（Alpine/Debian，proot 沙箱）中执行 shell 命令并返回输出。'
       '可用于文件处理、运行脚本、安装软件包（apk/apt，已配置国内镜像）等。'
-      '环境未安装时会提示先安装。注意：命令在沙箱内运行，仅能访问应用目录与系统基础挂载。';
+      '环境未安装时会提示先安装。注意：命令在沙箱内运行，仅能访问应用目录与系统基础挂载；'
+      '高危命令（安装/删除/下载/写重定向等）会先请求用户确认，被拒绝时不要原样重试。';
 
   @override
   Map<String, dynamic> get parameters => {
@@ -621,6 +694,15 @@ class RunCommandTool extends Tool {
     if (!await _terminal.isInstalled(distro)) {
       return '错误：当前终端环境（${distro.name}）尚未安装。'
           '请提示用户到「我的 → 终端环境」中选择发行版并一键安装。';
+    }
+    // 风险分级（S1/F7）：只读白名单直行；安装/删除/下载/写重定向等
+    // 高危命令先请用户确认，拒绝则把原因回给模型，让它调整而不是盲试。
+    if (CommandGuard.isRisky(command)) {
+      final allowed = await CommandGuard.instance.confirm(command);
+      if (!allowed) {
+        return '错误：用户拒绝了执行该命令。不要原样重试；'
+            '请询问用户希望如何处理，或改用更安全的方案。';
+      }
     }
     try {
       final r = await _terminal.runOn(distro, command);
@@ -811,13 +893,15 @@ extension AgentPermissionX on AgentPermission {
   };
 
   /// 是否允许使用 [toolName]。内置名单之外的名字（MCP 扩展工具）
-  /// 仅在「完全访问」档放行。
+  /// 仅在「完全访问」档放行——例外：内置 MCP 服务器（builtin_mcp.dart，
+  /// 用户自建的可信端点）在工作区读写档即可调用。
   bool allows(String toolName) {
     switch (this) {
       case AgentPermission.readOnly:
         return _readOnlyTools.contains(toolName);
       case AgentPermission.workspace:
-        return _workspaceTools.contains(toolName);
+        return _workspaceTools.contains(toolName) ||
+            isBuiltinMcpTool(toolName);
       case AgentPermission.full:
         return true;
     }
@@ -842,7 +926,7 @@ class ToolRegistry {
     _tools = [
       DateTimeTool(),
       CalculatorTool(),
-      WebSearchTool(dio, cloudService),
+      WebSearchTool(dio, cloudService, terminalService),
       WebFetchTool(dio, cloudService),
       SaveMemoryTool(memoryService),
       if (ragService != null && batchEmbed != null)

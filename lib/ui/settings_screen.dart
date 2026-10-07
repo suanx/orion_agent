@@ -41,15 +41,16 @@ class SettingsScreen extends ConsumerWidget {
           else ...[
             ...state.configs.map((c) => _ProviderCard(
                   config: c,
-                  // 「使用中」= activeConfig 选中的那条（第一个已启用且可用）。
-                  // 多选启用是允许的，但一次对话只能用一个提供商。
+                  // 「使用中」= activeConfig 选中的那条：优先是用户在对话页
+                  // 模型浮层里最近选中的提供商，否则退回第一个已启用且可用。
                   inUse: c.id == state.usingId,
                   onTap: () => _openProvider(context, c.id),
                   onDelete: () => _confirmDelete(context, ref, c),
                 )),
             const SizedBox(height: 12),
             Text(
-              '多个提供商可同时「已启用」，对话使用列表中第一个已启用的那个。',
+              '多个提供商可同时「已启用」；对话默认用列表中第一个已启用的，'
+              '在对话页模型列表里选过其他提供商的模型后会记住选择。',
               style: TextStyle(fontSize: 12, color: onSurface(context, 0.4)),
             ),
           ],

@@ -317,13 +317,17 @@ class ConfigState {
 
   /// 实际用于对话的配置。
   ///
-  /// 规则：**第一个「已启用且可用」的配置**。多选启用是允许的
-  /// （列表页就是多个「已启用」徽标），但一次对话只能用一个提供商，
-  /// 所以取列表顺序里的第一个。
+  /// 规则：**优先用用户在对话页选中的那条**（[activeId]，模型选择浮层
+  /// 跨提供商选模型时写入）；没有记录或该条已停用/未就绪时，退回
+  /// **列表顺序里第一个「已启用且可用」的配置**。多选启用是允许的
+  /// （列表页就是多个「已启用」徽标），但一次对话只能用一个提供商。
   ///
   /// 逐级降级，保证老数据不会因为没人勾选 enabled 而彻底用不了：
-  /// 已启用且可用 → 已启用 → 任意一条 → null。
+  /// 用户选中的已启用且可用 → 已启用且可用 → 已启用 → 任意一条 → null。
   LlmConfig? get activeConfig {
+    for (final c in configs) {
+      if (c.id == activeId && c.enabled && c.ready) return c;
+    }
     for (final c in configs) {
       if (c.enabled && c.ready) return c;
     }
@@ -491,9 +495,16 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     _schedulePersist();
   }
 
+  /// 记下用户在对话页模型浮层选中的提供商（activeConfig 优先用它）。
+  /// 该条配置之后被停用/删除时，activeConfig 自动按降级链回退。
+  void setActive(String id) {
+    _localTouched = true;
+    state = state.copyWith(activeId: id);
+    _schedulePersist();
+  }
+
   /// 覆盖某条配置的模型列表（「拉取模型」用）。
-  void setModels(String id, List<ProviderModel> models) {
-    final c = byId(id);
+  void setModels(String id, List<ProviderModel> models) {    final c = byId(id);
     if (c == null) return;
     upsert(c.copyWith(models: models));
   }
@@ -664,7 +675,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
         super(ChatState(
           sessions: initialSessions,
           activeSessionId: initialSessions.isEmpty ? null : initialSessions.first.id,
-        ));
+        )) {
+    // 启动只载入会话元信息（P1）：初始活跃会话的消息按需补载
+    if (initialSessions.isNotEmpty) {
+      unawaited(_ensureMessages(initialSessions.first.id));
+    }
+  }
 
   final StorageService _storage;
   final AgentOrchestrator _orchestrator;
@@ -734,6 +750,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void selectSession(String id) {
+    // 消息按需加载（P1）：切到某个会话时才把它的消息从 DB 读进内存
+    unawaited(_ensureMessages(id));
     // 切换会话时把用量统计恢复为该会话的记录（应用启动以来累计）
     final u = _usage[id] ?? const [0, 0, 0, 0, 0];
     state = state.copyWith(
@@ -745,6 +763,40 @@ class ChatNotifier extends StateNotifier<ChatState> {
       toolRoundsMcp: u[3],
       compressionCount: u[4],
     );
+  }
+
+  /// 已完成按需加载的会话 id。集合避免「空会话每次切换都查一次 DB」。
+  final Set<String> _loadedSessions = {};
+
+  /// 确保会话消息已进内存（P1 按需加载）。加载完成合并进**当前** state
+  /// （加载期间 state 可能已变化）；期间被删除则丢弃，已有消息则不覆盖。
+  Future<void> _ensureMessages(String id) async {
+    if (_loadedSessions.contains(id)) return;
+    _loadedSessions.add(id);
+    List<ChatMessage> msgs;
+    try {
+      msgs = await _storage.loadMessages(id);
+    } catch (e) {
+      _loadedSessions.remove(id);
+      debugPrint('会话消息按需加载失败：$e');
+      return;
+    }
+    if (!mounted) return;
+    final idx = state.sessions.indexWhere((s) => s.id == id);
+    if (idx < 0) return; // 加载期间会话被删除
+    final s = state.sessions[idx];
+    if (s.messages.isNotEmpty) return; // 加载期间已写入新消息，不覆盖
+    state = state.copyWith(sessions: [
+      for (final x in state.sessions)
+        x.id == id
+            ? ChatSession(
+                id: x.id,
+                title: x.title,
+                messages: msgs,
+                createdAt: x.createdAt,
+                updatedAt: x.updatedAt)
+            : x,
+    ]);
   }
 
   /// 累加当前会话的一项用量并同步到 state。
@@ -778,12 +830,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
     // 该会话的用量/标题记录同步清掉，否则 Map 只增不减（内存缓慢泄漏）。
     _usage.remove(id);
     _titleSummarized.remove(id);
+    _loadedSessions.remove(id);
     final remaining = state.sessions.where((s) => s.id != id).toList();
     final newActive = state.activeSessionId == id
         ? (remaining.isEmpty ? null : remaining.first.id)
         : state.activeSessionId;
     state = state.copyWith(sessions: remaining, activeSessionId: newActive);
     unawaited(_persistOp(() => _storage.deleteSession(id), '删除会话'));
+    // 删除后活跃会话切换，其消息同样按需补载
+    if (newActive != null) unawaited(_ensureMessages(newActive));
   }
 
   Future<void> clearAllSessions() async {
@@ -796,6 +851,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _compressToken?.cancel();
     _usage.clear();
     _titleSummarized.clear();
+    _loadedSessions.clear();
     if (!mounted) return;
     state = ChatState(sessions: const [], activeSessionId: null);
     await _storage.clearSessions();
@@ -832,6 +888,13 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _sending = false;
         return;
       }
+    }
+    // 会话消息是按需加载的（P1）：必须等历史进内存后才能拼上下文
+    await _ensureMessages(session.id);
+    session = state.activeSession;
+    if (session == null) {
+      _sending = false;
+      return;
     }
 
     final userMsg = ChatMessage(

@@ -111,7 +111,7 @@
       ├─ 插入 user 消息 → StorageService → SQLite
       └─ AgentOrchestrator.run()
            ├─ _systemPrompt()：基础 prompt + 角色 + 记忆 + 知识库
-           └─ 循环最多 8 轮：
+           └─ 循环无上限（护栏：同参重复 3 次中止 + 用户停止）：
                 ├─ LlmClient.chatStream() → SSE 增量文本 → AgentDelta → UI
                 ├─ 若模型返回 tool_calls：
                 │    ├─ ToolRegistry.execute() 执行
@@ -337,7 +337,9 @@ OpenAI 兼容协议的 SSE 流式客户端。
 
 ### 5.2 Agent 编排器 (`agent_orchestrator.dart`)
 
-ReAct 循环（推理 → 工具 → 观察 → 继续），**最多 8 轮**（`_maxSteps = 8`）。
+ReAct 循环（推理 → 工具 → 观察 → 继续），**轮数无上限**
+（2026-10-07 v0.2.28-beta 用户要求移除原 8 轮上限；护栏 = 同工具同参
+连续 3 次重复自动中止 + 用户随时停止，见下表）。
 
 **system prompt 拼装顺序** (`:206-231`)：
 
@@ -356,7 +358,6 @@ ReAct 循环（推理 → 工具 → 观察 → 继续），**最多 8 轮**（`
 | 同一工具重复调用 3 次 | 提前中止，避免空转烧 token | `:148-156` |
 | 用户取消 | 产出"已取消"，不报错 | `:107-111` |
 | 中间轮有文本、末轮也有 | `lead` 累积各轮文本，避免"说过的话消失" | `:126-134` |
-| 达到 8 轮上限 | 交付当前进展 + 说明，而非丢弃全部 | `:172-181` |
 | 空内容返回 | 视为失败（可能被内容过滤），不落库空消息 | `:125-129` |
 
 > ⚠️ **协议要求**：OpenAI 兼容协议要求 assistant 消息里的**每个** `tool_call`
@@ -383,10 +384,20 @@ abstract class Tool {
 | `current_time` | `DateTimeTool` | 当前日期时间，含时区（支持 UTC±HH:MM） |
 | `calculator` | `CalculatorTool` |递归下降解析器，精确计算 |
 | `web_fetch` | `WebFetchTool` | 网页正文抓取 |
-| `web_search` | `WebSearchTool` | DuckDuckGo 搜索，无需 Key |
+| `web_search` | `WebSearchTool` | 联网搜索。后端优先级：云端中继 → **soushen-hunter**（Debian 终端装了 `/root/soushen-hunter` 时，Playwright+chromium 抓 Bing/Google，JSON 输出，零 API 费用，2026-10-07 用户指定接入）→ DuckDuckGo HTML 兜底。任何后端失败静默降级到下一级 |
 | `save_memory` | `SaveMemoryTool` | 写入长期记忆 |
 | `search_knowledge` | `SearchKnowledgeTool` | 知识库语义检索 |
-| `run_command` | `RunCommandTool` | 终端执行 shell 命令 |
+| `run_command` | `RunCommandTool` | 终端执行 shell 命令；风险分级确认（见下） |
+
+**run_command 风险分级**（`command_guard.dart`，v0.2.27-beta，评估项 S1/F7）：
+
+- 只读白名单（ls/cat/grep/find/ps/mkdir…约 40 个）直接执行；
+- 其余（安装/删除/下载/写重定向 `>`、命令替换、未知命令）先弹玻璃
+  确认卡（main.dart 注册 `CommandGuard.instance.handler`，根 navigatorKey
+  弹出），拒绝则把拒绝原因回给模型，要求它调整而不是原样重试；
+- **fail-closed**：无处理器（App 不在前台的后台任务）一律拒绝；
+- 判定规则纯函数 `CommandGuard.isRisky`，单测 `command_guard_test.dart`。
+  保守性优先：判断不了的一律判为高风险（sed/python/tar/unzip 均需确认）。
 
 **计算器** (`:99-197`)：
 
@@ -434,9 +445,12 @@ abstract class Tool {
 > 会劈开代理对（emoji/扩展汉字），Dart 在 `jsonEncode`/`utf8.encode` 时
 > 把它静默替换为 `U+FFFD` —— 不报错，emoji 变成 "�"。
 
-> ⚠️ **当前无文件导入能力**：`knowledge_screen.dart` 只提供两个 `TextField`
-> （标题 + 正文），**没有 file_picker / PDF / Word 解析**。图标用了
-> `Icons.upload_file` 但功能是纯文本粘贴，容易误解。
+> ⚠️ ~~**当前无文件导入能力**~~ ✅ **v0.2.27-beta 已支持文件导入**：
+> `knowledge_screen.dart` 导入入口二选一（选择文件 / 粘贴文本）。
+> 文件走 `doc_extract.dart`：文本类（txt/md/代码/日志…）UTF-8 直读；
+> docx 解包 `word/document.xml` 提取段落；pdf 尽力提取（inflate 内容流 +
+> Tj/TJ 算子，扫描件/加密/CID 字体提不出 → 提示改用粘贴）；上限 20MB、
+> 正文 50 万字符截断。配套单测 `doc_extract_test.dart`。
 
 ### 5.5 长期记忆 (`memory_service.dart`)
 
@@ -450,6 +464,23 @@ abstract class Tool {
   未触发且普通 Provider 不通知）。刷新点：记忆页返回、切「我的」Tab
 
 ### 5.6 终端环境 (`terminal_service.dart`)
+
+**Debian 安装失败修复（2026-10-07，v0.2.28-beta）**：`_pullDockerLayer`
+此前只接受**单 manifest** 类型，而 docker library 镜像（含
+`debian:bookworm-slim`）的 tag 现在指向**多架构 OCI index**（含
+provenance/SBOM attestation 子清单）——部分镜像源原样返回 index，
+`layers` 字段不存在 → 所有镜像统一报「manifest 中无层信息」，GitHub
+备用源国内基本连不上 → 安装必败。修复：Accept 同时带 index 类型；
+返回 index 时选 `linux/arm64` 的非 attestation 子清单，再取该清单的
+根层 digest；GitHub 兜底失败也给出可读错误（原先透传裸 Dio 异常）。
+
+**soushen-hunter 集成（2026-10-07，v0.2.28-beta）**：`web_search`
+第二优先级后端（云端中继 → soushen → DDG 兜底）。**仅支持 Debian
+发行版**——Playwright 无 musl（Alpine）官方支持（pip wheel 与内置
+node driver 均为 glibc 链接），Alpine 下静默回退 DDG。安装路径：
+`/root/soushen-hunter`（curl codeload tarball + apt chromium +
+pip playwright），技能「装搜索增强/深度搜索/网页结构分析」模板均
+带发行版检测（Alpine 时提示切换 Debian）。
 
 **安装失败档案（#89，2026-10-05）**：真机安装报
 `Invalid argument(s): Illegal argument in isolate message: object is unsendable
@@ -684,7 +715,7 @@ sanitize: replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')
 
 调用时用**原始名**。描述兜底：`MCP 工具 X（来自 Y）`。
 
-**连接管理** (`mcp_service.dart:51-96`)：
+**连接管理** (`mcp_service.dart`)：
 
 - 默认超时 8 秒，`initialize` 给 2 倍
 - **重连前先按服务器名前缀注销旧工具** —— 否则旧 `McpTool`（持有旧 client/Dio）
@@ -693,19 +724,28 @@ sanitize: replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_')
 - **编辑服务器**（`updateServer`，2026-10-05）：改名称/URL 落库并断开旧
   client，由界面触发 `connectAll` 重连——改名会换工具注册前缀、改 URL
   换端点，两处失效都由重连兜底
+- **内置隐藏 MCP 服务器**（`builtin_mcp.dart`，2026-10-07）：用户自建的两个
+  端点写死在代码里——`soushen`（搜神搜索：web_search/fetch_url/搜索源诊断）
+  与 `rev-skills`（Android 逆向知识库：list_skills/read_skill/search_skills）。
+  **不落库、不出现在 MCP 管理页**（防 URL 泄漏与滥用），随 connectAll 自动
+  连接、先于用户自配服务器注册。**优先调用**：工作区读写档即放行内置 MCP
+  工具（`isBuiltinMcpTool`，用户自配的第三方 MCP 仍需完全访问档），系统
+  提示词声明「与本地内置工具功能重叠时一律优先使用 MCP 扩展工具」。
+  服务器名必须 ASCII（sanitize 规则，中文名会被清成纯下划线）
 
 ### 5.10 技能系统 (`skill_service.dart`)
 
 **形态**：提示词模板（**不是可执行逻辑**）。表`skill_items`。
 
-**内置 18 个技能，4 个分类**：
+**内置 42 个技能，4 个分类**（v0.2.28-beta 扩充，目录完整性由
+`skill_catalog_test.dart` 常驻校验）：
 
 | 分类 | 技能 |
 |---|---|
-| 写作办公 | 写周报、润色文字、总结归纳、翻译、回邮件、提取待办 |
-| 信息检索 | 今日要闻、读链接总结、专题调研、对比选型 |
-| 生活助手 | 做行程规划、记账算账、查我的资料、记住这件事 |
-| 开发者工具 | 跑代码⚡、解释报错、写正则、整理成表格 |
+| 写作办公 | 写周报、润色文字、总结归纳、翻译、回邮件、提取待办、会议纪要、通知公文、产品需求文档、标题起名 |
+| 信息检索 | 今日要闻、读链接总结、专题调研、对比选型、公司背调、学术检索、竞品分析 |
+| 生活助手 | 做行程规划、记账算账、查我的资料、记住这件事、菜谱推荐、健身计划、学英语计划、租房避坑、送礼参谋 |
+| 开发者工具 | 跑代码⚡、解释报错、写正则、整理成表格、装搜索增强⚡、深度搜索⚡、网页结构分析⚡、写单元测试、代码审查、重构建议、写SQL、Git助手⚡、写 Dockerfile、排查性能瓶颈⚡、接口调试⚡、写Shell脚本（⚡=依赖终端环境） |
 
 「跑代码」是唯一带 `needsTerminal: true` 的技能，安装时终端未就绪会跳过。
 
@@ -878,11 +918,14 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
   `primaryContainer` 浅色气泡（深浅色/六主题自适应）；助手消息 = **无气泡**
   满宽 Markdown 正文（`_mdStyleSheet` 定制标题/引用/列表样式）；
   消息列表底部「内容由 AI 生成，请注意核实」水印
-- **思考行**（`_ReasoningPanel`）：收起一行「正在思考/已思考 ›」，行内并入本轮
-  调用的**工具/技能名**（只显示名称，providers 的 steps 不再拼结果摘要，
-  按用户要求不显示调用详情），右侧 ⚡模式徽章（快速回答/深度思考，跟随输入栏
-  思考开关，仅流式期间显示）；展开为限高 220 圆角卡片可滚动，流式结束瞬间自动收起。
-  无思考流但有工具调用时也渲染收起状态的行；无思考行的已完成消息仍单独列
+- **思考行**（`_ReasoningPanel`）：收起一行「🧠 已思考」（脑子图标
+  `psychology_rounded`，2026-10-06 用户要求替换原展开箭头，展开时主题色
+  高亮）；**工具调用等过程状态行全部并入面板内滚动展示**（流式 steps 与
+  思考文本同处一个滚动区、自动跟随到底，不再散落在消息流里逐行显示——
+  用户截图反馈「整合到上面滚动显示」），右侧 ⚡模式徽章（快速回答/深度
+  思考，跟随输入栏思考开关，仅流式期间显示）；展开为限高 220 圆角卡片
+  可滚动，流式结束瞬间自动收起。流式期间只要思考或过程行非空就渲染
+  （默认展开，正文开始后自动收起）；无思考行的已完成消息仍单独列
   「🔧 已调用 名称」
 - **代码块**（`_CodeBlock`）：语言栏（语言名 + 复制 + 全屏玻璃弹窗）+ 轻量语法
   高亮（注释/字符串/数字/关键字四类着色，`_highlightSpans` 正则分词）；
@@ -891,6 +934,13 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 - **Markdown 缓存**：`_CachedMarkdown` 键含明暗模式（样式随亮度变化），
   流式 delta 不重复解析历史消息
 - 输入栏：发送/停止按钮切换、图片附件（`image_picker` 拍照或相册，1600px/quality80）
+- **锚定浮层限高滚动**（`glass.dart` `_AnchoredGlassRoute`，2026-10-06）：
+  所有锚定浮层内容限高屏高 62%、超出内部滚动（ConstrainedBox 必须套在
+  SingleChildScrollView 外层）——修复模型列表几十项时浮层「不能滑动选择、
+  超出部分直接被裁掉」
+- **消息长按菜单（复制 / 引用）**（v0.2.28-beta）：长按用户或助手消息弹
+  锚定菜单——「复制」全文进剪贴板；「引用」以 markdown 块引用格式
+  （多行逐行 `> ` 前缀）填入输入框，光标移到末尾。纯图片消息不提供
 - 语音输入（麦克风按钮）、技能调用（`/技能名`）
 - **文件附件（任意格式）**（2026-10-05）：「+」菜单第三项「文件（任意
   格式）」走 FilePicker（SAF，免存储权限），上限 200MB。文件先复制到
@@ -916,9 +966,9 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | `chat_screen` | ✅ 完整（无气泡正文 + 思考行 + 代码块卡片） |
 | `cloud_account_screen` | ✅ 云端登录页 + 个人中心（卡密/设备/用量）；2026-10-06 两张头部卡片由主色渐变换成 `glassPanel` 液态玻璃（白字改 onSurface 体系） |
 | `sessions_drawer` | ✅ 会话列表、切换、删除 |
-| `skills_screen` | ✅ 18 内置 + 自定义 |
+| `skills_screen` | ✅ 42 内置（v0.2.28-beta 扩充：开发者工具 16 个含 soushen 三件套/写测试/代码审查/Git助手等）+ 自定义；`skill_catalog_test.dart` 常驻校验目录完整性 |
 | `roles_screen` | ✅ CRUD（无预置） |
-| `knowledge_screen` | ⚠️ 仅文本粘贴，无文件导入 |
+| `knowledge_screen` | ✅ 文件导入（txt/md/docx/pdf，见 §5.4）+ 粘贴文本（v0.2.27-beta） |
 | `mcp_screen` | ✅ 添加/编辑/启用/删除 + 重连（2026-10-05 增编辑） |
 | `log_screen` | ✅ 诊断日志：AppLog 环形缓冲查看/复制/导出（入口：关于→日志） |
 | `backup_screen` | ✅ 备份与恢复：四类数据域开关 + 导出/导入 JSON |
@@ -928,6 +978,7 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
 | `font_settings_screen` | ✅ 对话字体四档缩放（带实时预览） |
 | `notification_settings_screen` | ✅ 4 项设置 + 权限申请 |
 | `storage_settings_screen` | ✅ 统计 + 2 项清理 |
+| `permission_screen` | ✅ 应用授权页（通知/录音/相机/无障碍/后台/悬浮窗/应用列表/所有文件）。**appsList 判定修复（v0.2.28-beta）**：此前误用无障碍服务状态替代，用户开启后仍显示「去开启」；现 API 30+ 按 QUERY_ALL_PACKAGES 以可见包数验证、API<30 走 READ_EXTERNAL_STORAGE 运行时授权 |
 | `tasks_screen` | ✅ 自动任务（每日/手动 + 启动补跑 + 存活期调度） |
 
 ---
@@ -976,13 +1027,13 @@ beta 会把 beta 的触发器悄悄改回 `[main]`，此后 beta 推送**不再�
 `github.ref == 'refs/heads/beta'` 决定 pre-release 与 target 分支，
 同一份文件服务两条通道。
 
-**防反编译**（2026-10-05，v0.2.2 首开后白屏，已于 v0.2.3 回退）：v0.2.2 曾启用
+**防反编译**（2026-10-05，v0.2.2 首开后白屏，已于 v0.2.3 回退；v0.2.30 起
+正式启用）：v0.2.2 曾启用
 `--obfuscate --split-debug-info` + R8 minify/shrink，装机启动白屏（见 §11.18）。
 APK 取证结论：R8 实际未生效（dex 内插件类名原样、arsc 无变化）；libapp.so
-符号剥离（--obfuscate）为白屏主因。**当前正式构建仍为纯 release**。
-workflow 里保留 `proguard-rules.pro` 落盘逻辑供未来重新启用；重新引入任何
-混淆前必须：单独出测试版 → 真机验证启动与工具调用 → 用 mapping.txt /
-so 符号表确认混淆确实生效，再进正式版。
+符号剥离（--obfuscate）为白屏主因。经分步协议（见下）在 beta 渠道验证后，
+**正式构建自 v0.2.30 起为常态混淆**；workflow 里保留 `proguard-rules.pro`
+落盘逻辑供未来 R8 启用。
 
 **分步重引入协议实施（2026-10-05，第一步就位）**：`build.yml` 的
 `workflow_dispatch` 新增输入 `obfuscate`（boolean，默认 false）——
@@ -993,15 +1044,18 @@ so 符号表确认混淆确实生效，再进正式版。
   还原堆栈用，必须与 APK 同 run 留档）
 - **发布步骤加 `if: github.event_name == 'push'`**：测试版不发 Release，
   不会进入应用内更新通道
-- push 触发的正式构建路径完全不变（无混淆），真机验证通过后第二步才切换
+- **第二步已完成（2026-10-06，v0.2.30 起）**：beta 渠道预发布自
+  2026-10-06 起常态混淆、真机验证稳定；main 正式构建同步切混淆
+  （OBF 无条件追加，symbols artifact 无条件归档）
 - 当时致白屏的两个 release-only 崩溃（Markdown 样式表空断言 §11.18、
   AnimatedContainer clip 无 decoration）已分别于 v0.2.5/v0.2.6 修复，
   且发布版有红色错误卡片兜底，本次重试有判据
-- 第二步（真机验证通过后）：正式构建切混淆 + symbols artifact 常态归档；
-  第三步：R8/minify 单独验证（v0.2.2 时它实际未生效，须以 mapping.txt/
-  dex 取证确认后才启用）
+- 第三步（未做）：R8/minify 单独验证（v0.2.2 时它实际未生效，须以
+  mapping.txt/dex 取证确认后才启用）
 
-**18 个步骤**：
+**19 个步骤**（2026-10-06 v0.2.26-beta 起加入 lock 跟踪；另在工作流顶层
+加了 `concurrency: build-${{ github.ref }}` + `cancel-in-progress`——同分支
+新 push 自动取消旧 run，main/beta 共用 workflow 时不再排队堆积）：
 
 1. Flutter stable setup（`subosito/flutter-action@v2`，带缓存）
 2. `flutter create --platforms android --project-name orion_agent .`
@@ -1017,12 +1071,14 @@ so 符号表确认混淆确实生效，再进正式版。
 10. 注入权限与通知 receiver
 11. 构建 Debian rootfs 并发布到 Release（tag `terminal-env`，已存在则跳过）
 12. `flutter pub get`
-13. `dart run build_runner build`（Drift codegen）
-14. `flutter analyze`
-15. `flutter test`
-16. `flutter build apk --release --target-platform android-arm64`
-17. 上传 artifact `orion-agent-apk`
-18. job 收尾
+13. **Track pubspec.lock**：lock 已入库（见 §9.1），pub get 后发现文件
+    漂移（或首次缺失）→ 以 github-actions[bot] 回提交到当前分支
+14. `dart run build_runner build`（Drift codegen）
+15. `flutter analyze`
+16. `flutter test`
+17. `flutter build apk --release --target-platform android-arm64`
+18. 上传 artifact `orion-agent-apk`
+19. job 收尾
 
 ### 为什么 targetSdk = 28
 
@@ -1104,7 +1160,9 @@ grep -qE 'jvmTarget\s*=\s*.*(JVM_17|VERSION_17)' "$F" || exit 1
 | `cloud_device_id` | String | 自动生成 | 云端设备标识（激活/登录/设备管理用） |
 | `cloud_email` | String | 无 | 登录邮箱（后端响应不回传，登录时本地记录，登出清除） |
 
-> `pubspec.lock` 被 `.gitignore` 忽略，依赖在 CI 统一解析。
+> `pubspec.lock` 自 v0.2.26-beta（2026-10-06）起**入库跟踪**：依赖解析固定、
+> 构建可复现；本机无 Flutter SDK，lock 由 CI 生成并回提交（build.yml
+> 「Track pubspec.lock」步骤），升级在 git 历史显式可见。
 
 ### FlutterSecureStorage
 
@@ -1207,9 +1265,15 @@ class ToolCall {
 纯向量）都能无损迁移——丢了 embedding 名会导致「AI 不认识导入的资料」。
 
 **`enabled` 取代了旧的单选 `activeId`**：多个提供商可同时启用
-（列表页会显示多个「已启用」徽标），对话使用**列表中第一个已启用的**。
-`ConfigState.activeConfig` 逐级降级（已启用且可用 → 已启用 → 任意一条），
-保证老数据不会因为没人勾选 enabled 而彻底用不了。
+（列表页会显示多个「已启用」徽标）。2026-10-06 起 `activeId` 被重新
+启用为「用户在对话页模型浮层最近选中的提供商」偏好：
+`ConfigState.activeConfig` 先看 activeId 指向的条目（已启用且可用才用），
+否则退回**列表中第一个已启用的**，继续逐级降级（已启用且可用 →
+已启用 → 任意一条 → null），保证老数据不会因为没人勾选 enabled 而
+彻底用不了。对话页模型浮层聚合所有已启用提供商的聊天模型（副标题
+标注来源），跨提供商选中时 `setActive(id)` + 写 `defaultChatModel`
+记住选择——修复「添加了新供应商但对话页不显示、选不了」的问题
+（v0.2.24-beta 用户截图反馈）。
 
 **请求地址推导**（`LlmClient.chatUrl` / `embeddingUrl` / `modelsUrl`）
 见 §11.14 —— 完整 URL 模式下有个「端点后缀是两段」的坑。
@@ -1249,7 +1313,7 @@ class ToolCall {
 | 13 | 工具永远找不到 | 网关重复下发完整 name，`web_search` + `web_search` = 错名 | `llm_client.dart:139-147` |
 | 14 | 停止按钮显示"请求失败（HTTP null）" | `DioExceptionType.cancel` 未区分 | `agent_orchestrator.dart:107-111` |
 | 15 | 模型说过的话凭空消失 | 中间轮文本未累积进最终答案 | `agent_orchestrator.dart:126-134` |
-| 16 | 8 轮工具调用后全部作废 | 达到上限只报错，不交付已有进展 | `agent_orchestrator.dart:172-181` |
+| 16 | ~~8 轮工具调用后全部作废~~ ✅ 已解决（v0.2.28-beta） | 轮数改为无上限（护栏：重复中止 + 手动停止） | `agent_orchestrator.dart` |
 | 17 | 连接池耗尽 | SSE 异常路径未关闭响应体 | `llm_client.dart:161-163` |
 | 18 | 向量永久错位入库 | `addDocument` 只比总数，两批可互相抵消 | `rag_service.dart:66-84` 逐批校验 |
 | 19 | 知识库整体失效 | 单条脏 JSON 毁掉整次检索，且异常被空 catch 吞掉 | `rag_service.dart:135-155` 跳过+计数 |
@@ -1761,11 +1825,11 @@ v0.2.5 修的 Markdown 空断言是并存的另一个真实隐患（列表渲染
 |---|---|---|---|
 | 5 | 冷启动任务不精确 | `main.dart:100-103` | `autostartTasks` 在首帧后立即执行，但此时 proot 可能还在安装中；且任务耗时较长时与首屏渲染竞争 |
 | 6 | RAG 全表扫描 | `rag_service.dart:140` | 每次检索加载全部分块的向量 JSON。数据量上千块后明显变慢。注释提到"后续可换 sqlite-vec" |
-| 7 | 会话无分页加载 | `storage_service.dart:18-38` | 启动时全量加载所有会话的所有消息。会话多时占用内存大 |
+| 7 | ~~会话无分页加载~~ ✅ 已解决（v0.2.27-beta） | `storage_service.dart` | 启动只载会话元信息，消息进入会话时按需加载（`loadMessagesInto`，P1） |
 | 8 | 知识库检索无 docId 过滤 | `rag_service.dart` | 只能全库检索，无法限定文档范围 |
 | 9 | TTS 音色不可试听 | `settings_screen.dart` | 7 个音色只能靠猜，无试听按钮 |
 | 10 | 无导出/分享功能 | — | 对话不能导出为文本/Markdown，技能不能分享 |
-| 11 | 图片仅 base64 存库 | `message_rows.images_json` | 大图会让 `message_rows` 膨胀，且 JSON 存储无压缩 |
+| 11 | ~~图片仅 base64 存库~~ ✅ 已解决（v0.2.27-beta） | `message_rows.images_json` | 图片落盘 `message_images/`（`MessageImageStore`），DB 只存 `img/` 文件引用；备份导出还原为 data URL 保持自包含（P2） |
 | 12 | Edge TTS 无重试 | `voice_service.dart` | WebSocket 失败直接回退系统 TTS，中间不留重试 |
 
 ### P2 — 工程改进
@@ -1779,7 +1843,7 @@ v0.2.5 修的 Markdown 空断言是并存的另一个真实隐患（列表渲染
 | 17 | `providers.dart` 690 行 | 所有 provider 集中一处，可按域拆分 |
 | 18 | 错误提示为裸字符串 | 无错误码/i18n 体系。如需多语言要重构 |
 | 19 | 无崩溃上报/日志文件 | Release崩溃只能靠用户反馈 |
-| 20 | 依赖版本宽松 | `pubspec.lock` 不跟踪，构建可复现性差 |
+| 20 | ~~依赖版本宽松~~ ✅ 已解决（v0.2.26-beta） | `pubspec.lock` 已入库跟踪，CI 发现漂移自动回提交，构建可复现 |
 
 ---
 
@@ -1845,6 +1909,8 @@ v0.2.5 修的 Markdown 空断言是并存的另一个真实隐患（列表渲染
 | `calculator_test.dart` | 计算器优先级/NaN/格式化 |
 | `regression_test.dart` | emoji 分块、ToolRegistry 注销、记忆去重、RAG 脏数据 |
 | `navigation_test.dart` | 通知 payload 映射、冷启动记账、seq 去重 |
+| `config_state_test.dart` | ConfigState 选商降级链：activeId 优先（对话页模型浮层记住的选择）→ 已启用且可用 → 已启用 → 兜底（v0.2.26-beta） |
+| `agent_orchestrator_test.dart` | Agent 主循环：空名 tool_call 回填、同名同参重复中止、10 轮无上限收尾、tool 结果按 tool_call_id 回填（假体隔离 LlmClient/ToolRegistry/MemoryService，v0.2.26-beta；无上限 v0.2.28-beta） |
 
 ### 约定
 
@@ -1862,7 +1928,9 @@ expect(s.contains('#'), isFalse);
 ### 待补测试
 
 - Agent 主链路集成测试（伪 LLM 服务驱动 SSE）
-- `AgentOrchestrator` 的 8 轮上限、重复调用中止、空 tool_call 回填
+- ~~`AgentOrchestrator` 的 8 轮上限、重复调用中止、空 tool_call 回填~~
+  ✅ 已补（v0.2.26-beta：`agent_orchestrator_test.dart`；v0.2.28-beta 轮数
+  改为无上限，新增 10 轮收尾用例）
 - `HomeShell` 导航意图消费的 Widget 测试
 - `StorageService.loadSessions` 的 N+1 回归（查询次数断言）
 

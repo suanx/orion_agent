@@ -140,7 +140,9 @@ class SshTerminalService {
       drain(_sshdProc!.stderr);
     } catch (_) {}
     var exited = false;
-    _sshdProc!.exitCode.then((_) => exited = true).catchError((_) {});
+    // catchError 回调必须返回 bool（与 then 链的 Future<bool> 对齐），
+    // 否则 analyze 报 body_might_complete_normally_catch_error
+    _sshdProc!.exitCode.then((_) => exited = true).catchError((_) => false);
 
     // 3) 等端口就绪（最多 20s：proot 首次启动要读几 MB 的 proot 二进制
     //    并挂载 /dev /proc /sys，冷启动比后续慢得多）

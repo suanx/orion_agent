@@ -130,6 +130,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     super.dispose();
   }
 
+  /// 把消息内容以引用格式（markdown 块引用，多行逐行加 `> ` 前缀）填入
+  /// 输入框（v0.2.28-beta：消息长按 → 引用）。光标移到末尾。
+  void _quoteToInput(String text) {
+    final quoted = text.trim().split('\n').map((l) => '> $l').join('\n');
+    final cur = _inputController.text;
+    _inputController.text = cur.isEmpty ? '$quoted\n' : '$cur\n$quoted\n';
+    _inputController.selection = TextSelection.collapsed(
+        offset: _inputController.text.length);
+  }
+
   void _send() {
     var text = _inputController.text.trim();
     if (text.isEmpty && _pendingImages.isEmpty && _pendingFiles.isEmpty) {
@@ -233,40 +243,55 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   /// 弹出模型选择——锚定在输入栏调音图标上方的浮层。
   ///
-  /// 模型列表来自当前提供商的 chatModels；选择写入 defaultChatModel。
+  /// 模型列表聚合【所有已启用且就绪的提供商】的聊天模型（副标题标注
+  /// 来源提供商），跨提供商选中时同时切换使用中的提供商并记住偏好
+  /// （activeId），解决「添加了新供应商但对话页不显示/选不了」的问题。
   /// 未配置模型时此入口在输入栏不可点（图标置灰），这里再兜底一次。
   Future<void> _pickModel(BuildContext anchor) async {
-    final active = ref.read(configProvider).activeConfig;
-    final models = active?.chatModels ?? const <ProviderModel>[];
-    if (active == null || active.chatModel == null || models.isEmpty) {
+    final state = ref.read(configProvider);
+    // (提供商, 模型) 平铺：对话不再局限于「第一个已启用」的提供商
+    final entries = <(LlmConfig, ProviderModel)>[
+      for (final c in state.configs)
+        if (c.enabled && c.ready)
+          for (final m in c.chatModels) (c, m),
+    ];
+    if (entries.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('请先在「我的 → AI 提供商」配置模型服务')));
       return;
     }
-    final current = active.chatModel!.name;
-    final sel = await showGlassAnchoredMenu<String>(
+    final active = state.activeConfig;
+    final currentCfgId = active?.id;
+    final currentModel = active?.chatModel?.name;
+    final sel = await showGlassAnchoredMenu<(String, String)>(
       context: context,
       anchor: anchor,
       width: 300,
       options: [
-        for (final m in models)
+        for (final (cfg, m) in entries)
           GlassMenuOption(
-            value: m.name,
+            value: (cfg.id, m.name),
             title: m.name,
-            subtitle: m.contextWindow > 0
-                ? '上下文 ${compactTokens(m.contextWindow)}'
-                : null,
+            subtitle: [
+              cfg.name,
+              if (m.contextWindow > 0) '上下文 ${compactTokens(m.contextWindow)}',
+            ].join(' · '),
             icon: Icons.auto_awesome_outlined,
-            checked: m.name == current,
+            checked: cfg.id == currentCfgId && m.name == currentModel,
           ),
       ],
     );
     if (!mounted) return; // 浮层关闭前的异步间隙里页面可能已被销毁
-    if (sel == null || sel == current) return;
+    if (sel == null ||
+        (sel.$1 == currentCfgId && sel.$2 == currentModel)) {
+      return;
+    }
+    final notifier = ref.read(configProvider.notifier);
+    final target = notifier.byId(sel.$1);
+    if (target == null) return; // 浮层打开期间该提供商被删除
     // ConfigNotifier.upsert 是 void（同步更新内存并落库），不能 await
-    ref
-        .read(configProvider.notifier)
-        .upsert(active.copyWith(defaultChatModel: sel));
+    notifier.upsert(target.copyWith(defaultChatModel: sel.$2));
+    if (sel.$1 != currentCfgId) notifier.setActive(sel.$1);
   }
 
   /// 添加附件——锚定在输入栏加号图标上方的浮层。
@@ -361,14 +386,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         safe = '${stem}_${DateTime.now().millisecondsSinceEpoch}$ext';
         dest = File('${dir.path}/$safe');
       }
+      // 后面有多个 await（文件复制/写入），跨异步使用 context 前先取好
+      // messenger（use_build_context_synchronously）
+      final messenger = ScaffoldMessenger.of(context);
       final src = file.path;
       if (src != null) {
         await File(src).copy(dest.path);
       } else if (file.bytes != null) {
         await dest.writeAsBytes(file.bytes!, flush: true);
       } else {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(const SnackBar(content: Text('读取文件失败')));
+        messenger.showSnackBar(
+            const SnackBar(content: Text('读取文件失败')));
         return;
       }
 
@@ -437,7 +465,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final items = <Widget>[];
     if (session != null) {
       for (final m in session.messages) {
-        items.add(_MessageBubble(message: m));
+        items.add(_MessageBubble(message: m, onQuote: _quoteToInput));
       }
     }
     // 流式状态是全局单份，streamingSessionId 标记流内容归属的会话：
@@ -998,9 +1026,12 @@ class _CachedMarkdown extends StatelessWidget {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
+  const _MessageBubble({required this.message, this.onQuote});
 
   final ChatMessage message;
+
+  /// 长按「引用」时把消息内容交还输入框（中文菜单，v0.2.28-beta）。
+  final void Function(String text)? onQuote;
 
   @override
   Widget build(BuildContext context) {
@@ -1009,39 +1040,42 @@ class _MessageBubble extends StatelessWidget {
       final hasImages = message.images.isNotEmpty;
       final bg = Theme.of(context).colorScheme.primaryContainer;
       final fg = Theme.of(context).colorScheme.onPrimaryContainer;
-      return Align(
-        alignment: Alignment.centerRight,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 5),
-          padding: hasImages
-              ? const EdgeInsets.all(6)
-              : const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
-          constraints: BoxConstraints(
-              maxWidth: MediaQuery.of(context).size.width * 0.78),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: BorderRadius.circular(18)
-                .copyWith(bottomRight: const Radius.circular(6)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final url in message.images)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
-                  child: GestureDetector(
-                    onTap: () => _showImageViewer(context, url),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: _MessageImage(dataUrl: url),
+      return _withActions(
+        context,
+        Align(
+          alignment: Alignment.centerRight,
+          child: Container(
+            margin: const EdgeInsets.symmetric(vertical: 5),
+            padding: hasImages
+                ? const EdgeInsets.all(6)
+                : const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
+            constraints: BoxConstraints(
+                maxWidth: MediaQuery.of(context).size.width * 0.78),
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(18)
+                  .copyWith(bottomRight: const Radius.circular(6)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (final url in message.images)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 6),
+                    child: GestureDetector(
+                      onTap: () => _showImageViewer(context, url),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: _MessageImage(dataUrl: url),
+                      ),
                     ),
                   ),
-                ),
-              if (message.content.isNotEmpty)
-                SelectableText(message.content,
-                    style: TextStyle(color: fg, fontSize: 15, height: 1.5)),
-            ],
+                if (message.content.isNotEmpty)
+                  SelectableText(message.content,
+                      style: TextStyle(color: fg, fontSize: 15, height: 1.5)),
+              ],
+            ),
           ),
         ),
       );
@@ -1066,35 +1100,73 @@ class _MessageBubble extends StatelessWidget {
 
     // 助手消息：无气泡纯正文（与主流 AI 对话产品一致），
     // Markdown 直接铺在页面背景上，满宽阅读。
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看；
-          // 调用过的工具/技能名并入思考行（只显示名称，不显示详情）。
-          if ((message.reasoning ?? '').trim().isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: _ReasoningPanel(
-                text: message.reasoning!,
-                toolNames: [for (final tc in message.toolCalls) tc.name],
-              ),
-            ),
-          // 无思考行时工具名单独列出（有思考行时名称已在行内，避免重复）。
-          if ((message.reasoning ?? '').trim().isEmpty)
-            for (final tc in message.toolCalls)
+    return _withActions(
+      context,
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看；
+            // 调用过的工具/技能名并入思考行（只显示名称，不显示详情）。
+            if ((message.reasoning ?? '').trim().isNotEmpty)
               Padding(
-                padding: const EdgeInsets.only(bottom: 4),
-                child: Text('🔧 已调用 ${tc.name}',
-                    style: TextStyle(
-                        fontSize: 12, color: onSurface(context, 0.45))),
+                padding: const EdgeInsets.only(bottom: 6),
+                child: _ReasoningPanel(
+                  text: message.reasoning!,
+                  toolNames: [for (final tc in message.toolCalls) tc.name],
+                ),
               ),
-          if (message.content.isNotEmpty)
-            _CachedMarkdown(text: message.content),
-        ],
+            // 无思考行时工具名单独列出（有思考行时名称已在行内，避免重复）。
+            if ((message.reasoning ?? '').trim().isEmpty)
+              for (final tc in message.toolCalls)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4),
+                  child: Text('🔧 已调用 ${tc.name}',
+                      style: TextStyle(
+                          fontSize: 12, color: onSurface(context, 0.45))),
+                ),
+            if (message.content.isNotEmpty)
+              _CachedMarkdown(text: message.content),
+          ],
+        ),
       ),
     );
+  }
+
+  /// 长按消息 → 复制 / 引用（中文菜单）。正文为空（纯图片等）不提供。
+  Widget _withActions(BuildContext context, Widget child) {
+    if (message.content.trim().isEmpty || onQuote == null) return child;
+    return Builder(
+      builder: (anchor) => GestureDetector(
+        onLongPress: () => _showActions(anchor),
+        child: child,
+      ),
+    );
+  }
+
+  Future<void> _showActions(BuildContext anchor) async {
+    final action = await showGlassAnchoredMenu<String>(
+      context: anchor,
+      anchor: anchor,
+      width: 176,
+      options: const [
+        GlassMenuOption(
+            value: 'copy', title: '复制', icon: Icons.copy_rounded),
+        GlassMenuOption(
+            value: 'quote', title: '引用', icon: Icons.format_quote_rounded),
+      ],
+    );
+    if (action == null || !anchor.mounted) return;
+    if (action == 'copy') {
+      await Clipboard.setData(ClipboardData(text: message.content));
+      if (anchor.mounted) {
+        ScaffoldMessenger.of(anchor).showSnackBar(
+            const SnackBar(content: Text('已复制')));
+      }
+    } else if (action == 'quote') {
+      onQuote?.call(message.content);
+    }
   }
 }
 
@@ -1117,12 +1189,8 @@ class _StreamingBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 本轮调用的工具/技能名：steps 里 🔧 开头的行只存名称（providers 侧
-    // 不再拼结果摘要），提取后并入思考行展示。
-    final toolNames = <String>[];
-    for (final s in steps) {
-      if (s.startsWith('🔧 ')) toolNames.add(s.substring(2));
-    }
+    // 工具调用等过程状态（⏳/🔧 行）全部并入下方思考面板滚动展示
+    // （2026-10-06 用户要求：不再散落在消息流里逐行显示）。
     // 与已完成消息一致：无气泡纯正文。
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -1131,30 +1199,21 @@ class _StreamingBubble extends StatelessWidget {
         children: [
           // 思考阶段（content 还没开始）默认展开实时思考内容；
           // 正文开始后由面板自己收起，保留可展开回看。
-          // 只有工具调用、没有思考流时也渲染收起状态的行，用于展示工具名。
-          if (reasoning.isNotEmpty || toolNames.isNotEmpty)
+          // 只有工具调用、没有思考流时也渲染，工具调用在面板内滚动显示。
+          if (reasoning.isNotEmpty || steps.isNotEmpty)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: _ReasoningPanel(
                 text: reasoning,
                 inProgress: content.isEmpty,
-                initiallyExpanded: reasoning.isNotEmpty,
+                initiallyExpanded: content.isEmpty,
                 badgeLabel: modeLabel,
-                toolNames: toolNames,
+                steps: steps,
               ),
             ),
-          // 🔧 工具名已并入思考行，这里只保留 ⏳ 状态行，不显示调用详情。
-          for (final s in steps)
-            if (!s.startsWith('🔧 '))
-              Padding(
-                padding: const EdgeInsets.only(bottom: 2),
-                child: Text(s,
-                    style: TextStyle(
-                        fontSize: 12, color: onSurface(context, 0.45))),
-              ),
           // 思考流本身就是"在进行中"的可视反馈，此时不再叠加转圈；
           // 两者都空才是真正的等待（首字节未到）。
-          if (content.isEmpty && reasoning.isEmpty && toolNames.isEmpty)
+          if (content.isEmpty && reasoning.isEmpty && steps.isEmpty)
             const SizedBox(
               width: 18,
               height: 18,
@@ -1181,6 +1240,7 @@ class _ReasoningPanel extends StatefulWidget {
     this.initiallyExpanded = false,
     this.badgeLabel,
     this.toolNames = const [],
+    this.steps = const [],
   });
 
   final String text;
@@ -1190,8 +1250,12 @@ class _ReasoningPanel extends StatefulWidget {
   /// 右侧模式徽章文字（如「快速回答」）；null 不显示。
   final String? badgeLabel;
 
-  /// 本轮调用的工具/技能名——只显示名称，不显示参数与结果详情。
+  /// 已完成消息调用过的工具/技能名（流式过程走 [steps]）。
   final List<String> toolNames;
+
+  /// 流式期间的过程状态行（⏳ 正在调用工具 … / 🔧 工具名）——
+  /// 全部并入面板内滚动展示，不再散落在消息流里（2026-10-06 用户要求）。
+  final List<String> steps;
 
   @override
   State<_ReasoningPanel> createState() => _ReasoningPanelState();
@@ -1215,8 +1279,14 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
     if (old.inProgress && !widget.inProgress && _expanded) {
       _expanded = false;
     }
-    // 展开且在思考中：跟随新内容滚到底
-    if (_expanded && widget.inProgress && widget.text.length != _lastLen) {
+    // 展开且在思考中：跟随新内容（思考文本或过程状态行）滚到底
+    final stepsChanged = old.steps.length != widget.steps.length ||
+        (old.steps.isNotEmpty &&
+            widget.steps.isNotEmpty &&
+            old.steps.last != widget.steps.last);
+    if (_expanded &&
+        widget.inProgress &&
+        (widget.text.length != _lastLen || stepsChanged)) {
       _lastLen = widget.text.length;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _scroll.hasClients) {
@@ -1248,14 +1318,16 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // 脑子图标标识思考过程（2026-10-06 用户要求替换原展开箭头）；
+                    // 展开时用主题色高亮，收起时灰色。
                     Icon(
-                      _expanded
-                          ? Icons.expand_more_rounded
-                          : Icons.chevron_right_rounded,
+                      Icons.psychology_rounded,
                       size: 16,
-                      color: onSurface(context, 0.45),
+                      color: _expanded
+                          ? primary.withValues(alpha: 0.9)
+                          : onSurface(context, 0.45),
                     ),
-                    const SizedBox(width: 2),
+                    const SizedBox(width: 3),
                     Text(
                       widget.inProgress ? '正在思考' : '已思考',
                       style: TextStyle(
@@ -1267,18 +1339,6 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
                 ),
               ),
             ),
-            // 工具/技能名：并入思考行展示，只显示名称（用户要求不显示详情）
-            if (widget.toolNames.isNotEmpty) ...[
-              const SizedBox(width: 6),
-              Flexible(
-                child: Text(
-                  '· 🔧 ${widget.toolNames.join(' · ')}',
-                  style: TextStyle(fontSize: 12, color: onSurface(context, 0.45)),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-            ],
             const Spacer(),
             // 模式徽章（⚡快速回答 / ⚡深度思考），跟随思考开关实时显示。
             if (widget.badgeLabel != null)
@@ -1313,12 +1373,40 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
             ),
             child: SingleChildScrollView(
               controller: _scroll,
-              child: SelectableText(
-                widget.text,
-                style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.55,
-                    color: onSurface(context, 0.55)),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (widget.text.isNotEmpty)
+                    SelectableText(
+                      widget.text,
+                      style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.55,
+                          color: onSurface(context, 0.55)),
+                    ),
+                  // 过程状态行（流式：⏳ 正在调用工具 …；历史：工具名清单）。
+                  // 与思考文本同处一个滚动区，跟随滚动到底（见 didUpdateWidget）。
+                  for (final s in widget.steps)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text(
+                        s.startsWith('⏳ ') || s.startsWith('🔧 ')
+                            ? s.substring(2)
+                            : s,
+                        style: TextStyle(
+                            fontSize: 12, color: onSurface(context, 0.45)),
+                      ),
+                    ),
+                  if (widget.steps.isEmpty)
+                    for (final name in widget.toolNames)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 3),
+                        child: Text('已调用 $name',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: onSurface(context, 0.45))),
+                      ),
+                ],
               ),
             ),
           ),
