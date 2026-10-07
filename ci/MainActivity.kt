@@ -1,4 +1,4 @@
-package com.example.orion_agent
+package com.orionagent.app
 
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
@@ -118,7 +118,7 @@ class MainActivity : FlutterActivity() {
             ) ?: ""
             // 组件在设置串里的标准格式是「包名/完整类名」，用完整服务类名
             // 精确匹配，避免子串匹配被同名前缀的其他包误判。
-            val service = "$packageName/com.example.orion_agent.AgentAccessibilityService"
+            val service = "$packageName/com.orionagent.app.AgentAccessibilityService"
             enabled.split(':').any { it.equals(service, ignoreCase = true) }
         } catch (_: Exception) { false }
         out["appsList"] = try {

@@ -62,7 +62,31 @@ jobs:
           echo "kAppVersion 已从 pubspec 同步为 $VN"
 
       - name: Inject MainActivity with system MethodChannel
-        run: cp ci/MainActivity.kt android/app/src/main/kotlin/com/example/orion_agent/MainActivity.kt
+        run: |
+          set -e
+          KT_DIR=android/app/src/main/kotlin/com/orionagent/app
+          mkdir -p "$KT_DIR"
+          cp ci/MainActivity.kt "$KT_DIR/MainActivity.kt"
+          ls "$KT_DIR"
+
+      - name: Set applicationId to com.orionagent.app
+        # 包名单一改写点（v0.2.33 起弃用 com.example.orion_agent）：
+        # flutter create 模板固定生成 com.example.<project>，这里统一
+        # 改写 applicationId 与 namespace，并自检无残留——漏改任何一处
+        # 都会在 Kotlin 编译或 manifest 合并期爆出难懂的 R 类/类名错误。
+        # ⚠️ 包名变更 = 新应用身份：旧版无法覆盖安装，需卸载重装
+        # （数据不迁移，可用「我的 → 备份与恢复」先导出再导入）。
+        run: |
+          set -e
+          F=android/app/build.gradle.kts
+          sed -i 's/namespace = "com.example.orion_agent"/namespace = "com.orionagent.app"/' "$F"
+          sed -i 's/applicationId = "com.example.orion_agent"/applicationId = "com.orionagent.app"/' "$F"
+          grep -n 'namespace\|applicationId' "$F"
+          if grep -q "com.example.orion_agent" "$F"; then
+            echo "::error ::build.gradle.kts 仍残留 com.example.orion_agent"
+            exit 1
+          fi
+          echo "applicationId/namespace 已改为 com.orionagent.app"
 
       - name: Lower targetSdk to 28
         # Android 10+ 禁止 app 自带目录内 exec()；终端环境(proot) 需要
@@ -304,7 +328,7 @@ jobs:
           MANIFEST=android/app/src/main/AndroidManifest.xml
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <uses-permission android:name="android.permission.RECORD_AUDIO"/>\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\n    <uses-permission android:name="android.permission.VIBRATE"/>\n    <uses-permission android:name="android.permission.WAKE_LOCK"/>\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>\n    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28"/>\n    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>\n    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>\n    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>\n    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\n    <uses-permission android:name="android.permission.CAMERA"/>\n    <application|' "$MANIFEST"
           # flutter_local_notifications：定时/已展示通知的回调接收器，缺失会在部分 ROM 上崩溃
-          sed -i 's|</application>|<receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n                <action android:name="android.intent.action.QUICKBOOT_POWERON" />\n                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>\n            </intent-filter>\n        </receiver>\n        <service android:name="com.example.orion_agent.AgentAccessibilityService" android:exported="false" android:label="Orion Agent 无障碍服务" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">\n            <intent-filter>\n                <action android:name="android.accessibilityservice.AccessibilityService"/>\n            </intent-filter>\n            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config"/>\n        </service>\n    </application>|' "$MANIFEST"
+          sed -i 's|</application>|<receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationReceiver" />\n        <receiver android:exported="false" android:name="com.dexterous.flutterlocalnotifications.ScheduledNotificationBootReceiver">\n            <intent-filter>\n                <action android:name="android.intent.action.BOOT_COMPLETED"/>\n                <action android:name="android.intent.action.MY_PACKAGE_REPLACED"/>\n                <action android:name="android.intent.action.QUICKBOOT_POWERON" />\n                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON"/>\n            </intent-filter>\n        </receiver>\n        <service android:name="com.orionagent.app.AgentAccessibilityService" android:exported="false" android:label="Orion Agent 无障碍服务" android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">\n            <intent-filter>\n                <action android:name="android.accessibilityservice.AccessibilityService"/>\n            </intent-filter>\n            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_service_config"/>\n        </service>\n    </application>|' "$MANIFEST"
           grep -n "INTERNET\|RECORD_AUDIO\|POST_NOTIFICATIONS\|ScheduledNotification\|AgentAccessibilityService" "$MANIFEST"
           # 桌面（启动器）显示名：flutter create 默认用项目名 orion_agent，改为正式名
           sed -i 's|android:label="orion_agent"|android:label="Orion Agent"|' "$MANIFEST"
@@ -316,7 +340,7 @@ jobs:
         # 为后续 AI 操作手机类能力预留入口（见 ci/AgentAccessibilityService.kt）。
         run: |
           set -e
-          KT_DIR=android/app/src/main/kotlin/com/example/orion_agent
+          KT_DIR=android/app/src/main/kotlin/com/orionagent/app
           cp ci/AgentAccessibilityService.kt "$KT_DIR/AgentAccessibilityService.kt"
           mkdir -p android/app/src/main/res/xml android/app/src/main/res/values
           cat > android/app/src/main/res/xml/accessibility_service_config.xml <<'XML'
@@ -446,7 +470,7 @@ jobs:
           -dontwarn io.flutter.embedding.**
           # 本项目原生入口（MethodChannel 宿主，见 ci/MainActivity.kt）。
           # manifest 声明的 Activity 由 aapt2 自动 keep，这里再双保险。
-          -keep class com.example.orion_agent.MainActivity { *; }
+          -keep class com.orionagent.app.MainActivity { *; }
           -keep class * extends io.flutter.embedding.android.FlutterActivity { *; }
           EOF
           cat >> android/app/build.gradle.kts <<'EOF'

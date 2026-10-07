@@ -1,4 +1,4 @@
-package com.example.orion_agent
+package com.orionagent.app
 
 import android.accessibilityservice.AccessibilityService
 import android.util.Log
