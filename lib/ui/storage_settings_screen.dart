@@ -368,8 +368,12 @@ class _WorkspaceDirCardState extends State<_WorkspaceDirCard> {
         title: const Text('选择工作区目录'),
         content: SizedBox(
           width: double.maxFinite,
-          child: ListView(
-            shrinkWrap: true,
+          // 用 Column 而非 ListView：glassAlertDialog 的 content 外层
+          // 已有 SingleChildScrollView 负责滚动，嵌套的 shrinkWrap
+          // ListView 即使内容超长滚不动也会抢走拖动手势，表现为
+          // 「弹窗列表无法滑动、底部输入框被裁掉」（真机 2026-10-08）
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Text('Agent 产物与终端 /workspace 将使用该目录。',
                   style: TextStyle(

@@ -525,8 +525,10 @@ class _TaskEditorState extends State<_TaskEditor> {
         title: Text(widget.existing == null ? '新建自动任务' : '编辑任务'),
         content: SizedBox(
           width: double.maxFinite,
-          child: ListView(
-            shrinkWrap: true,
+          // 同 storage_settings：Column 替代嵌套 shrinkWrap ListView，
+          // 避免「弹窗内容无法滑动」的手势抢占问题
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
             children: [
               // emoji 选择
               SizedBox(
