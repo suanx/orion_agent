@@ -294,9 +294,9 @@ String uniqueId(String prefix) =>
 > 全部测试通过、产出 `orion-agent-apk`（12.2 MB）。
 > 从旧仓库迁移后共迭代 9 轮才全绿，详见 §11.8。
 >
-> 好在它只是**备用源**：`install()` 里国内 Docker 镜像
-> （daocloud / 1ms / dockerproxy）**优先**尝试，三个全失败才走 GitHub
-> （`terminal_service.dart:212-225`）。所以国内用户通常感知不到这个依赖。
+> 好在它只是**备用源**：`install()` 里自有 R2 源 → 国内 Docker 镜像
+> （daocloud / 1ms / xuanyuan 等 5 个活源）依次尝试，全失败才走 GitHub
+> （`terminal_service.dart` 下载链）。所以国内用户通常感知不到这个依赖。
 > 同理通知渠道 id 虽然改了（`orion_agent_agent`），但旧渠道残留不影响，
 > Android 会保留未使用的渠道。
 
@@ -389,12 +389,18 @@ abstract class Tool {
 | `search_knowledge` | `SearchKnowledgeTool` | 知识库语义检索 |
 | `run_command` | `RunCommandTool` | 终端执行 shell 命令；风险分级确认（见下） |
 
-**run_command 风险分级**（`command_guard.dart`，v0.2.27-beta，评估项 S1/F7）：
+**run_command 风险分级**（`command_guard.dart` + `ToolRegistry.execute`，
+v0.2.27-beta 引入，v0.2.31-beta 调档，评估项 S1/F7）：
 
 - 只读白名单（ls/cat/grep/find/ps/mkdir…约 40 个）直接执行；
 - 其余（安装/删除/下载/写重定向 `>`、命令替换、未知命令）先弹玻璃
   确认卡（main.dart 注册 `CommandGuard.instance.handler`，根 navigatorKey
   弹出），拒绝则把拒绝原因回给模型，要求它调整而不是原样重试；
+- **「完全访问」档全程免打扰**（v0.2.31-beta 用户要求）：高危硬黑名单
+  （`matchDangerousCommand`）与弹窗确认都在 `ToolRegistry.execute` 里按
+  档位拦截——`permission == AgentPermission.full` 时两者全部跳过，默认
+  放行不弹窗（用户选了完全访问即自行承担风险）；工具层（RunCommandTool）
+  不再做确认，因为它拿不到权限档位；
 - **fail-closed**：无处理器（App 不在前台的后台任务）一律拒绝；
 - 判定规则纯函数 `CommandGuard.isRisky`，单测 `command_guard_test.dart`。
   保守性优先：判断不了的一律判为高风险（sed/python/tar/unzip 均需确认）。
@@ -516,7 +522,7 @@ $nativeLibraryDir/libproot.so \
 | `debian` | Debian 12 bookworm | tar.xz / tar.gz | GitHub Release 或 Docker 代理 |
 
 > ⚠️ **仅 aarch64**。Debian 走 Docker 代理时拉取 `debian:bookworm-slim` 的根层
-> （经 `docker.m.daocloud.io` / `docker.1ms.run` / `dockerproxy.net` 三个代理依次尝试），
+> （自有 R2 源优先，其后 5 个国内代理 `dockerMirrors` 依次尝试、各重试 1 次），
 > 与 GitHub 的tar.xz 是**不同来源的两套 rootfs**。
 
 **国内镜像配置** (`_postConfigure` `:340-356`)：
@@ -570,9 +576,14 @@ initState 只跑一次，故必须挂生命周期）。终端页是 push 页面�
    `/tmp`，多实例并发操作同一 rootfs 会互相踩，表现为成片的
    `Deletion failed, path = '/data/utmp'`。改为**每批 3 个**（保留并行
    提速，又避免竞争）。
-3. **Debian 下载镜像要冗余**：`dockerproxy.net` 的 bookworm-slim 层
-   返回 404 会让安装走到「全部镜像不可用」；`dockerMirrors` 扩到 8 个
-   国内源，单个失效不阻断。
+3. **Debian 下载镜像要冗余 + 只留活源**：`dockerproxy.net` 的
+   bookworm-slim 层返回 404 会让安装走到「全部镜像不可用」。2026-10-06
+   按存活探测修剪（v0.2.31-beta）：移除 404 的 dockerproxy.net、302 的
+   hub.rat.dev、连不通的 docker.chenby.cn / docker.anye.xyz，新增
+   docker.xuanyuan.me，`dockerMirrors` 保持 5 个活源（daocloud / 1ms.run /
+   xuanyuan / dockerhub.icu / awsl9527）；**每个源失败重试 1 次**再换下一个；
+   失败日志只打 `e.toString().split('\n').first` 首行摘要——DioException
+   是多行堆栈，原样打会把安装日志刷成一坨看不清。
 
 **组件自动检测 + 「打开终端」**（2026-10-06）：①每次进入页面即自动检测
 （已安装时 initState 直接跑 `_checkTools`，用户不必点「检测组件」）；安装
@@ -938,9 +949,16 @@ Tab 顺序：`ChatScreen` / `TasksScreen` / `SkillsScreen` / `ProfileScreen`
   所有锚定浮层内容限高屏高 62%、超出内部滚动（ConstrainedBox 必须套在
   SingleChildScrollView 外层）——修复模型列表几十项时浮层「不能滑动选择、
   超出部分直接被裁掉」
-- **消息长按菜单（复制 / 引用）**（v0.2.28-beta）：长按用户或助手消息弹
-  锚定菜单——「复制」全文进剪贴板；「引用」以 markdown 块引用格式
-  （多行逐行 `> ` 前缀）填入输入框，光标移到末尾。纯图片消息不提供
+- **消息选择工具条（全选 / 复制 / 引用 / 发送）**（v0.2.31-beta，
+  取代 v0.2.28-beta 的长按菜单）：用户/助手消息（含流式气泡、思考面板、
+  代码块）统一包 Material `SelectionArea`（`chat_screen.dart` 顶层
+  `_selectionArea`），长按/拖动进入**系统原生选择手柄**，弹自定义工具条：
+  - 「全选」→ `state.selectAll`；「复制」→ 选区进剪贴板（复制后清选区，
+    与原生 Android 一致）+「已复制」提示；
+  - 「引用」（v0.2.28 语义保留）：markdown 块引用填入输入框；
+  - 「发送」：选中文字直接作为新消息发出（输入框有草稿时不覆盖，先提示）；
+  - 区域内一律用普通 Text/RichText，**不放嵌套 SelectableText**
+    （同为可编辑文本会与区域手势抢长按/双击，出现两套手柄）；纯图片消息不包
 - 语音输入（麦克风按钮）、技能调用（`/技能名`）
 - **文件附件（任意格式）**（2026-10-05）：「+」菜单第三项「文件（任意
   格式）」走 FilePicker（SAF，免存储权限），上限 200MB。文件先复制到

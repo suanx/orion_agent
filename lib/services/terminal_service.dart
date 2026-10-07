@@ -704,18 +704,15 @@ class TerminalService {
 
   // ---------------- 国内镜像拉取（Debian） ----------------
 
-  /// 国内可匿名拉取的 Docker Registry 代理（依次尝试）。
-  /// 国内可用的 Docker Registry 镜像（按顺序尝试，失败自动换下一个）。
-  /// 2026-10-06 扩充：dockerproxy.net 的 bookworm-slim 层返回 404，
-  /// 会让 Debian 安装走到「全部镜像不可用」。任何一个源失效都不该
-  /// 阻断安装，所以候选给足并保持可追加。
+  /// 国内可匿名拉取的 Docker Registry 代理（依次尝试，失败自动换下一个）。
+  /// 2026-10-06 按存活探测修剪：dockerproxy.net（bookworm-slim 层 404）、
+  /// hub.rat.dev（302 跳转）、docker.chenby.cn / docker.anye.xyz（连不通）
+  /// 一律移除，避免「死源刷屏后才轮到可用源」；新增 docker.xuanyuan.me。
+  /// 任何一个源失效都不该阻断安装，所以保持可追加。
   static const dockerMirrors = <String>[
     'https://docker.m.daocloud.io',
     'https://docker.1ms.run',
-    'https://dockerproxy.net',
-    'https://hub.rat.dev',
-    'https://docker.chenby.cn',
-    'https://docker.anye.xyz',
+    'https://docker.xuanyuan.me',
     'https://dockerhub.icu',
     'https://docker.awsl9527.cn',
   ];
@@ -724,17 +721,27 @@ class TerminalService {
       void Function(String) report, String savePath) async {
     Object? lastError;
     for (final base in dockerMirrors) {
-      try {
-        report('尝试镜像 $base …');
-        await _pullDockerLayer(base, savePath);
-        report('镜像下载完成');
-        return;
-      } catch (e) {
-        lastError = e;
-        report('镜像不可用（${e.toString().replaceFirst('Exception: ', '')}）');
+      // 每个源重试一次：首轮失败常是 token 换取/网络抖动，重试能救回
+      // 误判的可用源，不必等到列表耗尽。
+      for (var attempt = 0; attempt < 2; attempt++) {
+        try {
+          report('尝试镜像 $base …');
+          await _pullDockerLayer(base, savePath);
+          report('镜像下载完成');
+          return;
+        } catch (e) {
+          lastError = e;
+          // DioException 是多行堆栈，直接打出来会把日志刷成一坨看不清，
+          // 只保留首行错误摘要。
+          final msg = e.toString().split('\n').first;
+          report(attempt == 0
+              ? '镜像不可用（$msg），重试…'
+              : '镜像不可用（$msg），换下一个源…');
+        }
       }
     }
-    throw Exception('全部国内镜像拉取失败：$lastError');
+    throw Exception(
+        '全部国内镜像拉取失败：${lastError.toString().split('\n').first}');
   }
 
   /// Docker Registry v2 匿名拉取 library/debian:bookworm-slim 的根层。

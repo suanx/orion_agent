@@ -140,6 +140,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         offset: _inputController.text.length);
   }
 
+  /// 选择工具条「发送」（v0.2.31-beta）：把选中文字直接作为新消息发出。
+  /// 输入框已有草稿时不覆盖——静默丢字比多一步操作更伤人。
+  void _sendSelection(String text) {
+    final t = text.trim();
+    if (t.isEmpty) return;
+    if (_inputController.text.trim().isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('输入框有未发送的内容，请先清空再发送选中文字')));
+      return;
+    }
+    _inputController.text = t;
+    _inputController.selection = TextSelection.collapsed(offset: t.length);
+    _send();
+  }
+
   void _send() {
     var text = _inputController.text.trim();
     if (text.isEmpty && _pendingImages.isEmpty && _pendingFiles.isEmpty) {
@@ -465,7 +480,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final items = <Widget>[];
     if (session != null) {
       for (final m in session.messages) {
-        items.add(_MessageBubble(message: m, onQuote: _quoteToInput));
+        items.add(_MessageBubble(
+            message: m, onQuote: _quoteToInput, onSend: _sendSelection));
       }
     }
     // 流式状态是全局单份，streamingSessionId 标记流内容归属的会话：
@@ -484,7 +500,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             content: chat.streamingContent,
             reasoning: chat.streamingReasoning,
             steps: chat.steps,
-            modeLabel: thinkingOn ? '深度思考' : '快速回答'),
+            modeLabel: thinkingOn ? '深度思考' : '快速回答',
+            onQuote: _quoteToInput,
+            onSend: _sendSelection),
       ));
     }
     final empty = items.isEmpty;
@@ -1025,13 +1043,73 @@ class _CachedMarkdown extends StatelessWidget {
   }
 }
 
+/// 消息正文选择区（v0.2.31-beta）：长按/拖动进入系统原生选择（手柄 +
+/// 工具条），工具条按钮为「全选 / 复制 / 引用 / 发送」——替代旧的
+/// 长按弹出菜单（v0.2.28-beta），所见即所选、原生手柄可拖动微调。
+/// 无文本可选时直接透传，不包一层空的 SelectionArea。
+///
+/// 注意：区域内部不要放嵌套的 SelectableText（同为可编辑文本会与
+/// 区域手势抢长按/双击，出现两套手柄），一律用普通 Text/RichText。
+Widget _selectionArea({
+  required bool hasText,
+  required Widget child,
+  void Function(String text)? onQuote,
+  void Function(String text)? onSend,
+}) {
+  if (!hasText) return child;
+  return SelectionArea(
+    contextMenuBuilder: (ctx, state) {
+      // 引用/发送按钮按当前选区显隐；按下时再读一次最新选区，
+      // 避免菜单展示期间拖动手柄导致内容过期。
+      final selected = state.getSelectedContent()?.plainText ?? '';
+      TextSelectionToolbarTextButton btn(String label, VoidCallback onPressed) =>
+          TextSelectionToolbarTextButton(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            onPressed: onPressed,
+            child: Text(label),
+          );
+      return AdaptiveTextSelectionToolbar(
+        anchors: state.contextMenuAnchors,
+        children: [
+          btn('全选', () => state.selectAll(SelectionChangedCause.toolbar)),
+          btn('复制', () async {
+            final text = state.getSelectedContent()?.plainText ?? '';
+            if (text.isEmpty) return;
+            await Clipboard.setData(ClipboardData(text: text));
+            // 与原生 Android 一致：复制后清掉选区、收起工具条。
+            state.clearSelection();
+            if (ctx.mounted) {
+              ScaffoldMessenger.of(ctx)
+                  .showSnackBar(const SnackBar(content: Text('已复制')));
+            }
+          }),
+          if (onQuote != null && selected.isNotEmpty)
+            btn('引用', () {
+              onQuote(state.getSelectedContent()?.plainText ?? selected);
+              state.clearSelection();
+            }),
+          if (onSend != null && selected.isNotEmpty)
+            btn('发送', () {
+              onSend(state.getSelectedContent()?.plainText ?? selected);
+              state.clearSelection();
+            }),
+        ],
+      );
+    },
+    child: child,
+  );
+}
+
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message, this.onQuote});
+  const _MessageBubble({required this.message, this.onQuote, this.onSend});
 
   final ChatMessage message;
 
-  /// 长按「引用」时把消息内容交还输入框（中文菜单，v0.2.28-beta）。
+  /// 选择工具条「引用」：把选中文字交还输入框（v0.2.28-beta 长按菜单保留）。
   final void Function(String text)? onQuote;
+
+  /// 选择工具条「发送」：把选中文字作为新消息发出（v0.2.31-beta）。
+  final void Function(String text)? onSend;
 
   @override
   Widget build(BuildContext context) {
@@ -1040,9 +1118,11 @@ class _MessageBubble extends StatelessWidget {
       final hasImages = message.images.isNotEmpty;
       final bg = Theme.of(context).colorScheme.primaryContainer;
       final fg = Theme.of(context).colorScheme.onPrimaryContainer;
-      return _withActions(
-        context,
-        Align(
+      return _selectionArea(
+        hasText: message.content.trim().isNotEmpty,
+        onQuote: onQuote,
+        onSend: onSend,
+        child: Align(
           alignment: Alignment.centerRight,
           child: Container(
             margin: const EdgeInsets.symmetric(vertical: 5),
@@ -1072,7 +1152,9 @@ class _MessageBubble extends StatelessWidget {
                     ),
                   ),
                 if (message.content.isNotEmpty)
-                  SelectableText(message.content,
+                  // 普通 Text：选择统一交给外层 _selectionArea（见其注释），
+                  // 嵌套 SelectableText 会与区域手势抢长按。
+                  Text(message.content,
                       style: TextStyle(color: fg, fontSize: 15, height: 1.5)),
               ],
             ),
@@ -1100,9 +1182,12 @@ class _MessageBubble extends StatelessWidget {
 
     // 助手消息：无气泡纯正文（与主流 AI 对话产品一致），
     // Markdown 直接铺在页面背景上，满宽阅读。
-    return _withActions(
-      context,
-      Padding(
+    return _selectionArea(
+      hasText: message.content.trim().isNotEmpty ||
+          (message.reasoning ?? '').trim().isNotEmpty,
+      onQuote: onQuote,
+      onSend: onSend,
+      child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 6),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1134,40 +1219,6 @@ class _MessageBubble extends StatelessWidget {
     );
   }
 
-  /// 长按消息 → 复制 / 引用（中文菜单）。正文为空（纯图片等）不提供。
-  Widget _withActions(BuildContext context, Widget child) {
-    if (message.content.trim().isEmpty || onQuote == null) return child;
-    return Builder(
-      builder: (anchor) => GestureDetector(
-        onLongPress: () => _showActions(anchor),
-        child: child,
-      ),
-    );
-  }
-
-  Future<void> _showActions(BuildContext anchor) async {
-    final action = await showGlassAnchoredMenu<String>(
-      context: anchor,
-      anchor: anchor,
-      width: 176,
-      options: const [
-        GlassMenuOption(
-            value: 'copy', title: '复制', icon: Icons.copy_rounded),
-        GlassMenuOption(
-            value: 'quote', title: '引用', icon: Icons.format_quote_rounded),
-      ],
-    );
-    if (action == null || !anchor.mounted) return;
-    if (action == 'copy') {
-      await Clipboard.setData(ClipboardData(text: message.content));
-      if (anchor.mounted) {
-        ScaffoldMessenger.of(anchor).showSnackBar(
-            const SnackBar(content: Text('已复制')));
-      }
-    } else if (action == 'quote') {
-      onQuote?.call(message.content);
-    }
-  }
 }
 
 class _StreamingBubble extends StatelessWidget {
@@ -1176,6 +1227,8 @@ class _StreamingBubble extends StatelessWidget {
     required this.reasoning,
     required this.steps,
     this.modeLabel,
+    this.onQuote,
+    this.onSend,
   });
 
   final String content;
@@ -1187,41 +1240,50 @@ class _StreamingBubble extends StatelessWidget {
   /// 思考行右侧模式徽章（⚡快速回答 / ⚡深度思考），仅流式期间显示。
   final String? modeLabel;
 
+  /// 选择工具条「引用」/「发送」回调（与已完成消息一致，v0.2.31-beta）。
+  final void Function(String text)? onQuote;
+  final void Function(String text)? onSend;
+
   @override
   Widget build(BuildContext context) {
     // 工具调用等过程状态（⏳/🔧 行）全部并入下方思考面板滚动展示
     // （2026-10-06 用户要求：不再散落在消息流里逐行显示）。
     // 与已完成消息一致：无气泡纯正文。
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 思考阶段（content 还没开始）默认展开实时思考内容；
-          // 正文开始后由面板自己收起，保留可展开回看。
-          // 只有工具调用、没有思考流时也渲染，工具调用在面板内滚动显示。
-          if (reasoning.isNotEmpty || steps.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 6),
-              child: _ReasoningPanel(
-                text: reasoning,
-                inProgress: content.isEmpty,
-                initiallyExpanded: content.isEmpty,
-                badgeLabel: modeLabel,
-                steps: steps,
+    return _selectionArea(
+      hasText: content.trim().isNotEmpty || reasoning.trim().isNotEmpty,
+      onQuote: onQuote,
+      onSend: onSend,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 思考阶段（content 还没开始）默认展开实时思考内容；
+            // 正文开始后由面板自己收起，保留可展开回看。
+            // 只有工具调用、没有思考流时也渲染，工具调用在面板内滚动显示。
+            if (reasoning.isNotEmpty || steps.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: _ReasoningPanel(
+                  text: reasoning,
+                  inProgress: content.isEmpty,
+                  initiallyExpanded: content.isEmpty,
+                  badgeLabel: modeLabel,
+                  steps: steps,
+                ),
               ),
-            ),
-          // 思考流本身就是"在进行中"的可视反馈，此时不再叠加转圈；
-          // 两者都空才是真正的等待（首字节未到）。
-          if (content.isEmpty && reasoning.isEmpty && steps.isEmpty)
-            const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          else if (content.isNotEmpty)
-            _mdSafe(context, content),
-        ],
+            // 思考流本身就是"在进行中"的可视反馈，此时不再叠加转圈；
+            // 两者都空才是真正的等待（首字节未到）。
+            if (content.isEmpty && reasoning.isEmpty && steps.isEmpty)
+              const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else if (content.isNotEmpty)
+              _mdSafe(context, content),
+          ],
+        ),
       ),
     );
   }
@@ -1377,7 +1439,9 @@ class _ReasoningPanelState extends State<_ReasoningPanel> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   if (widget.text.isNotEmpty)
-                    SelectableText(
+                    // 普通 Text：思考面板在消息选择区内部，选择交给外层
+                    // _selectionArea，嵌套 SelectableText 会抢长按手势。
+                    Text(
                       widget.text,
                       style: TextStyle(
                           fontSize: 12.5,
@@ -1584,7 +1648,9 @@ class _HighlightedCode extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final spans = _highlightSpans(code, isDark);
-    return SelectableText.rich(
+    // 普通 Text.rich：代码块在消息选择区内部，选择交给外层
+    // _selectionArea，嵌套 SelectableText 会抢长按手势。
+    return Text.rich(
       TextSpan(
         children: spans,
         style: TextStyle(
