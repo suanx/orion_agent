@@ -471,13 +471,32 @@ class TerminalService {
 
       // 结构验证：镜像返回 HTML 错误页/压缩包截断时这里会失败，
       // 抛异常走 catch → finally 清理 tmp 目录，旧 rootfs 安然无恙。
-      // 期望结构与下载源对应（见 isInstalled/startOn）：
-      // alpine → bin/busybox；debian（usrmerge，/bin → usr/bin）→ bin/bash。
-      final marker = d == TerminalDistro.alpine
-          ? '$tmpRootfs/bin/busybox'
-          : '$tmpRootfs/bin/bash';
-      if (!File(marker).existsSync()) {
-        throw Exception('rootfs 结构校验失败：缺少 $marker，下载内容可能已损坏');
+      // alpine → bin/busybox（真文件）。
+      // debian → usrmerge 布局：真文件在 usr/bin/bash，bin 只是指向
+      //   usr/bin 的符号链接，且该条目位于 tar 流的【最后一条】
+      //   （skopeo 导出的 docker 层顺序）。校验拆成「真文件存在 +
+      //   链接存在」两个独立事实，**不依赖 dart:io 穿链接解析**——
+      //   它在部分平台/场景下解析失败（Windows 实测 notFound，
+      //   真机 §11.22 同样失败），曾把完好的解压误判为损坏。
+      //   链接缺失时现场补建，不必整包重来。
+      if (d == TerminalDistro.alpine) {
+        if (!File('$tmpRootfs/bin/busybox').existsSync()) {
+          throw _corruptError(stats, tmpRootfs, '$tmpRootfs/bin/busybox');
+        }
+      } else {
+        if (!File('$tmpRootfs/usr/bin/bash').existsSync()) {
+          throw _corruptError(stats, tmpRootfs, '$tmpRootfs/usr/bin/bash');
+        }
+        final binType = FileSystemEntity.typeSync('$tmpRootfs/bin',
+            followLinks: false);
+        if (binType != FileSystemEntityType.link) {
+          // bin 链接缺失或被异常建成了目录/文件：清掉重建为 usr/bin
+          if (binType != FileSystemEntityType.notFound) {
+            await deletePathRobust('$tmpRootfs/bin', report: report);
+          }
+          Link('$tmpRootfs/bin').create('usr/bin');
+          debugPrint('TerminalService: 已补建 /bin -> usr/bin 符号链接');
+        }
       }
 
       report('修正执行权限…');
@@ -522,6 +541,26 @@ class TerminalService {
         await deletePathRobust(tmpRootfs, report: report);
       }
     }
+  }
+
+  /// 结构校验失败的异常构造：带上解压统计与 tmp 顶层快照，让日志足以
+  /// 区分「下载损坏（条目数异常/顶层缺失）」与「解压缺失（特定文件没落盘）」，
+  /// 不再是一句无法定位的「下载内容可能已损坏」。
+  Exception _corruptError(
+      RootfsExtractStats stats, String tmpRootfs, String missing) {
+    var top = '<tmp 目录不存在>';
+    if (Directory(tmpRootfs).existsSync()) {
+      top = Directory(tmpRootfs)
+          .listSync(followLinks: false)
+          .map((e) => e.uri.pathSegments.lastWhere((s) => s.isNotEmpty))
+          .take(8)
+          .join('、');
+    }
+    return Exception(
+        'rootfs 结构校验失败：缺少 $missing。'
+        '已写入 文件${stats.createdFiles}/链接${stats.createdLinks}'
+        '/跳过${stats.skippedUnsafe}，tmp 顶层：$top。'
+        '下载内容可能已损坏，请重试安装');
   }
 
   /// 尽力而为地删除文件/目录树，**绝不抛错**（清理不能比主流程的异常
@@ -666,7 +705,10 @@ class TerminalService {
     if (isGz) {
       tarBytes = GZipDecoder().decodeBytes(compressed);
     } else {
-      tarBytes = XZDecoder().decodeBytes(compressed);
+      // verify: true 校验每个 xz 块的 CRC/CRC64。默认关闭时解码损坏
+      // 会静默产出半截垃圾 tar，结构校验只会报「缺少 xxx」而真因被埋
+      // （真机 §11.22 的教训：校验失败时无法区分下载损坏还是解码损坏）
+      tarBytes = XZDecoder().decodeBytes(compressed, verify: true);
     }
     final decoder = TarDecoder();
     decoder.decodeBytes(tarBytes);
@@ -752,9 +794,17 @@ class TerminalService {
   }
 
   /// 把 tar 条目内的相对目标路径（硬链接的 linkname）安全拼到
-  /// [destDir] 下；绝对路径或含「..」段时返回 null（拒绝）。
+  /// [destDir] 下；含「..」段时返回 null（拒绝）。
+  ///
+  /// docker/OCI 层 tar 的硬链接目标常见两种形态：相对（`usr/bin/dash`）
+  /// 与绝对（`/usr/bin/dash`）。绝对目标在归档命名空间里就是 rootfs
+  /// 内部路径，剥掉前导「/」映射进 [destDir] 即可——此前直接拒绝会让
+  /// 被硬链接的文件静默缺失。符号链接的绝对目标**不走这里**（它们在
+  /// guest 内解析，由 repairAbsoluteSymlinks 统一改写）。
   static String? _safeJoin(String destDir, String? rel) {
-    if (rel == null || rel.isEmpty || rel.startsWith('/')) return null;
+    if (rel == null || rel.isEmpty) return null;
+    if (rel.startsWith('/')) rel = rel.substring(1);
+    if (rel.isEmpty) return null;
     final segs = <String>[];
     for (final seg in rel.split('/')) {
       if (seg == '..') return null;

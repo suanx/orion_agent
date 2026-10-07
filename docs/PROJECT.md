@@ -1882,6 +1882,39 @@ V0.2.32」——与 §11.17 一模一样的循环。
 **教训**：第三次踩版本号同步坑（§11.17、本次，AGENTS.md 清单形同虚设）。
 凡是「靠人记得」的同步，最终都会漏；能被上游事实派生的值，就不要手写。
 
+### 11.22 Debian 安装「缺少 bin/bash」（校验依赖 dart:io 穿链接解析 + bin 链接是 tar 最后一条）
+
+**现象**：§11.19 修复后真因终于可见——解压完成（505 链接/1 跳过）后报
+「rootfs 结构校验失败：缺少 .../debian-rootfs.tmp/bin/bash」。
+
+**取证**（本地装 Dart SDK 3.13.5 + 同款 archive 3.6.1 对 R2 真实文件复现）：
+- tar 本身完好：usr/bin/bash 是 1.3MB 普通文件、bin → usr/bin 符号链接、
+  无重复条目、无 pax 头；跳过的 1 个「可疑条目」就是根目录 `.` 条目（无害）
+- **bin 符号链接条目位于整个 tar 流的最后一条**（skopeo 导出的 docker
+  层顺序）
+- 用项目同款代码完整复现：链接 505 / 文件 3262 / 跳过 1，usr/bin/bash
+  完好落盘——**但 `File('bin/bash').existsSync()` 为 false**：dart:io
+  穿「指向相对目标的目录符号链接」解析失败（Windows 实测 notFound，
+  真机同款校验同样失败），与解压内容无关
+
+**根因**：结构校验把「bin/bash 可穿链接解析」当成了事实断言，而它依赖
+dart:io 的链接解析行为，不是解压结果本身的属性。
+
+**修复**（terminal_service.dart）：
+- 校验拆成两个独立事实：`usr/bin/bash` 真文件存在 + `bin` 是符号链接；
+  链接缺失/被建成目录文件时**现场补建**（deletePathRobust 清掉 + 
+  Link.create('usr/bin')），不再依赖穿链接解析
+- `_corruptError` 助手：校验失败时带上解压统计与 tmp 顶层快照，可区分
+  「下载损坏」与「解压缺失」
+- XZ 解码开启 `verify: true`：块 CRC 校验，解码损坏从静默垃圾变成明确报错
+- `_safeJoin` 支持硬链接的绝对目标（docker 层 tar 常见形态），此前静默
+  丢弃会导致被硬链接的文件缺失
+
+**教训**：①「路径 A 可解析到文件 B」不是文件系统事实，是解析器行为——
+校验应断言拆解后的最小事实集；② archive 包 XZDecoder 默认不校验块
+CRC，静默损坏必须显式 verify；③ 复现手段：本地装 Dart SDK + 同版本
+依赖包对真实产物跑同款代码，比推理快得多。
+
 ### 11.19 Debian 安装报「Deletion failed, path = debian-rootfs.tmp」（finally 清理异常顶掉真因）
 
 **现象**（真机日志）：Alpine 正常（8/8 组件可用），Debian 经 R2 源下载、
