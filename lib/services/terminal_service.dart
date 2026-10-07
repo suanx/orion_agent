@@ -1029,10 +1029,17 @@ class TerminalService {
       // bookworm-slim 用 deb822 格式的 debian.sources，清掉换成传统 sources.list
       final debSources = File('$rootfs/etc/apt/sources.list.d/debian.sources');
       if (debSources.existsSync()) debSources.deleteSync();
+      // ⚠️ apt 源必须用 http：基础 rootfs 尚无 ca-certificates，https 会
+      // 证书验证失败（鸡生蛋，装完 ca-certificates 后 apt 会自动升级到
+      // 可用状态）；完整性由 Release 文件的 GPG 签名保证，不依赖传输层。
+      // 此前写成 'deb http://$_tuna/...' 而 _tuna 已带 https://，拼出
+      // http://https://... 的非法 URL，索引全空 → 所有包 Unable to
+      // locate（§11.23，此前被 bin/bash 校验失败挡住从未暴露）。
+      final tunaHttp = _tuna.replaceFirst('https://', 'http://');
       File('$rootfs/etc/apt/sources.list').writeAsStringSync(
-          'deb http://$_tuna/debian bookworm main contrib non-free non-free-firmware\n'
-          'deb http://$_tuna/debian bookworm-updates main contrib non-free non-free-firmware\n'
-          'deb http://$_tuna/debian-security bookworm-security main contrib non-free non-free-firmware\n');
+          'deb $tunaHttp/debian bookworm main contrib non-free non-free-firmware\n'
+          'deb $tunaHttp/debian bookworm-updates main contrib non-free non-free-firmware\n'
+          'deb $tunaHttp/debian-security bookworm-security main contrib non-free non-free-firmware\n');
     }
   }
 

@@ -1882,6 +1882,29 @@ V0.2.32」——与 §11.17 一模一样的循环。
 **教训**：第三次踩版本号同步坑（§11.17、本次，AGENTS.md 清单形同虚设）。
 凡是「靠人记得」的同步，最终都会漏；能被上游事实派生的值，就不要手写。
 
+### 11.23 Debian 组件安装全灭「Unable to locate package」（apt 源 URL 双 scheme 拼接）
+
+**现象**：§11.22 修复后 Debian 安装走通（解压/校验/权限/链接全过），
+但 `apt-get install` 报所有包 Unable to locate / no installation
+candidate，组件检测 0/8。
+
+**根因**：`_postConfigure` 写 sources.list 时用 `'deb http://$_tuna/debian ...'`，
+而 `_tuna` 常量本身已含 `https://`——拼出
+`deb http://https://mirrors.tuna.tsinghua.edu.cn/...` 的非法 URL，
+`apt-get update` 静默拿不到任何索引（-qq 吞掉告警且退出码仍为 0）。
+**长期潜伏**：此前 Debian 安装从未走到这一步（被 bin/bash 校验挡住），
+v0.2.33 走通后才第一次暴露。Alpine 分支没踩中，因为它的 repositories
+拼接没加 `http://` 前缀。
+
+**修复**：apt 源改用 `http://`（剥掉常量的 https 前缀）——基础 rootfs
+无 ca-certificates，https 启动即证书失败；包完整性由 Release 文件 GPG
+签名保证，不依赖传输层加密。
+
+**教训**：①「带 scheme 的常量」拼 URL 前先确认 scheme 是否已在常量里
+——`http://$httpsConstant` 是双倍愚蠢；② 修好第一层 bug 后暴露的
+第二层不是回归，是潜伏缺陷按顺序浮现，Debian 链路每走通一段都要
+重新全量验证后段。
+
 ### 11.22 Debian 安装「缺少 bin/bash」（校验依赖 dart:io 穿链接解析 + bin 链接是 tar 最后一条）
 
 **现象**：§11.19 修复后真因终于可见——解压完成（505 链接/1 跳过）后报

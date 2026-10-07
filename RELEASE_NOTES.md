@@ -1,3 +1,24 @@
+# Orion Agent v0.2.34 更新说明（正式版）
+
+> Debian 终端环境第二轮修复：安装已能走通，本轮修掉组件安装阶段
+> 「所有包 Unable to locate」的软件源拼接错误。
+
+## 终端环境 Debian 修复（第三轮）
+
+- 修复 apt 源 URL 拼接错误：清华源域名常量已带 `https://`，sources.list
+  又拼了 `http://` 前缀，产出 `http://https://...` 的非法 URL——索引
+  全空，所有组件包 Unable to locate。该 bug 长期潜伏，此前被 bin/bash
+  校验失败挡在更早阶段，v0.2.33 走通安装后才暴露
+- apt 源改用 http（基础 rootfs 无 ca-certificates，https 会证书失败；
+  包完整性由 Release 文件 GPG 签名保证）
+
+## 说明
+
+- 已装上 v0.2.33 的用户：更新本版后，在「终端环境」里**先删除 Debian
+  再重新安装**（或直接重装），组件安装即可正常拉取
+
+---
+
 # Orion Agent v0.2.33 更新说明（正式版）
 
 > ⚠️ **重要：本版起应用包名变更为 com.orionagent.app（原 com.example.orion_agent）。**
