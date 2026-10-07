@@ -5,10 +5,13 @@ import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'cloud_config.dart';
+
 /// orion_agent_cloud 云端后端（EdgeOne Pages + Turso）客户端。
 ///
 /// 职责：
-/// - 账号（注册/登录/刷新/登出）、卡密激活、设备管理
+/// - 账号（注册/登录/刷新/登出）、设备管理
+/// - 授权状态查询（套餐由管理台直接设置, 授权已改为账号授权）
 /// - 搜索/抓取中继（国内网络下 DuckDuckGo 不可达，经云端边缘节点代理）
 /// - 更新清单（/update/check，国内可达的版本分发）
 ///
@@ -18,7 +21,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 class CloudService {
   CloudService(this._prefs, this._secure);
 
-  static const _baseUrlKey = 'cloud_base_url';
   static const _deviceIdKey = 'cloud_device_id';
   static const _tokensKey = 'cloud_tokens';
   static const _deviceTokenKey = 'cloud_device_token';
@@ -39,13 +41,11 @@ class CloudService {
 
   // ---------------- 配置 ----------------
 
-  /// 服务器地址；null = 未配置（所有云功能静默降级，本地功能不受影响）。
-  String? get baseUrl {
-    final v = _prefs.getString(_baseUrlKey)?.trim();
-    return (v == null || v.isEmpty) ? null : v;
-  }
+  /// 云端后端地址：**写死在 CloudConfig**（不暴露给用户配置）。
+  /// 换后端地址改 lib/services/cloud_config.dart 的 baseUrl 一处即可。
+  String get baseUrl => CloudConfig.baseUrl;
 
-  bool get isConfigured => baseUrl != null;
+  bool get isConfigured => CloudConfig.baseUrl.isNotEmpty;
 
   bool get isLoggedIn => _tokens != null;
 
@@ -60,21 +60,6 @@ class CloudService {
 
   /// 当前套餐（来自最近一次登录/注册响应；精确值以 fetchAccountInfo 为准）。
   String get plan => _tokens?.plan ?? 'free';
-
-  Future<void> setBaseUrl(String raw) async {
-    var url = raw.trim();
-    if (url.isEmpty) {
-      await _prefs.remove(_baseUrlKey);
-      return;
-    }
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'https://$url';
-    }
-    while (url.endsWith('/')) {
-      url = url.substring(0, url.length - 1);
-    }
-    await _prefs.setString(_baseUrlKey, url);
-  }
 
   /// 设备标识：首次生成后持久化，激活/登录/设备管理都用它。
   String get deviceId {
@@ -156,11 +141,7 @@ class CloudService {
 
   // ---------------- 授权与账号信息 ----------------
 
-  Future<void> activate(String code) async {
-    await _authedPost('/api/license/activate', {'code': code.trim()});
-  }
-
-  /// 账号 + 套餐 + 今日用量 + 激活记录（云端个人中心展示用）。
+  /// 账号 + 套餐 + 今日用量（云端个人中心展示用）。
   Future<CloudAccountInfo> fetchAccountInfo() async {
     final data = await _authedGet('/api/license/status');
     final usage = <String, int>{};
@@ -264,11 +245,10 @@ class CloudService {
 
   // ---------------- 更新清单 ----------------
 
-  /// GET /update/check（无需鉴权）。返回原始 JSON；失败/未配置返回 null，
+  /// GET /update/check（无需鉴权）。返回原始 JSON；失败返回 null，
   /// 由 UpdateService 回退 GitHub Releases。
   Future<Map<String, dynamic>?> checkUpdate(String currentVersion) async {
     final base = baseUrl;
-    if (base == null) return null;
     try {
       final resp = await _dio.get<Map<String, dynamic>>(
         '$base/api/update/check',
@@ -339,8 +319,8 @@ class CloudService {
 
   Future<bool> _refresh() async {
     final rt = _tokens?.refreshToken;
+    if (rt == null) return false;
     final base = baseUrl;
-    if (rt == null || base == null) return false;
     try {
       final resp = await _dio.post<Map<String, dynamic>>(
         '$base/api/auth/refresh',
@@ -358,11 +338,7 @@ class CloudService {
     }
   }
 
-  String _requireBaseUrl() {
-    final base = baseUrl;
-    if (base == null) throw const CloudException('未配置云端服务器地址');
-    return base;
-  }
+  String _requireBaseUrl() => baseUrl;
 
   Map<String, dynamic> _unwrap(Response<Map<String, dynamic>> resp) {
     final data = resp.data;

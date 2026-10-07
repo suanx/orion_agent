@@ -828,6 +828,25 @@ State，只有 `HomeShell` 知道怎么切；navigatorKey 只能 push/pop。
 
 ---
 
+## 5.14 云端接入（orion_agent_cloud）
+
+后端仓库 [orion_agent_cloud](https://github.com/suanx/orion_agent_cloud)
+（EdgeOne Pages 边缘函数 + Turso），提供：账号体系（JWT + 设备令牌）、
+账号授权（套餐由管理台直接设置，卡密已下线）、搜索/抓取中继、
+云端定时任务、MCP 云端服务、更新分发、弹窗公告。
+
+> ⚠️ **后端地址写死在 `lib/services/cloud_config.dart` 的 `CloudConfig.baseUrl`**
+> ——全局唯一改址入口，不暴露给用户配置（与 builtin_mcp.dart 内置 MCP 同款策略）。
+> 更换部署地址只改这一行；所有云功能（cloud_service / 内置 MCP / 公告）自动跟随。
+
+接入要点：
+- `cloud_service.dart`：账号/令牌（JWT 2h + refresh 30d 一次性轮换）/ 授权状态 /
+  中继 / 更新检查；`baseUrl` 直接取自 CloudConfig，恒非空
+- 卡密激活已随后端下线：`/api/license/activate` 返回 410，
+  App 端激活 UI 与 `activate` 链路已移除，`/api/license/status` 保留兼容
+- 公告端点 `GET /api/announcement?version=`（公开，版本范围过滤），
+  App 端弹窗展示为待接入项
+
 ## 6. 状态层
 
 `lib/providers/providers.dart`（690 行），全部 provider 集中在此。

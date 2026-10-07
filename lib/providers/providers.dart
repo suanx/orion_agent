@@ -1700,13 +1700,6 @@ class CloudNotifier extends StateNotifier<CloudState> {
     }
   }
 
-  Future<void> setBaseUrl(String url) async {
-    state = state.copyWith(busy: true, clearError: true);
-    await _cloud.setBaseUrl(url);
-    if (!mounted) return;
-    state = state.copyWith(busy: false);
-  }
-
   Future<bool> login(String email, String password) async {
     state = state.copyWith(busy: true, clearError: true);
     try {
@@ -1753,21 +1746,6 @@ class CloudNotifier extends StateNotifier<CloudState> {
   Future<void> logout() async {
     await _cloud.logout();
     state = const CloudState();
-  }
-
-  Future<bool> activate(String code) async {
-    state = state.copyWith(busy: true, clearError: true);
-    try {
-      await _cloud.activate(code);
-      await refreshStatus();
-      state = state.copyWith(busy: false, error: null);
-      return true;
-    } on CloudException catch (e) {
-      state = state.copyWith(busy: false, error: e.message);
-    } catch (e) {
-      state = state.copyWith(busy: false, error: '激活失败：$e');
-    }
-    return false;
   }
 
   /// 刷新套餐与今日用量。静默失败（不打扰 UI）。

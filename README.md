@@ -96,6 +96,16 @@ MCP 工具扩展，数据全部留在本机。
 
 ---
 
+## 云功能（账号 / 中继 / 云端任务）
+
+云功能对接自建后端 [orion_agent_cloud](https://github.com/suanx/orion_agent_cloud)
+（EdgeOne Pages + Turso），提供账号体系、授权套餐、搜索/抓取中继、云端定时任务、
+MCP 云端服务与弹窗公告。
+
+> ⚠️ **后端地址写死在 `lib/services/cloud_config.dart`**（不暴露给用户配置）。
+> 更换/迁移后端部署地址时，只需修改该文件的 `CloudConfig.baseUrl` 一处，
+> 所有云功能自动跟随；改完重新打包发布即可。
+
 ## 隐私
 
 - 会话、消息、长期记忆、知识库**全部存本机 SQLite**，不上传

@@ -9,11 +9,11 @@ import 'glass.dart';
 
 /// 云端服务页：Hero 风格登录/注册页 + 多功能个人中心。
 ///
-/// 未登录：渐变 Hero（吉祥物 + 功能芯片）+ 服务器配置 + 登录/注册表单。
-/// 已登录：账号 Hero（头像/邮箱/套餐/有效期）+ 今日用量 + 卡密激活与
-/// 激活记录 + 设备管理 + 服务器地址 + 退出登录。
+/// 未登录：渐变 Hero（吉祥物 + 功能芯片）+ 登录/注册表单。
+/// 已登录：账号 Hero（头像/邮箱/套餐/有效期）+ 今日用量 + 设备管理 + 退出登录。
 ///
-/// 全部功能可降级：未配置服务器/未登录只是云功能（搜索中继、云端任务、
+/// 云端后端地址写死在 lib/services/cloud_config.dart（不暴露给用户配置）。
+/// 未登录只是云功能（搜索中继、云端任务、
 /// 云端 MCP 工具）不可用，orion 本地功能不受任何影响。
 class CloudAccountScreen extends ConsumerStatefulWidget {
   const CloudAccountScreen({super.key});
@@ -23,10 +23,8 @@ class CloudAccountScreen extends ConsumerStatefulWidget {
 }
 
 class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
-  final _serverCtrl = TextEditingController();
   final _emailCtrl = TextEditingController();
   final _passwordCtrl = TextEditingController();
-  final _codeCtrl = TextEditingController();
   bool _isRegister = false;
   bool _obscurePassword = true;
   bool _devicesRequested = false;
@@ -34,47 +32,15 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
   List<CloudDevice>? _devices;
 
   @override
-  void initState() {
-    super.initState();
-    _serverCtrl.text = ref.read(cloudServiceProvider).baseUrl ?? '';
-  }
-
-  @override
   void dispose() {
-    _serverCtrl.dispose();
     _emailCtrl.dispose();
     _passwordCtrl.dispose();
-    _codeCtrl.dispose();
     super.dispose();
   }
 
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
-
-  // ---------------- 服务器 ----------------
-
-  Future<void> _saveServer() async {
-    await ref.read(cloudProvider.notifier).setBaseUrl(_serverCtrl.text.trim());
-    if (!mounted) return;
-    _toast('服务器地址已保存');
-    setState(() {});
-  }
-
-  /// 个人中心里通过玻璃对话框修改服务器地址。
-  Future<void> _editServerDialog() async {
-    final v = await showGlassTextDialog(
-      context: context,
-      title: '云端服务器',
-      labelText: '服务器地址',
-      hint: '如 orion-cloud.edgeone.app（无需 https:// 前缀）',
-      initialText: _serverCtrl.text,
-      confirmLabel: '保存',
-    );
-    if (v == null) return;
-    _serverCtrl.text = v;
-    await _saveServer();
   }
 
   // ---------------- 登录 / 注册 ----------------
@@ -94,22 +60,6 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
     if (ok) {
       _devicesRequested = false;
       _toast(_isRegister ? '注册成功，欢迎加入' : '登录成功，云端工具已接入 Agent');
-    }
-  }
-
-  // ---------------- 卡密 ----------------
-
-  Future<void> _activate() async {
-    final code = _codeCtrl.text.trim();
-    if (code.isEmpty) {
-      _toast('请输入卡密');
-      return;
-    }
-    final ok = await ref.read(cloudProvider.notifier).activate(code);
-    if (!mounted) return;
-    if (ok) {
-      _codeCtrl.clear();
-      _toast('激活成功，套餐已更新');
     }
   }
 
@@ -305,70 +255,13 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
         ),
         const SizedBox(height: 20),
 
-        // ------- 服务器地址 -------
-        if (!cloud.isConfigured) ...[
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: surface(context),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.dns_outlined,
-                        size: 18, color: scheme.primary),
-                    const SizedBox(width: 8),
-                    Text('配置云端服务器',
-                        style: const TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.w500)),
-                    const SizedBox(width: 8),
-                    Flexible(
-                      child: Text(
-                        '未配置前云功能不可用',
-                        style: TextStyle(
-                            fontSize: 12, color: onSurface(context, 0.45)),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _serverCtrl,
-                  keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(
-                    hintText: '如 orion-cloud.edgeone.app（无需 https:// 前缀）',
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: FilledButton(
-                    onPressed: _saveServer,
-                    child: const Text('保存地址'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 16),
-        ] else ...[
-          _CompactRow(
-            icon: Icons.dns_outlined,
-            label: '服务器',
-            value: _hostOf(cloud.baseUrl),
-            action: TextButton(
-              onPressed: _editServerDialog,
-              child: const Text('修改'),
-            ),
-          ),
-          const SizedBox(height: 16),
-        ],
+        // ------- 云端服务器（地址写死在 lib/services/cloud_config.dart）-------
+        _CompactRow(
+          icon: Icons.dns_outlined,
+          label: '云端服务器',
+          value: _hostOf(cloud.baseUrl),
+        ),
+        const SizedBox(height: 16),
 
         // ------- 登录 / 注册 -------
         Container(
@@ -539,75 +432,6 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
         ),
         const SizedBox(height: 20),
 
-        // ------- 云端授权 -------
-        _Section(
-          title: '云端授权',
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _codeCtrl,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: const InputDecoration(
-                        hintText: 'ORION-XXXX-XXXX-XXXX-XXXX',
-                        isDense: true,
-                        border: OutlineInputBorder(
-                            borderRadius:
-                                BorderRadius.all(Radius.circular(14))),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  FilledButton(
-                    onPressed: state.busy ? null : _activate,
-                    child: const Text('激活'),
-                  ),
-                ],
-              ),
-            ),
-            if (state.error != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: Text(
-                  state.error!,
-                  style: TextStyle(fontSize: 12.5, color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Row(
-                children: [
-                  Text('激活记录',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
-                          color: onSurface(context, 0.55))),
-                  const Spacer(),
-                  if (state.licenses.isNotEmpty)
-                    Text('${state.licenses.length} 张',
-                        style: TextStyle(
-                            fontSize: 12, color: onSurface(context, 0.4))),
-                ],
-              ),
-            ),
-            if (state.licenses.isEmpty)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 2, 16, 12),
-                child: Text(
-                  '暂无激活记录，激活卡密后显示在这里',
-                  style: TextStyle(fontSize: 12.5, color: onSurface(context, 0.4)),
-                ),
-              )
-            else
-              ...state.licenses.map((lic) => _LicenseRow(license: lic)),
-            const SizedBox(height: 8),
-          ],
-        ),
-        const SizedBox(height: 20),
-
         // ------- 设备管理 -------
         _Section(
           title: '设备管理',
@@ -667,12 +491,8 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
           children: [
             _CompactRow(
               icon: Icons.dns_outlined,
-              label: '服务器地址',
+              label: '云端服务器',
               value: _hostOf(cloud.baseUrl),
-              action: TextButton(
-                onPressed: _editServerDialog,
-                child: const Text('修改'),
-              ),
             ),
           ],
         ),
@@ -1068,52 +888,7 @@ class _StatDivider extends StatelessWidget {
   }
 }
 
-/// 激活记录一行。
-class _LicenseRow extends StatelessWidget {
-  const _LicenseRow({required this.license});
 
-  final CloudActivatedLicense license;
-
-  @override
-  Widget build(BuildContext context) {
-    final duration =
-        license.durationDays != null ? ' · ${license.durationDays} 天' : '';
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: [
-          Icon(Icons.receipt_long_rounded,
-              size: 17, color: onSurface(context, 0.5)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  license.code,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w500,
-                    fontFamily: 'monospace',
-                    color: onSurface(context, 0.85),
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  '${cloudPlanLabel(license.plan)}$duration · ${_fmtDate(license.boundAt)}',
-                  style: TextStyle(fontSize: 11.5, color: onSurface(context, 0.42)),
-                ),
-              ],
-            ),
-          ),
-          Icon(Icons.check_circle_rounded,
-              size: 16, color: Theme.of(context).colorScheme.primary),
-        ],
-      ),
-    );
-  }
-}
 
 /// 设备一行。
 class _DeviceRow extends StatelessWidget {
