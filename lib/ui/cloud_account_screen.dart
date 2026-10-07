@@ -612,13 +612,13 @@ class _CompactRow extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.value,
-    required this.action,
+    this.action,
   });
 
   final IconData icon;
   final String label;
   final String value;
-  final Widget action;
+  final Widget? action;
 
   @override
   Widget build(BuildContext context) {
@@ -642,7 +642,7 @@ class _CompactRow extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ),
-          action,
+          if (action != null) action!,
         ],
       ),
     );

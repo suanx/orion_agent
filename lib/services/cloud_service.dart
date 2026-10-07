@@ -45,7 +45,7 @@ class CloudService {
   /// 换后端地址改 lib/services/cloud_config.dart 的 baseUrl 一处即可。
   String get baseUrl => CloudConfig.baseUrl;
 
-  bool get isConfigured => CloudConfig.baseUrl.isNotEmpty;
+  bool get isConfigured => true; // 地址内置, 恒已配置
 
   bool get isLoggedIn => _tokens != null;
 
@@ -129,7 +129,7 @@ class CloudService {
     await _secure.delete(key: _tokensKey);
     await _secure.delete(key: _deviceTokenKey);
     await _prefs.remove(_emailKey);
-    if (rt != null && baseUrl != null) {
+    if (rt != null) {
       try {
         await _dio.post('$baseUrl/api/auth/logout',
             data: {'refreshToken': rt});

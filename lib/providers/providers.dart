@@ -1771,7 +1771,7 @@ class CloudNotifier extends StateNotifier<CloudState> {
   Future<void> _ensureCloudMcp() async {
     try {
       final base = _cloud.baseUrl;
-      if (base == null || !_cloud.isLoggedIn) return;
+      if (!_cloud.isLoggedIn) return;
       final token = await _cloud.getOrCreateDeviceToken();
       if (token.isEmpty) return;
       final url = '$base/api/mcp?token=$token';
