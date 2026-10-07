@@ -140,7 +140,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         offset: _inputController.text.length);
   }
 
-  /// 选择工具条「发送」（v0.2.31-beta）：把选中文字直接作为新消息发出。
+  /// 选择工具条「发送」（v0.2.31）：把选中文字直接作为新消息发出。
   /// 输入框已有草稿时不覆盖——静默丢字比多一步操作更伤人。
   void _sendSelection(String text) {
     final t = text.trim();
@@ -1043,7 +1043,7 @@ class _CachedMarkdown extends StatelessWidget {
   }
 }
 
-/// 消息正文选择区（v0.2.31-beta）：长按/拖动进入系统原生选择（手柄 +
+/// 消息正文选择区（v0.2.31）：长按/拖动进入系统原生选择（手柄 +
 /// 工具条），工具条按钮为「全选 / 复制 / 引用 / 发送」——替代旧的
 /// 长按弹出菜单（v0.2.28-beta），所见即所选、原生手柄可拖动微调。
 /// 无文本可选时直接透传，不包一层空的 SelectionArea。
@@ -1057,47 +1057,84 @@ Widget _selectionArea({
   void Function(String text)? onSend,
 }) {
   if (!hasText) return child;
-  return SelectionArea(
-    contextMenuBuilder: (ctx, state) {
-      // 引用/发送按钮按当前选区显隐；按下时再读一次最新选区，
-      // 避免菜单展示期间拖动手柄导致内容过期。
-      final selected = state.getSelectedContent()?.plainText ?? '';
-      TextSelectionToolbarTextButton btn(String label, VoidCallback onPressed) =>
-          TextSelectionToolbarTextButton(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            onPressed: onPressed,
-            child: Text(label),
-          );
-      return AdaptiveTextSelectionToolbar(
-        anchors: state.contextMenuAnchors,
-        children: [
-          btn('全选', () => state.selectAll(SelectionChangedCause.toolbar)),
-          btn('复制', () async {
-            final text = state.getSelectedContent()?.plainText ?? '';
-            if (text.isEmpty) return;
-            await Clipboard.setData(ClipboardData(text: text));
-            // 与原生 Android 一致：复制后清掉选区、收起工具条。
-            state.clearSelection();
-            if (ctx.mounted) {
-              ScaffoldMessenger.of(ctx)
-                  .showSnackBar(const SnackBar(content: Text('已复制')));
-            }
-          }),
-          if (onQuote != null && selected.isNotEmpty)
-            btn('引用', () {
-              onQuote(state.getSelectedContent()?.plainText ?? selected);
+  return _SelectionAreaShell(onQuote: onQuote, onSend: onSend, child: child);
+}
+
+/// 选区缓存壳：`SelectableRegionState`（CI 的 Flutter 3.47.6）没有公开的
+/// `getSelectedContent()`，读选中文字只能订阅 `SelectionArea.onSelectionChanged`。
+/// 回调里立刻取 `plainText` 存成字符串——`SelectedContent` 对象持选区几何，
+/// 拖动手柄后再读会过期/失效。
+class _SelectionAreaShell extends StatefulWidget {
+  const _SelectionAreaShell({
+    required this.child,
+    this.onQuote,
+    this.onSend,
+  });
+
+  final Widget child;
+  final void Function(String text)? onQuote;
+  final void Function(String text)? onSend;
+
+  @override
+  State<_SelectionAreaShell> createState() => _SelectionAreaShellState();
+}
+
+class _SelectionAreaShellState extends State<_SelectionAreaShell> {
+  /// 最近一次选区文本。选区一变（划词、拖手柄、全选、清空）框架就会
+  /// 回调 `onSelectionChanged` 覆盖它；只赋值不 setState——工具条是
+  /// Overlay 独立构建，按钮按下时读字段即为最新，无需整树刷新。
+  String _selected = '';
+
+  @override
+  Widget build(BuildContext context) {
+    return SelectionArea(
+      onSelectionChanged: (content) {
+        _selected = content?.plainText ?? '';
+      },
+      contextMenuBuilder: (ctx, state) {
+        // 按钮按下时读 `_selected`（最新选区），兜底工具条构建时的快照，
+        // 避免菜单展示期间拖动手柄导致内容过期。
+        final snapshot = _selected;
+        String current() => _selected.isNotEmpty ? _selected : snapshot;
+        TextSelectionToolbarTextButton btn(String label, VoidCallback onPressed) =>
+            TextSelectionToolbarTextButton(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              onPressed: onPressed,
+              child: Text(label),
+            );
+        return AdaptiveTextSelectionToolbar(
+          anchors: state.contextMenuAnchors,
+          children: [
+            btn('全选', () => state.selectAll(SelectionChangedCause.toolbar)),
+            btn('复制', () async {
+              final text = current();
+              if (text.isEmpty) return;
+              await Clipboard.setData(ClipboardData(text: text));
+              // 与原生 Android 一致：复制后清掉选区、收起工具条。
               state.clearSelection();
+              if (ctx.mounted) {
+                ScaffoldMessenger.of(ctx)
+                    .showSnackBar(const SnackBar(content: Text('已复制')));
+              }
             }),
-          if (onSend != null && selected.isNotEmpty)
-            btn('发送', () {
-              onSend(state.getSelectedContent()?.plainText ?? selected);
-              state.clearSelection();
-            }),
-        ],
-      );
-    },
-    child: child,
-  );
+            if (widget.onQuote != null)
+              btn('引用', () {
+                final text = current();
+                if (text.isNotEmpty) widget.onQuote!(text);
+                state.clearSelection();
+              }),
+            if (widget.onSend != null)
+              btn('发送', () {
+                final text = current();
+                if (text.isNotEmpty) widget.onSend!(text);
+                state.clearSelection();
+              }),
+          ],
+        );
+      },
+      child: widget.child,
+    );
+  }
 }
 
 class _MessageBubble extends StatelessWidget {
@@ -1108,7 +1145,7 @@ class _MessageBubble extends StatelessWidget {
   /// 选择工具条「引用」：把选中文字交还输入框（v0.2.28-beta 长按菜单保留）。
   final void Function(String text)? onQuote;
 
-  /// 选择工具条「发送」：把选中文字作为新消息发出（v0.2.31-beta）。
+  /// 选择工具条「发送」：把选中文字作为新消息发出（v0.2.31）。
   final void Function(String text)? onSend;
 
   @override
@@ -1240,7 +1277,7 @@ class _StreamingBubble extends StatelessWidget {
   /// 思考行右侧模式徽章（⚡快速回答 / ⚡深度思考），仅流式期间显示。
   final String? modeLabel;
 
-  /// 选择工具条「引用」/「发送」回调（与已完成消息一致，v0.2.31-beta）。
+  /// 选择工具条「引用」/「发送」回调（与已完成消息一致，v0.2.31）。
   final void Function(String text)? onQuote;
   final void Function(String text)? onSend;
 
