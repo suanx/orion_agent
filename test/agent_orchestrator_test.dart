@@ -7,6 +7,9 @@
 //   2. 空名 tool_call → 回填错误结果继续（P2-11：否则下一轮被服务端 400）
 //   3. 连续重复调用同一工具（同名同参 3 次）→ 提前中止
 //   4. 耗尽 _maxSteps=8 轮 → 交付 lastVisible 进展而非全部丢弃
+import 'dart:io';
+
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:orion_agent/models/chat_message.dart';
@@ -73,10 +76,43 @@ ChatMessage assistant(String content, [List<ToolCall> toolCalls = const []]) =>
     ChatMessage(id: 'a${content.hashCode}', role: 'assistant',
         content: content, toolCalls: toolCalls);
 
-AgentOrchestrator buildOrchestrator(FakeLlm llm) => AgentOrchestrator(
+AgentOrchestrator buildOrchestrator(LlmClient llm) => AgentOrchestrator(
       llm: llm,
       tools: FakeTools(),
       memory: FakeMemory(),
+    );
+
+/// 按剧本逐轮执行流工厂的假 LLM：每个工厂是「一轮请求」的完整行为
+/// （可以先吐 delta 再抛错，模拟流中途断；也可以直接抛，模拟首包失败）。
+class ScriptedLlm implements LlmClient {
+  ScriptedLlm(this.rounds);
+
+  final List<Stream<LlmEvent> Function()> rounds;
+  int call = 0;
+
+  @override
+  Stream<LlmEvent> chatStream({
+    required LlmConfig config,
+    required List<Map<String, dynamic>> messages,
+    List<Map<String, dynamic>>? tools,
+    dynamic cancelToken,
+    bool thinking = false,
+    String reasoningEffort = 'medium',
+  }) async* {
+    final idx = call < rounds.length ? call : rounds.length - 1;
+    call++;
+    yield* rounds[idx]();
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
+}
+
+/// 连接被重置（基站切换/NAT 超时的典型异常形态）。
+Object connectionReset() => DioException(
+      requestOptions: RequestOptions(path: '/chat/completions'),
+      type: DioExceptionType.connectionError,
+      error: const SocketException('connection reset'),
     );
 
 final config = LlmConfig(
@@ -189,4 +225,94 @@ void main() {
     expect(toolMsgs.single['tool_call_id'], 'c1');
     expect(toolMsgs.single['content'], 'ok:calculator:{"e":"1+1"}');
   });
+
+  setUp(() {
+    // 重试退避置 0，测试不等待真实秒数
+    AgentOrchestrator.retryBackoffBaseSeconds = 0;
+  });
+
+  tearDown(() {
+    AgentOrchestrator.retryBackoffBaseSeconds = 2;
+  });
+
+  test('首包前断流：自动整轮重发并成功，无 Restart 事件（UI 无感知）', () async {
+    final llm = ScriptedLlm([
+      () => throw connectionReset(),
+      () async* {
+        yield FinalMessage(assistant('恢复后完成'));
+      },
+    ]);
+    final events =
+        await buildOrchestrator(llm).run(config: config, history: history).toList();
+
+    expect(events.whereType<AgentFailure>(), isEmpty);
+    expect(events.whereType<AgentRoundRestart>(), isEmpty,
+        reason: '本轮没吐过字，重试不需要 UI 清气泡');
+    expect(events.whereType<AgentStatus>().any((s) => s.text.contains('自动重试')),
+        isTrue, reason: '重试动作要在「正在思考」步骤里可见');
+    expect(events.whereType<AgentAnswer>().single.message.content, '恢复后完成');
+    expect(llm.call, 2);
+  });
+
+  test('流中途断（已吐字）：重试前发 AgentRoundRestart，最终回答不拼接残句', () async {
+    final llm = ScriptedLlm([
+      () async* {
+        yield ContentDelta('半句');
+        throw connectionReset();
+      },
+      () async* {
+        yield FinalMessage(assistant('完整回答'));
+      },
+    ]);
+    final events =
+        await buildOrchestrator(llm).run(config: config, history: history).toList();
+
+    expect(events.whereType<AgentFailure>(), isEmpty);
+    final restarts = events.whereType<AgentRoundRestart>().toList();
+    expect(restarts, hasLength(1), reason: '吐过字的重试必须通知 UI 清残缺气泡');
+    expect(restarts.single.reasoningPrefix, '');
+    final deltas = events.whereType<AgentDelta>().map((e) => e.delta).toList();
+    expect(deltas, contains('半句'),
+        reason: '断前的残句确实到达过 UI（清理由 AgentRoundRestart 消费方负责）');
+    expect(events.whereType<AgentAnswer>().single.message.content, '完整回答');
+  });
+
+  test('非临时性错误（如余额不足）不重试，立即失败', () async {
+    final llm = ScriptedLlm([
+      () async* {
+        throw Exception('模型服务返回错误：余额不足');
+      },
+    ]);
+    final events =
+        await buildOrchestrator(llm).run(config: config, history: history).toList();
+
+    expect(llm.call, 1, reason: '明确的服务端错误重试没有意义');
+    expect(events.whereType<AgentRoundRestart>(), isEmpty);
+    final failures = events.whereType<AgentFailure>().toList();
+    expect(failures, hasLength(1));
+    expect(failures.single.message, contains('余额不足'));
+  });
+
+  test('多轮任务重试耗尽：已完成轮次的 lead 不丢弃，随部分回答落库', () async {
+    final llm = ScriptedLlm([
+      () async* {
+        yield FinalMessage(assistant('第一轮进展', [
+          ToolCall(id: 'c1', name: 'web_search', arguments: '{"q":"x"}'),
+        ]));
+      },
+      () => throw connectionReset(),
+      () => throw connectionReset(),
+    ]);
+    final events =
+        await buildOrchestrator(llm).run(config: config, history: history).toList();
+
+    expect(llm.call, 3, reason: '首次成功轮 + maxRoundRetries=2 次重试 = 3 次请求');
+    final answers = events.whereType<AgentAnswer>().toList();
+    expect(answers, hasLength(1), reason: 'lead 非空时必须保住已完成部分');
+    expect(answers.single.message.content, contains('第一轮进展'));
+    expect(answers.single.message.content, contains('网络中断'));
+    expect(events.whereType<AgentFailure>(), hasLength(1),
+        reason: '部分回答照常保存的同时，错误提示也要弹');
+  });
 }
+

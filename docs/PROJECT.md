@@ -1827,6 +1827,77 @@ v0.2.5 修的 Markdown 空断言是并存的另一个真实隐患（列表渲染
 ②「回退」必须回退**代码**而不是只回退构建开关；③ 修改 UI 动画/布局类
 代码时，先查框架对该组合的约束（clip 必配 decoration）。
 
+### 11.20 对话经常断、长任务跑不完（网络故障零重试 + 60s 空闲超时过紧）
+
+**现象**：同样的 API 配置，其他客户端长任务不断，本应用对话经常中断、
+多轮工具任务中途夭折。
+
+**根因**（四连环）：
+1. `chatStream` 只在「零产出 + 401/402/403/429」时换 Key 重试——连接
+   超时、流中断（基站切换/NAT 超时/代理断开）、5xx 等**临时性故障一律
+   直接判死**。桌面端工具普遍内建这层重试，对比之下显得「经常断」；
+2. SSE 空闲超时 60s 过紧：思考型模型深推理/长上下文无缓存首 token
+   静默期普遍 1~3 分钟，被误杀成「模型响应超时」（错误文案还把
+   Duration 对象直接打进消息）；
+3. 编排器任何一轮失败即 return：lead（多轮已生成文本）与思考全丢弃、
+   不落库，长任务断 = 全部白干，重试从头烧 token；
+4. 流中途断没有 UI 恢复通道：已渲染的残缺文本无法在重试前清掉。
+
+**修复**：
+- `llm_client.chatStream` 增加首包前自动重试（临时性故障最多 2 次，
+  退避 2s/4s，429 更长），新增 `isTransientFailure` 纯函数分类
+  （连接/收发超时、connectionError、5xx、429、SocketException、
+  SSE 空闲超时；cancel/证书/4xx 不重试）；
+- 空闲超时 60s → 180s，文案改为秒数；
+- `agent_orchestrator` 每轮 LLM 请求套整轮重试（最多 2 次，退避
+  n×基数，`retryBackoffBaseSeconds` 测试可置 0）：流中途断时发
+  `AgentRoundRestart`（携带已完成轮次的思考前缀）通知 UI 清残缺
+  气泡，同时截掉失败轮的残缺思考防拼接错乱；
+- 失败收尾保成果：lead 非空时把已完成部分作为部分回答落库（标注
+  「网络中断，任务已中止」），错误提示照常弹——长任务不再全丢；
+- `providers` 处理 `AgentRoundRestart`：清 streamingContent、
+  思考面板回退到已完成轮次。
+
+**为什么整轮重发是安全的**：重试时 messages 未变、本轮 tool_call
+尚未执行；残缺增量由 AgentRoundRestart 通知 UI 丢弃，不会与重试
+内容拼接。Token 用量若已收到帧会重复记账一次（真实消耗已发生，可接受）。
+
+**教训**：移动端流式客户端必须内建两级重试（首包前静默重试 + 已吐字
+的整轮重发）；「断流全丢」比「断流」本身更伤长任务体验。
+
+### 11.19 Debian 安装报「Deletion failed, path = debian-rootfs.tmp」（finally 清理异常顶掉真因）
+
+**现象**（真机日志）：Alpine 正常（8/8 组件可用），Debian 经 R2 源下载、
+解压完成（已创建 505 个符号链接）后报
+`安装失败：FileSystemException: Deletion failed, path = '.../files/debian-rootfs.tmp'
+(OS Error: Directory not empty, errno = 39)`。
+
+**根因链**（三连环）：
+1. Android（f2fs/ext4）上对超大目录树（Debian rootfs 上万文件），
+   dart:io 的 `deleteSync(recursive: true)` 会**间歇性 ENOTEMPTY**——
+   子项 unlink 完成后父目录短暂仍报非空，Dart 不重试，直接抛
+   Deletion failed；
+2. **Dart 语义：finally 中抛出的异常会顶掉正在传播的原始异常**。
+   `_doInstall` 的 finally 清理 `debian-rootfs.tmp` 失败后，真正导致
+   安装中断的原始异常被整体吞掉，用户看到的只剩清理报错——真因不可见；
+3. 连锁恶化：清理失败 → 上百 MB 的 rootfs.tmp 残留 files/ → 下次安装
+   开场删同一残留**再次失败** → 安装永久卡死 + 存储持续膨胀。
+
+**修复**（terminal_service.dart）：
+- 新增 `deletePathRobust`：重试 3 次（ENOTEMPTY 是瞬态的）→ 仍失败则
+  改名 `.trash-<时间戳>`（rename 只动目录项，对「非空」免疫，几乎不会
+  失败）→ 主流程立刻解阻塞，trash 留待下次消化；**全路径绝不抛错**；
+- `_doInstall` 的 finally、开场残留清理、旧 rootfs 删除、`uninstall`
+  全部换用该助手；
+- 新增 `_cleanTrashDirs` 在每次安装开场清理孤儿 trash——同时是修复前
+  版本卡死残留（debian-rootfs.tmp）的**自愈入口**，装一次即清掉；
+- 新增 5 个单测（正常删除/不存在路径/持续失败走回收站/瞬态失败重试
+  恢复/孤儿 trash 可被消化）。
+
+**教训**：① finally 里的清理代码必须「尽力而为、绝不抛错」，否则会
+掩盖真因；② 对 Android 大目录树，dart:io 递归删除必须带重试/兜底，
+「删一次就当删掉」的假设在真机上不成立。
+
 ## 12. 待修复的问题
 
 按建议优先级排序。**均未实现**。

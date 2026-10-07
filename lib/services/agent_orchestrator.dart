@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
 import 'llm_client.dart';
 import 'memory_service.dart';
@@ -63,6 +64,19 @@ class AgentFailure extends AgentEvent {
   const AgentFailure(this.message);
 }
 
+/// 本轮 LLM 请求因临时性故障（网络中断/超时）将整轮重发。
+///
+/// UI 收到后应丢弃当前流式气泡的**本轮增量**（残缺文本若不清掉，
+/// 重试内容会接在半句话后面）。重发前已吐字才可能发出此事件；
+/// 首包前的失败在 LlmClient 内部静默重试，UI 无感知。
+///
+/// [reasoningPrefix] 是此前已完成轮次的思考文本——重发轮自己的残缺
+/// 思考已被编排器截掉，UI 用它重置思考面板防止拼接错乱。
+class AgentRoundRestart extends AgentEvent {
+  final String reasoningPrefix;
+  const AgentRoundRestart({required this.reasoningPrefix});
+}
+
 /// Agent 编排器：ReAct 循环（推理 → 工具调用 → 观察结果 → 继续推理）。
 ///
 /// 工具调用轮数**无上限**（2026-10-07 用户要求，原上限 8 轮）：
@@ -92,6 +106,14 @@ class AgentOrchestrator {
   /// 技能服务；为 null 时系统提示词不含技能清单。
   final SkillService? _skills;
 
+  /// 每轮 LLM 请求因临时性故障（流中断/超时）整轮重发的最大次数。
+  /// 首包前的失败由 LlmClient 内部处理，这里兜流中途断。
+  static const maxRoundRetries = 2;
+
+  /// 重试退避基数（秒）：第 n 次重试等待 n×base。测试置 0 加速。
+  @visibleForTesting
+  static int retryBackoffBaseSeconds = 2;
+
   Stream<AgentEvent> run({
     required LlmConfig config,
     required List<ChatMessage> history,
@@ -112,7 +134,8 @@ class AgentOrchestrator {
     final lead = StringBuffer();
     // 各轮思考过程累积：回答落库时随消息一起保存，UI 可折叠回看。
     // 多轮工具调用时每轮都可能有思考，用空行连接保持段落完整。
-    final reasoningBuf = StringBuffer();
+    // 可重赋值：断流重试时要把失败轮的残缺思考截掉（见下）。
+    var reasoningBuf = StringBuffer();
     // 同一工具 + 同一参数连续重复调用说明模型卡住了，提前收尾避免空转烧 token。
     // （轮数无上限后，这是无限循环的主要护栏。）
     String? prevSig;
@@ -125,53 +148,111 @@ class AgentOrchestrator {
       }
 
       ChatMessage? assistant;
-      try {
-        await for (final ev in _llm.chatStream(
-          config: config,
-          messages: messages,
-          tools: _tools.toOpenAiTools(),
-          cancelToken: cancelToken,
-          thinking: thinking,
-          reasoningEffort: reasoningEffort,
-        )) {
-          if (ev is ContentDelta) {
-            yield AgentDelta(ev.delta);
-          } else if (ev is ReasoningDelta) {
-            reasoningBuf.write(ev.delta);
-            yield AgentReasoning(ev.delta);
-          } else if (ev is FinalMessage) {
-            assistant = ev.message;
-          } else if (ev is TokenUsage) {
-            // 记账：每个工具调用轮次都单独计一次
-            _stats?.record(
-              provider: config.name.isEmpty ? config.model : config.name,
-              model: config.model,
-              inputTokens: ev.promptTokens,
-              outputTokens: ev.completionTokens,
-              cachedTokens: ev.cachedTokens,
-            );
-            // 转发给 UI 层（对话页的用量弹窗按会话累计展示）。
-            // TokenUsage 是 LlmEvent 不是 AgentEvent，不能直接 yield，
-            // 用 AgentTokenUsage 包装（providers 侧按此类型累计）。
-            yield AgentTokenUsage(ev.promptTokens, ev.completionTokens);
+      // ---- 轮级自动重试（长任务的性命线）----
+      // 长任务 = 多轮工具循环 = 请求次数多，任何一轮撞上网络抖动就
+      // 全盘皆输。首包前的失败已在 LlmClient 内部静默重试；这里兜的是
+      // 流中途断（已吐字后断，LlmClient 不能重试否则内容重复）。
+      // 整轮重发是安全的：messages 未变，本轮的 tool_call 尚未执行。
+      // UI 侧通过 AgentRoundRestart 清掉本轮残缺气泡，重发内容不拼接。
+      var roundDeltas = 0;
+      var roundReasoningStart = reasoningBuf.length;
+      Object? lastError;
+      for (var attempt = 0; attempt <= maxRoundRetries; attempt++) {
+        if (attempt > 0) {
+          // 退避：2s、4s（基数测试时置 0）
+          await Future<void>.delayed(
+              Duration(seconds: retryBackoffBaseSeconds * attempt));
+          if (cancelToken?.isCancelled ?? false) {
+            yield const AgentFailure('已取消。');
+            return;
           }
+          if (roundDeltas > 0) {
+            yield AgentRoundRestart(
+                reasoningPrefix:
+                    reasoningBuf.toString().substring(0, roundReasoningStart));
+          }
+          if (reasoningBuf.length > roundReasoningStart) {
+            reasoningBuf = StringBuffer(
+                reasoningBuf.toString().substring(0, roundReasoningStart));
+          }
+          roundDeltas = 0;
+          yield AgentStatus(
+              '网络波动，正在自动重试（第 $attempt/$maxRoundRetries 次）…');
         }
-      } on DioException catch (e) {
-        // 用户主动点「停止」时 Dio 抛 cancel，状态码为 null。若不区分，
-        // _dioError 会把它渲染成"请求失败（HTTP null）"，让用户以为 App 坏了。
-        if (e.type == DioExceptionType.cancel) {
-          yield const AgentFailure('已取消。');
-          return;
+        try {
+          await for (final ev in _llm.chatStream(
+            config: config,
+            messages: messages,
+            tools: _tools.toOpenAiTools(),
+            cancelToken: cancelToken,
+            thinking: thinking,
+            reasoningEffort: reasoningEffort,
+          )) {
+            if (ev is ContentDelta) {
+              roundDeltas++;
+              yield AgentDelta(ev.delta);
+            } else if (ev is ReasoningDelta) {
+              roundDeltas++;
+              reasoningBuf.write(ev.delta);
+              yield AgentReasoning(ev.delta);
+            } else if (ev is FinalMessage) {
+              assistant = ev.message;
+            } else if (ev is TokenUsage) {
+              // 记账：每个工具调用轮次都单独计一次
+              _stats?.record(
+                provider: config.name.isEmpty ? config.model : config.name,
+                model: config.model,
+                inputTokens: ev.promptTokens,
+                outputTokens: ev.completionTokens,
+                cachedTokens: ev.cachedTokens,
+              );
+              // 转发给 UI 层（对话页的用量弹窗按会话累计展示）。
+              // TokenUsage 是 LlmEvent 不是 AgentEvent，不能直接 yield，
+              // 用 AgentTokenUsage 包装（providers 侧按此类型累计）。
+              yield AgentTokenUsage(ev.promptTokens, ev.completionTokens);
+            }
+          }
+          lastError = null;
+          break;
+        } on DioException catch (e) {
+          // 用户主动点「停止」时 Dio 抛 cancel，状态码为 null。若不区分，
+          // _dioError 会把它渲染成"请求失败（HTTP null）"，让用户以为 App 坏了。
+          if (e.type == DioExceptionType.cancel) {
+            yield const AgentFailure('已取消。');
+            return;
+          }
+          lastError = e;
+        } catch (e) {
+          lastError = e;
         }
-        yield AgentFailure(_dioError(e));
-        return;
-      } catch (e) {
-        yield AgentFailure('调用模型失败：$e');
-        return;
+        // 只对临时性故障重试（网络中断/超时/5xx/429）。模型服务明确报错
+        // （余额不足、参数错误等）重试没有意义，立即走失败路径。
+        if (!LlmClient.isTransientFailure(lastError)) break;
       }
 
       if (assistant == null) {
-        yield const AgentFailure('模型没有返回内容，请重试。');
+        if (lastError == null) {
+          yield const AgentFailure('模型没有返回内容，请重试。');
+          return;
+        }
+        // ---- 失败收尾：已完成的中间成果必须保下来 ----
+        // 长任务可能已跑完 N 轮工具，lead 里是各轮已生成的文本。
+        // 直接丢弃 = 用户重试时从头再来（重新烧 token + 工具重跑）。
+        // 把 lead 作为部分回答落库（标注中止原因），错误提示照常弹。
+        final failureMsg = lastError is DioException
+            ? _dioError(lastError)
+            : '调用模型失败：$lastError';
+        if (lead.isNotEmpty) {
+          yield AgentAnswer(ChatMessage(
+            id: 'asst_${DateTime.now().millisecondsSinceEpoch}',
+            role: 'assistant',
+            content: '$lead\n\n（网络中断，任务已中止；以上是已完成部分，'
+                '可直接继续对话让模型接着做。）',
+            reasoning:
+                reasoningBuf.isEmpty ? null : reasoningBuf.toString(),
+          ));
+        }
+        yield AgentFailure(failureMsg);
         return;
       }
 
@@ -342,6 +423,10 @@ class AgentOrchestrator {
     if (e.type == DioExceptionType.connectionTimeout ||
         e.type == DioExceptionType.receiveTimeout) {
       return '网络超时，请检查网络或稍后重试。';
+    }
+    if (e.type == DioExceptionType.connectionError) {
+      return '网络连接中断（自动重试后仍失败）。请检查网络后重新发送，'
+          '已完成的部分已保留。';
     }
     return '请求失败（HTTP $code）$detail'.trim();
   }

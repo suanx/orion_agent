@@ -1016,6 +1016,12 @@ class ChatNotifier extends StateNotifier<ChatState> {
         } else if (ev is AgentTokenUsage) {
           _bumpUsage(sessionId, 0, ev.promptTokens);
           _bumpUsage(sessionId, 1, ev.completionTokens);
+        } else if (ev is AgentRoundRestart) {
+          // 断流整轮重发：丢弃本轮残缺增量，思考面板回退到已完成轮次。
+          // 不清 steps——「正在自动重试」的状态行要留着给用户看。
+          buf.clear();
+          state = state.copyWith(
+              streamingContent: '', streamingReasoning: ev.reasoningPrefix);
         } else if (ev is AgentAnswer) {
           answer = ev.message;
         } else if (ev is AgentFailure) {

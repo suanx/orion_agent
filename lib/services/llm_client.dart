@@ -210,9 +210,14 @@ class LlmClient {
 
   /// 发起一轮流式对话。
   ///
-  /// 多 Key 模式下，若某个 Key 在**产出任何内容之前**就失败，
-  /// 会自动换下一个 Key 重发。已经吐过字再重试会导致内容重复，
-  /// 所以那种情况直接抛错。
+  /// 两层自动恢复（只作用于**首个 token 产出之前**，已吐字后重发会
+  /// 内容重复，一律直接抛错）：
+  ///   1. 临时性网络/服务端故障（连接超时、流中断、5xx、429）→
+  ///      原地退避重试最多 2 次（429 退避更长，给限流恢复窗口）；
+  ///   2. 鉴权/额度类失败（401/402/403/429）→ 换下一个 Key 重发。
+  ///
+  /// 移动网络下首包前失败是常态，桌面端工具普遍内建这层重试——
+  /// 之前没有它，「同样的 API 配置其他工具不断、本应用常断」。
   Stream<LlmEvent> chatStream({
     required LlmConfig config,
     required List<Map<String, dynamic>> messages,
@@ -225,33 +230,49 @@ class LlmClient {
     if (keys.isEmpty) {
       throw Exception('未配置 API Key');
     }
+    const maxNetworkRetries = 2;
     for (var i = 0; i < keys.length; i++) {
       var yieldedAnything = false;
-      try {
-        await for (final ev in _chatStreamOnce(
-          config: config,
-          apiKey: keys[i],
-          messages: messages,
-          tools: tools,
-          cancelToken: cancelToken,
-          thinking: thinking,
-          reasoningEffort: reasoningEffort,
-        )) {
-          yieldedAnything = true;
-          yield ev;
+      var networkRetries = 0;
+      while (true) {
+        try {
+          await for (final ev in _chatStreamOnce(
+            config: config,
+            apiKey: keys[i],
+            messages: messages,
+            tools: tools,
+            cancelToken: cancelToken,
+            thinking: thinking,
+            reasoningEffort: reasoningEffort,
+          )) {
+            yieldedAnything = true;
+            yield ev;
+          }
+          return;
+        } catch (e) {
+          if (yieldedAnything) rethrow;
+          if (i < keys.length - 1 && isKeyFailure(e)) {
+            debugPrint('第 ${i + 1} 个 Key 不可用（$e），自动切换到下一个');
+            break;
+          }
+          final canRetry = networkRetries < maxNetworkRetries &&
+              !(cancelToken?.isCancelled ?? false) &&
+              isTransientFailure(e);
+          if (!canRetry) rethrow;
+          networkRetries++;
+          // 退避 2s/4s；429 是限流，给更长的恢复窗口
+          final isRateLimit = e is DioException && e.response?.statusCode == 429;
+          final backoff =
+              Duration(seconds: (isRateLimit ? 5 : 2) * networkRetries);
+          debugPrint('chatStream 网络故障（$e），${backoff.inSeconds}s 后第 '
+              '$networkRetries/$maxNetworkRetries 次重试');
+          await Future<void>.delayed(backoff);
         }
-        return;
-      } catch (e) {
-        final canRetry = !yieldedAnything &&
-            i < keys.length - 1 &&
-            isKeyFailure(e);
-        if (!canRetry) rethrow;
-        debugPrint('第 ${i + 1} 个 Key 不可用（$e），自动切换到下一个');
       }
     }
   }
 
-  /// 判断异常是否属于「这个 Key 不行，换一个可能行」。
+  /// 判断异常是否属于「Key 不行，换一个可能行」。
   ///
   /// 只认鉴权/额度类状态码。5xx 换 Key 没有意义（是服务端问题），
   /// 超时同样不换（换 Key 也一样超时）。
@@ -260,6 +281,34 @@ class LlmClient {
     final code = e.response?.statusCode;
     if (code == 401 || code == 402 || code == 403 || code == 429) return true;
     return false;
+  }
+
+  /// 判断异常是否属于「临时性故障，等一下原地重试可能就好」。
+  ///
+  /// 与 [isKeyFailure] 互补：那个管「换 Key 是否有意义」，这个管
+  /// 「原地重试是否有意义」。覆盖：连接建立/发送/接收超时、连接被
+  /// 重置（基站切换、NAT 超时、代理断开）、5xx、429、socket 级错误，
+  /// 以及 SSE 空闲超时（本类抛的普通 Exception，非 DioException）。
+  /// 用户取消（cancel）、证书错误、4xx 参数错误不在其列。
+  /// 传 null（无异常）返回 false。
+  static bool isTransientFailure(Object? e) {
+    if (e == null) return false;
+    if (e is DioException) {
+      switch (e.type) {
+        case DioExceptionType.connectionTimeout:
+        case DioExceptionType.sendTimeout:
+        case DioExceptionType.receiveTimeout:
+        case DioExceptionType.connectionError:
+          return true;
+        case DioExceptionType.badResponse:
+          final code = e.response?.statusCode ?? 0;
+          return code >= 500 || code == 429;
+        default:
+          return false; // cancel / badCertificate / unknown：不重试
+      }
+    }
+    if (e is SocketException) return true;
+    return e.toString().contains('模型响应超时');
   }
 
   Stream<LlmEvent> _chatStreamOnce({
@@ -327,12 +376,16 @@ class LlmClient {
     // keep-alive 复用），await for 会永久阻塞，界面卡在"生成中"。
     // Dio 的 receiveTimeout 在流式场景不生效（响应头已到达，计时器停止），
     // 因此这里显式加单行空闲超时。
-    const idle = Duration(seconds: 60);
+    //
+    // 180s 而不是更激进的 60s：思考型模型（深推理不开流式思考、长上下文
+    // 无缓存命中的首 token 处理）静默期普遍在 1~3 分钟，60s 会把正常的
+    // 深度推理误杀成「响应超时」——表现为长任务跑着跑着就断。
+    const idle = Duration(seconds: 180);
 
     await for (final line in lines.timeout(
       idle,
       onTimeout: (sink) => sink.addError(
-        Exception('模型响应超时（连续 $idle 秒未收到任何数据）'),
+        Exception('模型响应超时（连续 ${idle.inSeconds} 秒未收到任何数据）'),
       ),
     )) {
       if (!line.startsWith('data:')) continue;
