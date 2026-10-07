@@ -258,6 +258,7 @@ jobs:
           echo "edge-to-edge 配置完成（${#STYLES[@]} 个文件）"
 
       - name: Generate app icon from mascot
+        timeout-minutes: 10   # apt 偶发挂起等慢源，卡死 6 小时才被 job 默认超时杀（run #119 实证）
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
           SRC=assets/images/mascot.webp
