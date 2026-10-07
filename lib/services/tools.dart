@@ -672,7 +672,8 @@ class RunCommandTool extends Tool {
       '在应用内置的 Linux 环境（Alpine/Debian，proot 沙箱）中执行 shell 命令并返回输出。'
       '可用于文件处理、运行脚本、安装软件包（apk/apt，已配置国内镜像）等。'
       '环境未安装时会提示先安装。注意：命令在沙箱内运行，仅能访问应用目录与系统基础挂载；'
-      '高危命令（安装/删除/下载/写重定向等）会先请求用户确认，被拒绝时不要原样重试。';
+      '高危命令（安装/删除/下载/写重定向等）在非「完全访问」档会先请求用户确认，'
+      '「完全访问」档直接执行；被用户拒绝时不要原样重试。';
 
   @override
   Map<String, dynamic> get parameters => {
@@ -695,15 +696,8 @@ class RunCommandTool extends Tool {
       return '错误：当前终端环境（${distro.name}）尚未安装。'
           '请提示用户到「我的 → 终端环境」中选择发行版并一键安装。';
     }
-    // 风险分级（S1/F7）：只读白名单直行；安装/删除/下载/写重定向等
-    // 高危命令先请用户确认，拒绝则把原因回给模型，让它调整而不是盲试。
-    if (CommandGuard.isRisky(command)) {
-      final allowed = await CommandGuard.instance.confirm(command);
-      if (!allowed) {
-        return '错误：用户拒绝了执行该命令。不要原样重试；'
-            '请询问用户希望如何处理，或改用更安全的方案。';
-      }
-    }
+    // 风险分级（S1/F7）不在这里做：工具层拿不到当前权限档位，
+    // 统一由 ToolRegistry.execute 按档位拦截（完全访问档免确认直行）。
     try {
       final r = await _terminal.runOn(distro, command);
       final output =
@@ -1001,12 +995,23 @@ class ToolRegistry {
     }
     // 执行侧高危命令校验：RunCommandTool 不持有 registry，拿不到当前权限档位，
     // 统一在执行入口对 run_command 拦截（与上方工具白名单构成双保险）。
-    // 仅在非「完全访问」档生效；完全访问档由用户自行承担风险。
+    // 仅在非「完全访问」档生效；完全访问档由用户自行承担风险，
+    // 硬黑名单与弹窗确认都直接跳过——选了完全访问就默认放行不再弹窗。
     if (name == 'run_command' && permission != AgentPermission.full) {
-      final hit = matchDangerousCommand(args['command']?.toString() ?? '');
+      final command = args['command']?.toString() ?? '';
+      final hit = matchDangerousCommand(command);
       if (hit != null) {
         return '错误：命令命中高危操作（$hit），当前权限为「${permission.label}」已拒绝执行。'
             '如确需执行，请在对话页把「权限」切换到「完全访问」后重试。';
+      }
+      // 分级确认（S1/F7）：只读白名单直行不打断；其余高危命令弹确认卡，
+      // 拒绝则把原因回给模型，让它调整而不是盲试。
+      if (CommandGuard.isRisky(command)) {
+        final allowed = await CommandGuard.instance.confirm(command);
+        if (!allowed) {
+          return '错误：用户拒绝了执行该命令。不要原样重试；'
+              '请询问用户希望如何处理，或改用更安全的方案。';
+        }
       }
     }
     try {
