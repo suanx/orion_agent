@@ -391,6 +391,13 @@ class TerminalService {
     var isGz = spec.isGzip;
     var renamed = false;
     try {
+      // 开场先清历史回收站（上次安装/卸载 _deletePathRobust 兜底改名后
+      // 没能删掉的孤儿目录），防止 files/ 下的残留越攒越大。
+      // ⚠️ 这一步同时是自愈入口：修复前版本留下的卡死残留
+      // debian-rootfs.tmp（上百 MB、每次重试都删失败）在这里被
+      // 重试+回收站策略强制清掉。
+      await _cleanTrashDirs(rootfs, spec.dirName, report: report);
+
       report('下载 ${spec.displayName} 基础系统…');
       // 下载链：自有 R2 源（配置了地址时，第一优先）→ 各发行版的镜像/备用源
       var r2Ok = false;
@@ -432,8 +439,14 @@ class TerminalService {
 
       report('解压 rootfs…');
       // 解压到全新 tmp 目录：旧 rootfs 在验证全部通过前保持原样。
+      // 残留清理走健壮删除：上万个文件的目录树直接 deleteSync(recursive)
+      // 在 Android 上会间歇性 ENOTEMPTY（见 _deletePathRobust 注释），
+      // 此前正是这里删失败 → 报错顶掉真因 → 残留卡死 → 重装永远失败。
       final tmpHandle = Directory(tmpRootfs);
-      if (tmpHandle.existsSync()) tmpHandle.deleteSync(recursive: true);
+      if (tmpHandle.existsSync()) {
+        report('清理上次安装残留…');
+        await deletePathRobust(tmpRootfs, report: report);
+      }
       tmpHandle.createSync(recursive: true);
 
       // 解压在独立 isolate 内进行（大 tar 的解码 + 落盘会阻塞 UI 数十秒）。
@@ -481,8 +494,13 @@ class TerminalService {
       if (fixedLinks > 0) report('  已将 $fixedLinks 个绝对路径链接转为相对');
 
       // 全部成功：此刻才删旧 rootfs，再把 tmp 改名为正式 rootfs。
+      // 删旧 rootfs 同样走健壮删除——它和 tmp 一样是上万文件的目录树，
+      // 直删可能 ENOTEMPTY；兜底路径（改名进回收站）能把 rootfs 腾出
+      // 位置，保证随后的 rename 不会被残留旧目录卡住。
       final rootfsHandle = Directory(rootfs);
-      if (rootfsHandle.existsSync()) rootfsHandle.deleteSync(recursive: true);
+      if (rootfsHandle.existsSync()) {
+        await deletePathRobust(rootfs, report: report);
+      }
       tmpHandle.renameSync(rootfs);
       renamed = true;
 
@@ -493,12 +511,118 @@ class TerminalService {
     } finally {
       // 失败/成功路径都清理临时压缩包；改名成功后 tmp 已不存在，
       // 失败时把解压残留一并清掉，不留垃圾。
-      final archive = File(archivePath);
-      if (archive.existsSync()) archive.deleteSync();
+      //
+      // ⚠️ 清理必须尽力争先、**绝不向上抛错**：Dart 里 finally 中抛出
+      // 的异常会顶掉正在传播的原始异常。此前真机报的
+      // 「Deletion failed, path = debian-rootfs.tmp (OS Error: Directory
+      // not empty)」正是原始失败被 finally 清理失败掩盖的结果——
+      // 真因永远看不见，还留下卡死残留让重装必败。
+      await deletePathRobust(archivePath, report: report);
       if (!renamed) {
-        final leftover = Directory(tmpRootfs);
-        if (leftover.existsSync()) leftover.deleteSync(recursive: true);
+        await deletePathRobust(tmpRootfs, report: report);
       }
+    }
+  }
+
+  /// 尽力而为地删除文件/目录树，**绝不抛错**（清理不能比主流程的异常
+  /// 更醒目，否则又会出现「真因被 Deletion failed 顶掉」的掩盖事故）。
+  ///
+  /// 为什么需要它：Android（f2fs/ext4）上对超大目录树（Debian rootfs
+  /// 上万文件），dart:io 的 `deleteSync(recursive: true)` 会间歇性
+  /// ENOTEMPTY（errno 39）——子项 unlink 完成后父目录短暂仍报非空，
+  /// Dart 不做重试，直接抛 Deletion failed。连锁后果：
+  /// ① finally 清理失败顶掉真因（见 _doInstall 的 finally 注释）；
+  /// ② 残留的 rootfs.tmp（上百 MB）留在 files/ 下；
+  /// ③ 下次安装开场删同一残留再次失败 → 安装永久卡死。
+  ///
+  /// 策略：重试 [attempts] 次（ENOTEMPTY 是瞬态的，间隔后即可删）→
+  /// 仍失败则改名为 `.trash-<时间戳>`（rename 是原子操作，对目录
+  /// 当前是否「非空」不敏感，几乎不会失败），主流程继续 → 改名后再
+  /// 尽力删一次 trash；删不掉就留给下次安装开场 [_cleanTrashDirs] 清。
+  ///
+  /// [deleteOne] 仅供测试注入，用于强制模拟删除失败走回收站分支。
+  static Future<void> deletePathRobust(
+    String path, {
+    int attempts = 3,
+    Duration retryDelay = const Duration(milliseconds: 300),
+    void Function(String)? report,
+    void Function(String path)? deleteOne,
+  }) async {
+    void deleteEntity(String p) {
+      final type = FileSystemEntity.typeSync(p, followLinks: false);
+      if (type == FileSystemEntityType.notFound) return;
+      if (type == FileSystemEntityType.directory) {
+        Directory(p).deleteSync(recursive: true);
+      } else {
+        File(p).deleteSync();
+      }
+    }
+
+    final impl = deleteOne ?? deleteEntity;
+    for (var i = 1; i <= attempts; i++) {
+      try {
+        if (FileSystemEntity.typeSync(path, followLinks: false) ==
+            FileSystemEntityType.notFound) {
+          return;
+        }
+        impl(path);
+        return;
+      } catch (e) {
+        if (i == attempts) {
+          report?.call(
+              '清理 $path 未成功（${e.toString().split('\n').first}），转入回收站策略');
+          break;
+        }
+        await Future<void>.delayed(retryDelay);
+      }
+    }
+    // 兜底：改名甩开。rename 只动目录项本身，不看目录是否非空，
+    // 对 ENOTEMPTY 免疫；主流程立刻解 blocked，垃圾延迟消化。
+    try {
+      final trash = '$path.trash-${DateTime.now().millisecondsSinceEpoch}';
+      // renameSync 是实例方法（FileSystemEntity 无静态 rename），按类型取句柄；
+      // 链接按 File 处理——rename 系统调用只动路径本身，不跟随链接
+      final type = FileSystemEntity.typeSync(path, followLinks: false);
+      final FileSystemEntity entity =
+          type == FileSystemEntityType.directory ? Directory(path) : File(path);
+      entity.renameSync(trash);
+      try {
+        impl(trash);
+      } catch (_) {
+        // 孤儿 trash：不阻塞主流程，下次安装开场统一清理
+      }
+    } catch (e) {
+      // 连 rename 都失败：只能放弃，但不向上抛
+      debugPrint('TerminalService: $path 清理彻底失败: $e');
+    }
+  }
+
+  /// 清理历次安装/卸载遗留的 `.trash-*` 回收站目录（见 [deletePathRobust]）。
+  /// 在每次安装开场调用：既是存储兜底，也是修复前版本留下的卡死残留
+  /// （如 debian-rootfs.tmp）的自愈入口。
+  static Future<void> _cleanTrashDirs(
+    String rootfs,
+    String dirName, {
+    void Function(String)? report,
+  }) async {
+    final parent = Directory(File(rootfs).parent.path);
+    if (!parent.existsSync()) return;
+    final List<FileSystemEntity> entries;
+    try {
+      entries = parent.listSync(followLinks: false);
+    } catch (_) {
+      return; // 列不出来就跳过，不能让清理阻塞安装
+    }
+    for (final e in entries) {
+      final name = e.uri.pathSegments.isNotEmpty
+          ? e.uri.pathSegments.lastWhere((s) => s.isNotEmpty)
+          : '';
+      if (!name.startsWith('$dirName.tmp.trash-') &&
+          !name.startsWith('$dirName.trash-')) {
+        continue;
+      }
+      report?.call('清理历史残留 $name…');
+      await deletePathRobust(e.path, report: report);
     }
   }
 
@@ -1053,9 +1177,12 @@ class TerminalService {
   }
 
   /// 删除指定发行版的环境。
+  ///
+  /// 走健壮删除：上万文件的 rootfs 直删在 Android 上可能 ENOTEMPTY，
+  /// 失败时改名进回收站，目录项立即让出；残留垃圾由下次安装开场清理。
   Future<void> uninstall(TerminalDistro d) async {
-    final dir = Directory(await rootfsDir(d));
-    if (dir.existsSync()) dir.deleteSync(recursive: true);
+    final rootfs = await rootfsDir(d);
+    await deletePathRobust(rootfs);
   }
 }
 

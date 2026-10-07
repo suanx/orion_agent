@@ -178,4 +178,127 @@ void main() {
       );
     });
   });
+
+  group('deletePathRobust（Android 大目录树 ENOTEMPTY 防御）', () {
+    late Directory base;
+
+    setUp(() async {
+      base = await Directory.systemTemp.createTemp('orion_robust_delete');
+    });
+
+    tearDown(() {
+      // 兜底清理测试目录（正常用例内部已删，这里防漏网）
+      if (base.existsSync()) base.deleteSync(recursive: true);
+    });
+
+    /// 造一棵多层目录树：dir/level0..level2/{f0..f9}.txt，模拟 rootfs 规模
+    void makeTree(String root) {
+      for (var l = 0; l < 3; l++) {
+        final d = Directory('$root/level$l')
+          ..createSync(recursive: true);
+        for (var f = 0; f < 10; f++) {
+          File('${d.path}/f$f.txt').writeAsStringSync('x' * 32);
+        }
+      }
+    }
+
+    test('正常路径：目录树与单文件都能删干净', () async {
+      final tree = '${base.path}/rootfs';
+      makeTree(tree);
+      final file = '${base.path}/plain.tar';
+      File(file).writeAsStringSync('x');
+
+      await TerminalService.deletePathRobust(tree, retryDelay: Duration.zero);
+      await TerminalService.deletePathRobust(file, retryDelay: Duration.zero);
+
+      expect(FileSystemEntity.typeSync(tree, followLinks: false),
+          FileSystemEntityType.notFound,
+          reason: '目录树应被删除');
+      expect(FileSystemEntity.typeSync(file, followLinks: false),
+          FileSystemEntityType.notFound,
+          reason: '单文件应被删除');
+    });
+
+    test('不存在的路径：静默返回不抛错', () async {
+      await TerminalService.deletePathRobust('${base.path}/nope',
+          retryDelay: Duration.zero);
+    });
+
+    test('删除一直失败：改名为 .trash-* 让主流程继续，原路径腾出', () async {
+      final tree = '${base.path}/rootfs.tmp';
+      makeTree(tree);
+      var calls = 0;
+      await TerminalService.deletePathRobust(
+        tree,
+        attempts: 3,
+        retryDelay: Duration.zero,
+        // 只统计对原路径的删除尝试——回收站兜底会再对 trash 调一次，
+        // 那次同样失败但被吞掉，不应计入重试计数
+        deleteOne: (p) {
+          if (p == tree) calls++;
+          throw const FileSystemException('Deletion failed', tree,
+              OSError('Directory not empty', 39));
+        },
+      );
+      expect(calls, 3, reason: '应先重试满 attempts 次');
+      expect(FileSystemEntity.typeSync(tree, followLinks: false),
+          FileSystemEntityType.notFound,
+          reason: '原路径应被 rename 腾出，主流程（rename tmp→rootfs）不再被卡');
+      final trash = base
+          .listSync(followLinks: false)
+          .where((e) => e.path.contains('.trash-'))
+          .toList();
+      expect(trash, hasLength(1),
+          reason: '删除失败的目录应留在 .trash-* 下等待下次安装开场清理');
+    });
+
+    test('瞬态失败后恢复：重试成功则不产生回收站', () async {
+      final tree = '${base.path}/rootfs.tmp';
+      makeTree(tree);
+      var calls = 0;
+      await TerminalService.deletePathRobust(
+        tree,
+        attempts: 3,
+        retryDelay: Duration.zero,
+        deleteOne: (p) {
+          calls++;
+          if (calls == 1) {
+            // 第一次模拟 ENOTEMPTY，第二次（重试）成功
+            throw const FileSystemException('Deletion failed', p,
+                OSError('Directory not empty', 39));
+          }
+          Directory(p).deleteSync(recursive: true);
+        },
+      );
+      expect(calls, 2);
+      expect(FileSystemEntity.typeSync(tree, followLinks: false),
+          FileSystemEntityType.notFound);
+      expect(
+          base.listSync(followLinks: false).where((e) => e.path.contains('.trash-')),
+          isEmpty,
+          reason: '重试成功就不该走回收站兜底');
+    });
+
+    test('回收站兜底后的孤儿目录能被下次清理消化', () async {
+      // 第一轮：删除永远失败 → 产生孤儿 trash
+      final tree = '${base.path}/debian-rootfs.tmp';
+      makeTree(tree);
+      await TerminalService.deletePathRobust(
+        tree,
+        retryDelay: Duration.zero,
+        deleteOne: (_) =>
+            throw const FileSystemException('Deletion failed', tree),
+      );
+      final trashPath = base
+          .listSync(followLinks: false)
+          .firstWhere((e) => e.path.contains('.trash-'))
+          .path;
+      // 第二轮：删除恢复正常（模拟下次安装时 FS 已不再报非空）
+      await TerminalService.deletePathRobust(trashPath,
+          retryDelay: Duration.zero);
+      expect(FileSystemEntity.typeSync(trashPath, followLinks: false),
+          FileSystemEntityType.notFound,
+          reason: '孤儿 trash 应可被正常删除，存储不会无限累积');
+    });
+  });
 }
