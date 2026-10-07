@@ -236,8 +236,8 @@ void main() {
         // 那次同样失败但被吞掉，不应计入重试计数
         deleteOne: (p) {
           if (p == tree) calls++;
-          throw const FileSystemException('Deletion failed', tree,
-              OSError('Directory not empty', 39));
+          throw FileSystemException('Deletion failed', tree,
+              const OSError('Directory not empty', 39));
         },
       );
       expect(calls, 3, reason: '应先重试满 attempts 次');
@@ -264,8 +264,8 @@ void main() {
           calls++;
           if (calls == 1) {
             // 第一次模拟 ENOTEMPTY，第二次（重试）成功
-            throw const FileSystemException('Deletion failed', p,
-                OSError('Directory not empty', 39));
+            throw FileSystemException('Deletion failed', p,
+                const OSError('Directory not empty', 39));
           }
           Directory(p).deleteSync(recursive: true);
         },
@@ -287,7 +287,7 @@ void main() {
         tree,
         retryDelay: Duration.zero,
         deleteOne: (_) =>
-            throw const FileSystemException('Deletion failed', tree),
+            throw FileSystemException('Deletion failed', tree),
       );
       final trashPath = base
           .listSync(followLinks: false)
