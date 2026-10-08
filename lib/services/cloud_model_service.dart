@@ -22,8 +22,32 @@ class CloudModelService {
   /// 一条配置（模型列表合并），同时保证不会与用户自建 id 撞车。
   static const idPrefix = 'cloud:';
 
+  /// 云端 Agent 配置的 id 前缀。
+  ///
+  /// 与 [idPrefix] 分开：`agent:` 走自己的鉴权路径（云端令牌 + 会话 id），
+  /// 不能和云端模型的混在一起 —— 否则 remove/skip-persist 之类的判断会串。
+  static const agentPrefix = 'agent:';
+
   /// 占位 API Key。真正的鉴权走登录令牌，这个值只为通过非空校验。
   static const placeholderApiKey = 'cloud-managed';
+
+  /// 判断是否为云端 Agent 配置。
+  static bool isAgent(LlmConfig c) => c.id.startsWith(agentPrefix);
+
+  /// 把后端下发的 Agent 开通信息包装成本地 [LlmConfig]。
+  ///
+  /// 与云端模型不同，Agent 只有一个虚拟模型名 —— 真实用哪个模型由 Agent
+  /// 实例内部决定，App 侧不需要知道。
+  static LlmConfig agentToConfig(CloudAgentInfo info) => LlmConfig(
+        id: '$agentPrefix${info.model}',
+        name: info.label,
+        baseUrl: info.chatUrl,
+        apiKey: placeholderApiKey,
+        fullUrl: true,
+        enabled: true,
+        models: [ProviderModel(name: info.model, kind: ModelKind.chat)],
+        defaultChatModel: info.model,
+      );
 
   /// 把后端下发的供应商包装成本地 [LlmConfig]。
   ///
@@ -67,6 +91,7 @@ class CloudModelsState {
     this.configs = const [],
     this.loading = false,
     this.available = false,
+    this.agentConfig,
     this.error,
   });
 
@@ -75,21 +100,33 @@ class CloudModelsState {
   /// 后端是否已配置供应商。false 时 UI 应隐藏云端入口而不是报错。
   final bool available;
 
+  /// 云端 Agent 配置；**null 表示管理员尚未给该账号开通**，
+  /// 此时 UI 必须完全隐藏入口（不提示、不引导配置）。
+  final LlmConfig? agentConfig;
+
   final bool loading;
   final String? error;
 
   bool get hasModels => configs.isNotEmpty;
 
+  /// 是否已开通云端 Agent。
+  bool get hasAgent => agentConfig != null;
+
   CloudModelsState copyWith({
     List<LlmConfig>? configs,
     bool? loading,
     bool? available,
+    LlmConfig? agentConfig,
+    bool clearAgent = false,
     String? error,
     bool clearError = false,
   }) =>
       CloudModelsState(
         configs: configs ?? this.configs,
         available: available ?? this.available,
+        // agentConfig 允许显式传 null（表示"未开通"），故用哨兵区分
+        agentConfig:
+            clearAgent ? null : (agentConfig ?? this.agentConfig),
         loading: loading ?? this.loading,
         error: clearError ? null : (error ?? this.error),
       );
@@ -127,10 +164,12 @@ class CloudModelsController extends ChangeNotifier {
 
   bool _disposed = false;
 
-  /// 拉取云端模型列表。
+  /// 拉取云端模型列表 + Agent 开通状态。
   ///
-  /// [force] 为 true 时忽略缓存。未登录或后端未配置供应商时静默返回空列表
+  /// [force] 为 true 时忽略缓存。未登录或后端未配置时静默返回空列表
   /// —— 这些都是正常状态（不是错误），不该在 UI 上弹红字。
+  ///
+  /// 两个请求并行发出：模型列表与 Agent 授权互不依赖，串行会白等一轮。
   Future<void> load({bool force = false}) async {
     if (_cloud.email == null || _cloud.email!.isEmpty) {
       _apply(const CloudModelsState());
@@ -140,22 +179,39 @@ class CloudModelsController extends ChangeNotifier {
     if (!force &&
         cached != null &&
         DateTime.now().difference(cached) < cacheTtl &&
-        _state.hasModels) {
+        _state.hasModels &&
+        _agentConfig != null) {
       return;
     }
     _apply(_state.copyWith(loading: true, clearError: true));
     try {
-      final res = await _cloud.fetchAiProviders();
+      final results = await Future.wait([
+        _cloud.fetchAiProviders(),
+        _cloud.fetchAgentInfo(),
+      ]);
+      final res = results[0] as ({bool available, List<CloudModelProvider> providers});
+      final agent = results[1] as CloudAgentInfo;
       _loadedAt = DateTime.now();
       _apply(CloudModelsState(
         configs: CloudModelService.toConfigs(res.providers),
         available: res.available,
+        agentConfig: _toAgentConfig(agent),
       ));
     } catch (e) {
       // 拉取失败保留旧列表(可能仍可用), 只记录错误
       _apply(_state.copyWith(loading: false, error: e.toString()));
     }
   }
+
+  /// Agent 未开通时返回 null，UI 据此**完全隐藏**入口（不提示、不引导）。
+  LlmConfig? _toAgentConfig(CloudAgentInfo info) {
+    if (!info.enabled || info.chatUrl.isEmpty) return null;
+    return CloudModelService.agentToConfig(info);
+  }
+
+  /// 当前云端 Agent 配置；未开通为 null。
+  LlmConfig? get agentConfig => _agentConfig;
+  LlmConfig? _agentConfig;
 
   void _apply(CloudModelsState s) {
     if (_disposed) return;

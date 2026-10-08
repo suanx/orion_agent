@@ -243,9 +243,21 @@ class LlmClient {
 
   /// 判断配置是否为云端托管模型。
   ///
-  /// 判定用「配置 id 带 `cloud:` 前缀」，而不是嗅探 baseUrl 是否指向自家
-  /// 后端——后者在用户自建指向同一域名的配置时会误判。
-  static bool _isCloud(LlmConfig c) => c.id.startsWith('cloud:');
+  /// 判定用「配置 id 带 `cloud:` / `agent:` 前缀」，而不是嗅探 baseUrl 是否
+  /// 指向自家后端——后者在用户自建指向同一域名的配置时会误判。
+  static bool _isCloud(LlmConfig c) =>
+      c.id.startsWith('cloud:') || c.id.startsWith('agent:');
+
+  /// 是否为云端 Agent 配置（鉴权与云端模型同源，但请求体多一个 appSessionId）。
+  static bool _isAgent(LlmConfig c) => c.id.startsWith('agent:');
+
+  /// 当前对话的 App 会话 id（仅云端 Agent 请求需要）。
+  ///
+  /// Agent 侧每次对话必须绑定会话，后端靠它维持远端 session/chat 映射。
+  /// 用静态可变字段而非逐层传参：调用链已经带了 config，再加参数要改
+  /// chatStream / _chatStreamOnce / AgentOrchestrator.run 等 4 处签名。
+  /// 每次 send() 都会覆写，串行对话下不会串号。
+  static String? agentSessionId;
 
   /// 本轮使用的模型参数：优先取当前聊天模型的设置。
   static ProviderModel? _activeModel(LlmConfig c) => c.chatModel;
@@ -384,6 +396,17 @@ class LlmClient {
       // 与费用（OpenAI / 部分兼容网关支持）。
       if (config.promptCacheKey) 'prompt_cache_key': _cacheKeyOf(config),
     };
+
+    // 云端 Agent：额外带上 App 会话 id，后端据此维持远端 session/chat
+    // 映射（Agent 侧每次对话都必须绑定会话）。
+    if (_isAgent(config)) {
+      final sid = agentSessionId;
+      if (sid != null && sid.isNotEmpty) body['appSessionId'] = sid;
+      // Agent 自行决定用哪个模型与参数，透传 temperature/tools 反而可能
+      // 让上游网关因不认识的字段报错，因此这里不发。
+      body.remove('temperature');
+      body.remove('tools');
+    }
 
     final resp = await _dioFor(config).post<ResponseBody>(
       url,

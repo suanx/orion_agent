@@ -134,7 +134,7 @@ final toolRegistryProvider = Provider<ToolRegistry>((ref) => ToolRegistry(
 
 final llmClientProvider = Provider<LlmClient>((ref) => LlmClient(
       Dio(BaseOptions(connectTimeout: const Duration(seconds: 30))),
-      // 云端模型的鉴权用云端登录令牌（真正的上游 Key 在后端），
+      // 云端模型/Agent 的鉴权用云端登录令牌（真正的上游 Key 在后端），
       // 令牌在过期前自动续期。
       cloudTokenProvider: ref.watch(cloudServiceProvider).validAccessToken,
     ));
@@ -490,7 +490,7 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
   void upsert(LlmConfig config) {
     // 云端配置不落盘（见 injectCloudConfigs 的说明）：用户切换云端模型
     // 只影响本次会话的内存态，下次进来重新从后端拉。
-    if (!config.id.startsWith('cloud:')) {
+    if (!_isCloudManaged(config)) {
       _localTouched = true;
     }
     final list = [...state.configs];
@@ -503,10 +503,15 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     // 沿用 copyWith 而非新建 ConfigState：直接构造会把上一轮的 error 清空，
     // 让"保存失败"的提示在用户下一次编辑时凭空消失。
     state = state.copyWith(configs: list);
-    if (!config.id.startsWith('cloud:')) {
+    if (!_isCloudManaged(config)) {
       _schedulePersist();
     }
   }
+
+  /// 是否为「后端托管」的配置（云端模型 `cloud:` / 云端 Agent `agent:`）。
+  /// 这些不该落盘，也不该被用户删除。
+  static bool _isCloudManaged(LlmConfig c) =>
+      c.id.startsWith('cloud:') || c.id.startsWith('agent:');
 
   /// 就地替换某条配置（按 id）。
   LlmConfig? byId(String id) {
@@ -516,30 +521,34 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     return null;
   }
 
-  /// 注入云端模型配置（**仅内存，不落盘**）。
+  /// 注入云端托管配置（**仅内存，不落盘**）。
   ///
-  /// 云端配置由后端持 Key、随账号下发，不该写进 shared_preferences：
-  /// 一是会把配置混入备份/多端同步，二是后端改了供应商后本地这份就成了
-  /// 过期副本。每次刷新云端列表都整体替换，避免残留。
+  /// 包含云端模型（`cloud:`）与云端 Agent（`agent:`）—— 两者都由后端持密钥、
+  /// 随账号下发，不该写进 shared_preferences：
+  /// 一是会把配置混入备份/多端同步，二是后端改了配置后本地这份就成了
+  /// 过期副本。每次刷新都整体替换，避免残留。
   ///
   /// 落盘的 `defaultChatModel` 切换则走 [upsert]（用户主动选模型时），
-  /// 那里同样会跳过云端配置的持久化。
+  /// 那里同样会跳过托管配置的持久化。
   void injectCloudConfigs(List<LlmConfig> cloudConfigs) {
-    // 先剔除旧的云端配置，再追加新的
+    // 先剔除旧的托管配置，再追加新的
     final localOnly =
-        state.configs.where((c) => !c.id.startsWith('cloud:')).toList();
+        state.configs.where((c) => !_isCloudManaged(c)).toList();
     state = state.copyWith(configs: [...localOnly, ...cloudConfigs]);
-    // activeId 指向已消失的云端配置时清空，避免 activeConfig 取不到值
-    if (state.activeId.startsWith('cloud:') &&
+    // activeId 指向已消失的托管配置时清空，避免 activeConfig 取不到值
+    if (_isCloudManagedId(state.activeId) &&
         !cloudConfigs.any((c) => c.id == state.activeId)) {
       state = state.copyWith(activeId: '');
     }
   }
 
+  static bool _isCloudManagedId(String id) =>
+      id.startsWith('cloud:') || id.startsWith('agent:');
+
   void remove(String id) {
-    // 云端配置由后端托管，用户删不掉（下次刷新会重新注入）。
-    // 真正的"停用"需求由后端供应商的 enabled 开关承担。
-    if (id.startsWith('cloud:')) return;
+    // 云端托管配置由后端管理，用户删不掉（下次刷新会重新注入）。
+    // 真正的"停用"需求由后端的 enabled 开关承担。
+    if (_isCloudManagedId(id)) return;
     _localTouched = true;
     final list = state.configs.where((c) => c.id != id).toList();
     state = state.copyWith(
@@ -1004,6 +1013,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
     _cancelToken = CancelToken();
     final sessionId = updated.id;
+    // 云端 Agent 请求要带 App 会话 id（后端据此维持远端 session/chat 映射）。
+    LlmClient.agentSessionId = sessionId;
 
     // 发送前自动检索知识库（未配置 embedding 模型或检索失败时静默跳过）。
     // 放在压缩之前：压缩估算需要把检索到的知识计入上下文占用。
@@ -1919,7 +1930,14 @@ final cloudModelsProvider =
   // 列表一变就把云端配置注入 ConfigNotifier（仅内存），对话链路因此
   // 与自建供应商完全同构，无需在 UI 层到处判断「这条是不是云端」。
   controller.addListener(() {
-    configNotifier.injectCloudConfigs(controller.state.configs);
+    final s = controller.state;
+    // 云端 Agent（已开通时）也并入：未开通时 s.agentConfig 为 null，
+    // 这里什么都不加 —— App 端因此完全没有 Agent 入口，也不显示任何提示。
+    final managed = <LlmConfig>[
+      ...s.configs,
+      if (s.agentConfig != null) s.agentConfig!,
+    ];
+    configNotifier.injectCloudConfigs(managed);
   });
   // 依赖登录态：watch 整个 CloudState，登录/登出都会重建 controller，
   // 新的 controller 从头加载（登出后 _cloud.email 为空会直接置空列表）。

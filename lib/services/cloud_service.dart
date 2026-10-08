@@ -191,6 +191,32 @@ class CloudService {
     return CloudAiQuota.fromJson(data);
   }
 
+  /// 云端 Agent 是否已由管理员开通。
+  ///
+  /// **未开通不是错误**，返回 [CloudAgentInfo] 的 enabled=false 即可，
+  /// UI 须静默隐藏入口——不弹提示、不显示任何配置引导。
+  /// App 永远拿不到实例地址与密钥，那些只存在后端。
+  Future<CloudAgentInfo> fetchAgentInfo() async {
+    try {
+      final data = await _authedGet('/api/agent/info');
+      return CloudAgentInfo.fromJson(data);
+    } catch (_) {
+      // 后端未部署该接口（旧版）时按"未开通"处理，不打扰用户
+      return const CloudAgentInfo();
+    }
+  }
+
+  /// 丢弃某个 App 会话与 Agent 侧的会话映射（用户新建/删除会话时调用）。
+  Future<void> resetAgentSession(String appSessionId) async {
+    try {
+      await _authedPost('/api/agent/session/reset', {
+        'appSessionId': appSessionId,
+      });
+    } catch (_) {
+      // 静默失败：映射只是缓存，丢弃失败不影响下一次对话（会开新会话）
+    }
+  }
+
   Future<List<CloudDevice>> fetchDevices() async {
     final data = await _authedGet('/api/auth/devices');
     final list = data['devices'];
@@ -484,6 +510,39 @@ class CloudAccountInfo {
 ///
 /// **每周一 00:00（UTC+8）自动归零** —— 后端把周起始日作为用量记录的主键
 /// 之一，跨周自然落到新行即完成重置，App 端不需要做任何重置动作。
+/// 云端 Agent 的开通状态。
+///
+/// 用户自行部署 orion-forge 实例，由**管理员**在后台录入地址与密钥。
+/// App 端不提供任何填写入口，也拿不到真实地址 —— 只有 [enabled] 与
+/// [chatUrl]（指向自家后端的中继）。
+class CloudAgentInfo {
+  const CloudAgentInfo({
+    this.enabled = false,
+    this.label = '云端 Agent',
+    this.chatUrl = '',
+    this.model = 'agent',
+  });
+
+  /// 后端是否已为该账号开通。
+  final bool enabled;
+
+  /// App 内展示名。
+  final String label;
+
+  /// 请求地址（自家后端的中继点，非用户实例地址）。
+  final String chatUrl;
+
+  /// 虚拟模型名；真实模型由 Agent 实例内部决定。
+  final String model;
+
+  factory CloudAgentInfo.fromJson(Map<String, dynamic> json) => CloudAgentInfo(
+        enabled: json['enabled'] == true,
+        label: json['label']?.toString() ?? '云端 Agent',
+        chatUrl: json['chatUrl']?.toString() ?? '',
+        model: json['model']?.toString() ?? 'agent',
+      );
+}
+
 class CloudAiQuota {
   const CloudAiQuota({
     this.tier = 'free',
