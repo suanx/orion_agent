@@ -624,20 +624,44 @@ final configProvider =
 
 // ---------------- 会话与聊天 ----------------
 
+/// 单个会话的流式进度。多个对话可同时各自生成，按会话各存一份。
+class SessionStream {
+  /// 生成中的回答正文。
+  final String content;
+
+  /// 流式期间的思考过程（开启思考且模型返回时才有内容）。
+  final String reasoning;
+
+  /// 状态行（⏳ 正在调用工具 / 🔧 工具完成）。
+  final List<String> steps;
+
+  const SessionStream({
+    this.content = '',
+    this.reasoning = '',
+    this.steps = const [],
+  });
+
+  SessionStream copyWith({
+    String? content,
+    String? reasoning,
+    List<String>? steps,
+  }) =>
+      SessionStream(
+        content: content ?? this.content,
+        reasoning: reasoning ?? this.reasoning,
+        steps: steps ?? this.steps,
+      );
+}
+
 class ChatState {
   final List<ChatSession> sessions;
   final String? activeSessionId;
-  final bool isStreaming;
-  final String streamingContent;
 
-  /// 正在生成的内容所属会话。流式状态是全局单份，用它区分归属：
-  /// UI 只在 activeSessionId == streamingSessionId 时渲染流式气泡，
-  /// 避免用户切到别的会话后流式内容「串台」渲染进错误会话。
-  final String? streamingSessionId;
+  /// 流式状态按会话隔离：key = sessionId，value = 该会话的生成进度。
+  /// 每个正在生成的对话各有一份，互不干扰——A 生成期间切到 B 发消息，
+  /// 两条流并行推进，「停止」也只作用于当前会话。
+  final Map<String, SessionStream> streams;
 
-  /// 流式期间的思考过程（开启思考且模型返回时才有内容）。
-  final String streamingReasoning;
-  final List<String> steps;
   final String? error;
 
   /// 当前会话的用量统计（应用启动以来累计；会话切换时按记录重置）。
@@ -653,11 +677,7 @@ class ChatState {
   const ChatState({
     required this.sessions,
     this.activeSessionId,
-    this.isStreaming = false,
-    this.streamingSessionId,
-    this.streamingContent = '',
-    this.streamingReasoning = '',
-    this.steps = const [],
+    this.streams = const {},
     this.error,
     this.sessionPromptTokens = 0,
     this.sessionCompletionTokens = 0,
@@ -673,17 +693,28 @@ class ChatState {
     return null;
   }
 
+  /// 当前激活会话的流式进度；该会话未在生成时为 null。
+  SessionStream? get activeStream =>
+      activeSessionId == null ? null : streams[activeSessionId];
+
+  /// 激活会话是否正在生成。UI 的发送/停止按钮与并发守卫都看这个——
+  /// 只有【当前】会话在生成时才拦截；别的会话在生成不影响本会话发消息。
+  bool get isStreaming => activeStream != null;
+
+  /// 以下三个派生视图：只取激活会话的进度，其它会话的流不串台。
+  String get streamingContent => activeStream?.content ?? '';
+  String get streamingReasoning => activeStream?.reasoning ?? '';
+  List<String> get steps => activeStream?.steps ?? const [];
+
+  /// 指定会话是否正在生成（会话列表的「生成中」标记用）。
+  bool isSessionStreaming(String id) => streams.containsKey(id);
+
   ChatState copyWith({
     List<ChatSession>? sessions,
     String? activeSessionId,
-    bool? isStreaming,
-    String? streamingSessionId,
-    String? streamingContent,
-    String? streamingReasoning,
-    List<String>? steps,
+    Map<String, SessionStream>? streams,
     String? error,
     bool clearError = false,
-    bool clearStreamingSession = false,
     int? sessionPromptTokens,
     int? sessionCompletionTokens,
     int? toolRoundsBuiltIn,
@@ -693,13 +724,7 @@ class ChatState {
       ChatState(
         sessions: sessions ?? this.sessions,
         activeSessionId: activeSessionId ?? this.activeSessionId,
-        isStreaming: isStreaming ?? this.isStreaming,
-        streamingSessionId: clearStreamingSession
-            ? null
-            : (streamingSessionId ?? this.streamingSessionId),
-        streamingContent: streamingContent ?? this.streamingContent,
-        streamingReasoning: streamingReasoning ?? this.streamingReasoning,
-        steps: steps ?? this.steps,
+        streams: streams ?? this.streams,
         error: clearError ? null : (error ?? this.error),
         sessionPromptTokens: sessionPromptTokens ?? this.sessionPromptTokens,
         sessionCompletionTokens:
@@ -802,21 +827,25 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// 由外部注入的通知发送回调（在 Provider 里绑定 NotificationService）。
   Future<void> Function(String title, String body)? onAnswerNotification;
 
-  CancelToken? _cancelToken;
+  /// 每个会话一个取消令牌：停止/删除只动目标会话的那一条流，
+  /// 不会殃及其它正在生成的对话（并行对话）。
+  final _cancelTokens = <String, CancelToken>{};
 
-  /// 上下文压缩流的取消令牌：压缩进行中删除会话时取消，防止
-  /// 压缩完成后把已删除的消息重新插回（孤儿数据）。
-  CancelToken? _compressToken;
+  /// 上下文压缩流的取消令牌（按会话）：压缩进行中删除该会话时取消，
+  /// 防止压缩完成后把已删除的消息重新插回（孤儿数据）。
+  final _compressTokens = <String, CancelToken>{};
 
-  /// send() 的同步互斥占位。原实现依赖 state.isStreaming，但该标志
+  /// send() 的同步互斥占位（按会话）。原实现依赖 state.isStreaming，但该标志
   /// 在首个 await（_persistOp）之后才置位——守卫与置位之间隔着
-  /// await，两条并发 send 都能通过检查。同步 bool 在任何 await
+  /// await，两条并发 send 都能通过检查。同步集合在任何 await
   /// 之前检查并置位，彻底封死竞态窗口。
-  bool _sending = false;
+  /// 按会话隔离后，A 会话生成中不再阻塞 B 会话发消息。
+  final _sending = <String>{};
 
   /// 流式期间每帧全量 state 重建是 O(n²) 拷贝；按时间合帧，
-  /// 最多每 60ms 刷一次 UI（打字机观感不受影响）。
-  DateTime _lastStreamFlush = DateTime.fromMillisecondsSinceEpoch(0);
+  /// 最多每 90ms 刷一次 UI（打字机观感不受影响）。按会话计时，
+  /// 两条并行流各有自己的刷新窗口，互不抢帧。
+  final _lastFlush = <String, DateTime>{};
 
   // 统一走 database.dart 的 uniqueId（带自增序列）。原来的实现用
   // state.sessions.length 做序列，而 deleteSession 会让长度回落，
@@ -853,10 +882,24 @@ class ChatNotifier extends StateNotifier<ChatState> {
   /// 已完成按需加载的会话 id。集合避免「空会话每次切换都查一次 DB」。
   final Set<String> _loadedSessions = {};
 
-  /// 确保会话消息已进内存（P1 按需加载）。加载完成合并进**当前** state
-  /// （加载期间 state 可能已变化）；期间被删除则丢弃，已有消息则不覆盖。
-  Future<void> _ensureMessages(String id) async {
-    if (_loadedSessions.contains(id)) return;
+  /// 进行中的加载（id → Future）。selectSession 发起的加载还在跑时，
+  /// 紧随其后的 send 必须等同一个 Future——只看 _loadedSessions 标记
+  /// 会误判「已加载完成」，拿空历史把上下文发出去（并行对话下
+  /// 「切过去马上发」是常态路径，这个窗口必须封死）。
+  final _loadingMessages = <String, Future<void>>{};
+
+  /// 确保会话消息已进内存（P1 按需加载）。已完成返回立即完成的 Future；
+  /// 进行中则复用同一个 Future，多个调用方共享一次加载。
+  Future<void> _ensureMessages(String id) {
+    final inflight = _loadingMessages[id];
+    if (inflight != null) return inflight;
+    if (_loadedSessions.contains(id)) return Future<void>.value();
+    final f = _loadMessages(id);
+    _loadingMessages[id] = f;
+    return f;
+  }
+
+  Future<void> _loadMessages(String id) async {
     _loadedSessions.add(id);
     List<ChatMessage> msgs;
     try {
@@ -865,6 +908,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
       _loadedSessions.remove(id);
       debugPrint('会话消息按需加载失败：$e');
       return;
+    } finally {
+      _loadingMessages.remove(id);
     }
     if (!mounted) return;
     final idx = state.sessions.indexWhere((s) => s.id == id);
@@ -898,6 +943,31 @@ class ChatNotifier extends StateNotifier<ChatState> {
     );
   }
 
+  /// 更新指定会话的流式进度。该会话的流已清理（被停止/删除）时
+  /// 静默丢弃——收尾竞态里迟到的 delta 不该让状态复活。
+  void _mutateStream(
+      String sessionId, SessionStream Function(SessionStream) f) {
+    if (!mounted) return;
+    final cur = state.streams[sessionId];
+    if (cur == null) return;
+    state = state.copyWith(streams: {
+      ...state.streams,
+      sessionId: f(cur),
+    });
+  }
+
+  /// 收尾一条流：清掉该会话的取消令牌/互斥占位/刷新计时与进度条目。
+  /// 幂等：条目可能已被 deleteSession 提前移除。
+  void _endStream(String sessionId) {
+    _cancelTokens.remove(sessionId);
+    _sending.remove(sessionId);
+    _lastFlush.remove(sessionId);
+    if (!mounted) return;
+    if (!state.streams.containsKey(sessionId)) return;
+    final m = {...state.streams}..remove(sessionId);
+    state = state.copyWith(streams: m);
+  }
+
   /// 清除当前错误提示（供 UI 关闭错误条使用）。
   void clearError() {
     if (state.error == null) return;
@@ -905,13 +975,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   void deleteSession(String id) {
-    // 生成期间删除会话会让已写入的用户消息变成孤儿行，且随后的 AI 回答
-    // 无处落地。先停止流式，让send() 正常收尾。
-    if (state.isStreaming) {
-      unawaited(stop());
+    // 只停被删除会话自己的流（并行对话下别的会话继续生成）。
+    // 压缩流是独立 CancelToken，同样按会话取消。
+    // 先清进度条目：send() 收尾时的写入会因条目不存在被丢弃，
+    // 用户消息变孤儿行的问题由「回答落库前按 id 查会话」兜底。
+    _cancelTokens.remove(id)?.cancel();
+    _compressTokens.remove(id)?.cancel();
+    _sending.remove(id);
+    _lastFlush.remove(id);
+    if (state.streams.containsKey(id)) {
+      final m = {...state.streams}..remove(id);
+      state = state.copyWith(streams: m);
     }
-    // 压缩流不归 stop() 管（独立 CancelToken），单独取消。
-    _compressToken?.cancel();
     // 该会话的用量/标题记录同步清掉，否则 Map 只增不减（内存缓慢泄漏）。
     _usage.remove(id);
     _titleSummarized.remove(id);
@@ -927,13 +1002,21 @@ class ChatNotifier extends StateNotifier<ChatState> {
   }
 
   Future<void> clearAllSessions() async {
-    // 同上：先停下流式，避免删除后仍往里写入孤儿消息行。
-    if (state.isStreaming) {
-      await stop();
-      // 给 send() 一点时间收尾（它会检测 isStreaming 并停止写入）
+    // 同上：先停下所有流式（含压缩），避免删除后仍往里写入孤儿消息行。
+    if (_sending.isNotEmpty || state.streams.isNotEmpty) {
+      for (final t in _cancelTokens.values) {
+        if (!t.isCancelled) t.cancel();
+      }
+      for (final t in _compressTokens.values) {
+        if (!t.isCancelled) t.cancel();
+      }
+      // 给各 send() 一点时间收尾（它会检测流已清理并停止写入）
       await Future<void>.delayed(const Duration(milliseconds: 50));
     }
-    _compressToken?.cancel();
+    _cancelTokens.clear();
+    _compressTokens.clear();
+    _sending.clear();
+    _lastFlush.clear();
     _usage.clear();
     _titleSummarized.clear();
     _loadedSessions.clear();
@@ -951,34 +1034,36 @@ class ChatNotifier extends StateNotifier<ChatState> {
 
   Future<void> send(String text, {List<String> images = const []}) async {
     final content = text.trim();
-    // 同步互斥：在任何 await 之前检查并占位（state.isStreaming 要到
-    // 首个 await 之后才置位，只靠它会被并发 send 击穿）。
-    if ((content.isEmpty && images.isEmpty) || _sending || state.isStreaming) {
-      return;
-    }
-    _sending = true;
+    if (content.isEmpty && images.isEmpty) return;
 
-    final config = _getConfig();
-    if (config == null) {
-      _sending = false;
-      state = state.copyWith(error: '请先在「设置」中添加并选择一个模型服务。');
-      return;
-    }
-
+    // 同步解析目标会话（newSession 内无 await，安全）。
     var session = state.activeSession;
     if (session == null) {
       newSession();
       session = state.activeSession;
-      if (session == null) {
-        _sending = false;
-        return;
-      }
+      if (session == null) return;
     }
-    // 会话消息是按需加载的（P1）：必须等历史进内存后才能拼上下文
-    await _ensureMessages(session.id);
-    session = state.activeSession;
+    // 同步互斥（按会话）：在任何 await 之前检查并占位（流进度要到
+    // 首个 await 之后才写入，只靠它会被并发 send 击穿）。
+    // 同一会话禁止并发 send；其它会话正在生成不拦——多个对话可同时各自流式。
+    final sid = session.id;
+    if (_sending.contains(sid) || state.streams.containsKey(sid)) return;
+    _sending.add(sid);
+
+    final config = _getConfig();
+    if (config == null) {
+      _sending.remove(sid);
+      state = state.copyWith(error: '请先在「设置」中添加并选择一个模型服务。');
+      return;
+    }
+
+    // 会话消息是按需加载的（P1）：必须等历史进内存后才能拼上下文。
+    // 按 sid 重取而不是读 activeSession——等待期间用户可能已切到别的会话，
+    // 读活跃会话会把这条消息写进错误的对话。
+    await _ensureMessages(sid);
+    session = state.sessions.where((s) => s.id == sid).firstOrNull;
     if (session == null) {
-      _sending = false;
+      _sending.remove(sid); // 加载期间会话被删除
       return;
     }
 
@@ -1006,19 +1091,19 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _touch(updated);
     await _persistOp(() => _storage.insertMessage(updated.id, userMsg), '用户消息');
 
+    // 该会话进入生成态（进度条目 = 空白起点）。
     state = state.copyWith(
-      isStreaming: true,
-      streamingSessionId: updated.id,
-      streamingContent: '',
-      streamingReasoning: '',
-      steps: [],
+      streams: {...state.streams, sid: const SessionStream()},
       clearError: true,
     );
-    _lastStreamFlush = DateTime.fromMillisecondsSinceEpoch(0);
+    _lastFlush[sid] = DateTime.fromMillisecondsSinceEpoch(0);
 
-    _cancelToken = CancelToken();
     final sessionId = updated.id;
+    final token = CancelToken();
+    _cancelTokens[sessionId] = token;
     // 云端 Agent 请求要带 App 会话 id（后端据此维持远端 session/chat 映射）。
+    // 正式路径由 run(agentSessionId:) 逐层传递；此静态字段仅作未传参
+    // 调用的兜底，并行对话下它会互相覆盖，不能再当主通道。
     LlmClient.agentSessionId = sessionId;
 
     // 发送前自动检索知识库（未配置 embedding 模型或检索失败时静默跳过）。
@@ -1065,14 +1150,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
       await for (final ev in _orchestrator.run(
         config: effConfig,
         history: history,
-        cancelToken: _cancelToken,
+        cancelToken: token,
+        agentSessionId: sessionId,
         knowledge: knowledge,
         persona: _getPersona(),
         thinking: _getThinking(),
         reasoningEffort: _getReasoningEffort(),
       )) {
         // 长 Streaming 期间 notifier 可能已被 dispose（容器销毁/热重启），
-        // 此时写 state 会抛 StateError 并让 isStreaming 永远无法复位。
+        // 此时写 state 会抛 StateError 并让进度条目永远无法清除。
         if (!mounted) return;
         if (ev is AgentDelta) {
           buf.write(ev.delta);
@@ -1085,16 +1171,18 @@ class ChatNotifier extends StateNotifier<ChatState> {
           // 触发掉帧，视觉上反而是「一顿一顿」。90ms(约 11fps) 已
           // 明显快于人眼阅读速度，且把每帧解析成本摊薄近三成。
           final now = DateTime.now();
-          if (now.difference(_lastStreamFlush).inMilliseconds >= 90) {
-            _lastStreamFlush = now;
-            state = state.copyWith(streamingContent: buf.toString());
+          final last = _lastFlush[sessionId] ??
+              DateTime.fromMillisecondsSinceEpoch(0);
+          if (now.difference(last).inMilliseconds >= 90) {
+            _lastFlush[sessionId] = now;
+            _mutateStream(sessionId, (s) => s.copyWith(content: buf.toString()));
           }
         } else if (ev is AgentReasoning) {
-          state = state.copyWith(
-              streamingReasoning:
-                  state.streamingReasoning + ev.delta);
+          _mutateStream(sessionId,
+              (s) => s.copyWith(reasoning: s.reasoning + ev.delta));
         } else if (ev is AgentStatus) {
-          state = state.copyWith(steps: [...state.steps, '⏳ ${ev.text}']);
+          _mutateStream(
+              sessionId, (s) => s.copyWith(steps: [...s.steps, '⏳ ${ev.text}']));
         } else if (ev is AgentToolDone) {
           // 工具调度统计：MCP 工具名带「服务器名__工具名」双下划线约定
           if (ev.toolName.contains('__')) {
@@ -1104,7 +1192,8 @@ class ChatNotifier extends StateNotifier<ChatState> {
           }
           // 只记录工具名（UI 在「正在思考」行旁展示），
           // 不再拼接结果摘要——按用户要求不显示调用详情。
-          state = state.copyWith(steps: [...state.steps, '🔧 ${ev.toolName}']);
+          _mutateStream(
+              sessionId, (s) => s.copyWith(steps: [...s.steps, '🔧 ${ev.toolName}']));
         } else if (ev is AgentTokenUsage) {
           _bumpUsage(sessionId, 0, ev.promptTokens);
           _bumpUsage(sessionId, 1, ev.completionTokens);
@@ -1115,26 +1204,30 @@ class ChatNotifier extends StateNotifier<ChatState> {
           // 断流整轮重发：丢弃本轮残缺增量，思考面板回退到已完成轮次。
           // 不清 steps——「正在自动重试」的状态行要留着给用户看。
           buf.clear();
-          state = state.copyWith(
-              streamingContent: '', streamingReasoning: ev.reasoningPrefix);
+          _mutateStream(sessionId,
+              (s) => s.copyWith(content: '', reasoning: ev.reasoningPrefix));
         } else if (ev is AgentAnswer) {
           answer = ev.message;
         } else if (ev is AgentFailure) {
           // 用户主动取消不是错误：不弹错误横幅（部分内容如何落库见下方收尾逻辑）。
-          if (ev.message != '已取消。') {
+          // 错误条只在【本会话】处于前台时弹：A 失败时用户正在 B 里，
+          // 弹到 B 头上会让人以为是 B 出错。
+          if (ev.message != '已取消。' && state.activeSessionId == sessionId) {
             state = state.copyWith(error: ev.message);
           }
         }
       }
     } catch (e) {
-      if (mounted) state = state.copyWith(error: '运行出错：$e');
+      if (mounted && state.activeSessionId == sessionId) {
+        state = state.copyWith(error: '运行出错：$e');
+      }
     }
 
     if (!mounted) return;
 
     // 取消但已产出部分内容：把已有内容作为部分回答落库，而不是整段丢弃。
     // 标记「（已停止）」让用户知道回答被截断。
-    final wasCancelled = _cancelToken?.isCancelled ?? false;
+    final wasCancelled = token.isCancelled;
     if (wasCancelled && answer == null && buf.toString().trim().isNotEmpty) {
       answer = ChatMessage(
         id: uniqueId('a'),
@@ -1202,17 +1295,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       debugPrint('会话 $sessionId 已被删除，回答未保存（id=${answer.id}）');
     }
 
-    // 放在 finally 语义位置：任何提前 return 都不会让 isStreaming 卡在 true
-    if (mounted) {
-      state = state.copyWith(
-        isStreaming: false,
-        streamingContent: '',
-        steps: [],
-        clearStreamingSession: true,
-      );
-    }
-    _cancelToken = null;
-    _sending = false;
+    // 放在 finally 语义位置：任何提前 return 都不会让该会话的进度
+    // 条目卡在生成态（提前 return 只发生在 notifier 已 dispose 时）。
+    _endStream(sessionId);
   }
 
   /// 统一处理数据库写入：原来是裸 Future，磁盘满/DB 关闭时错误被完全吞掉，
@@ -1226,8 +1311,11 @@ class ChatNotifier extends StateNotifier<ChatState> {
     }
   }
 
+  /// 停止【当前激活会话】的生成。其它会话正在生成的流不受影响。
   Future<void> stop() async {
-    final t = _cancelToken;
+    final sid = state.activeSessionId;
+    if (sid == null) return;
+    final t = _cancelTokens[sid];
     if (t != null && !t.isCancelled) {
       t.cancel();
     }
@@ -1283,13 +1371,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
         : olderText;
 
     final token = CancelToken();
-    _compressToken = token;
+    _compressTokens[session.id] = token;
     try {
       final eff = config.copyWith(defaultChatModel: model);
       final buf = StringBuffer();
       await for (final ev in _llm.chatStream(
         config: eff,
         cancelToken: token,
+        // 压缩若走云端 Agent 配置，appSessionId 必须是本会话的 id。
+        agentSessionId: session.id,
         messages: [
           {
             'role': 'system',
@@ -1348,7 +1438,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
       debugPrint('上下文压缩失败（降级为不压缩）：$e');
       return msgs;
     } finally {
-      if (identical(_compressToken, token)) _compressToken = null;
+      if (identical(_compressTokens[session.id], token)) {
+        _compressTokens.remove(session.id);
+      }
     }
   }
   /// 非流式语义但复用 chatStream（拿到 FinalMessage 即收敛）。
@@ -1364,6 +1456,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
       final buf = StringBuffer();
       await for (final ev in _llm.chatStream(
         config: eff,
+        agentSessionId: sessionId,
         messages: [
           {
             'role': 'system',

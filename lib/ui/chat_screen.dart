@@ -575,13 +575,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             message: m, onQuote: _quoteToInput, onSend: _sendSelection));
       }
     }
-    // 流式状态是全局单份，streamingSessionId 标记流内容归属的会话：
-    // 仅当它正是当前会话时才渲染流式气泡，否则用户切到别的会话
-    // 会把别的会话的流式内容「串台」渲染进来。新建会话后
-    // activeSessionId 立即等于 streamingSessionId，行为不受影响。
-    if (chat.isStreaming &&
-        chat.streamingSessionId != null &&
-        chat.streamingSessionId == chat.activeSessionId) {
+    // 流式进度按会话隔离（ChatState.streams），isStreaming/内容等
+    // 派生视图只取【当前激活会话】的那份：切到别的会话看到的是
+    // 自己的进度（没有则不渲染气泡），不会把别的对话的流「串台」进来。
+    if (chat.isStreaming) {
       // 思考行右侧的模式徽章（⚡快速回答 / ⚡深度思考）跟随输入栏当前开关。
       final thinkingOn = ref.watch(thinkingProvider);
       // RepaintBoundary 把流式气泡的重绘限制在气泡自身图层内，

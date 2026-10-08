@@ -254,9 +254,9 @@ class LlmClient {
   /// 当前对话的 App 会话 id（仅云端 Agent 请求需要）。
   ///
   /// Agent 侧每次对话必须绑定会话，后端靠它维持远端 session/chat 映射。
-  /// 用静态可变字段而非逐层传参：调用链已经带了 config，再加参数要改
-  /// chatStream / _chatStreamOnce / AgentOrchestrator.run 等 4 处签名。
-  /// 每次 send() 都会覆写，串行对话下不会串号。
+  ///
+  /// ⚠️ 仅作未传参调用的兜底：并行对话下多个 send 会互相覆盖这个静态值，
+  /// 主通道是 [chatStream] 的 `agentSessionId` 参数（由调用方按会话传入）。
   static String? agentSessionId;
 
   /// 本轮使用的模型参数：优先取当前聊天模型的设置。
@@ -281,6 +281,10 @@ class LlmClient {
     CancelToken? cancelToken,
     bool thinking = false,
     String reasoningEffort = 'medium',
+
+    /// 本轮绑定的 App 会话 id（云端 Agent 用）。并行对话时各自传各自的，
+    /// 不能依赖静态字段——它会被并发的另一次 send 覆盖导致串号。
+    String? agentSessionId,
   }) async* {
     final keys = config.effectiveKeys;
     if (keys.isEmpty) {
@@ -300,6 +304,7 @@ class LlmClient {
             cancelToken: cancelToken,
             thinking: thinking,
             reasoningEffort: reasoningEffort,
+            agentSessionId: agentSessionId,
           )) {
             yieldedAnything = true;
             yield ev;
@@ -375,6 +380,7 @@ class LlmClient {
     CancelToken? cancelToken,
     bool thinking = false,
     String reasoningEffort = 'medium',
+    String? agentSessionId,
   }) async* {
     final url = chatUrl(config);
     final m = _activeModel(config);
@@ -400,7 +406,8 @@ class LlmClient {
     // 云端 Agent：额外带上 App 会话 id，后端据此维持远端 session/chat
     // 映射（Agent 侧每次对话都必须绑定会话）。
     if (_isAgent(config)) {
-      final sid = agentSessionId;
+      // 参数优先（并行对话各自持有正确会话 id），静态字段仅作兜底。
+      final sid = agentSessionId ?? LlmClient.agentSessionId;
       if (sid != null && sid.isNotEmpty) body['appSessionId'] = sid;
       // 透传 modelId：让用户在 App 里选中的模型真正生效。
       //

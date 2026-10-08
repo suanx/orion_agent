@@ -93,18 +93,35 @@ class SessionDrawer extends ConsumerWidget {
                                     : FontWeight.w500,
                               ),
                             ),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.close_rounded, size: 18),
-                              onPressed: () {
-                                ref
-                                    .read(chatProvider.notifier)
-                                    .deleteSession(s.id);
-                                // 多端同步：删除要传播到其它设备，
-                                // 记入待删队列由下次同步上传 tombstone
-                                unawaited(ref
-                                    .read(cloudSyncServiceProvider)
-                                    .markSessionDeleted(s.id));
-                              },
+                            // 并行对话：别的会话还在生成时给出可视反馈，
+                            // 用户知道切走后那条流仍在跑。
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                if (chat.isSessionStreaming(s.id)) ...[
+                                  const SizedBox(
+                                    width: 14,
+                                    height: 14,
+                                    child: CircularProgressIndicator(
+                                        strokeWidth: 2),
+                                  ),
+                                  const SizedBox(width: 6),
+                                ],
+                                IconButton(
+                                  icon:
+                                      const Icon(Icons.close_rounded, size: 18),
+                                  onPressed: () {
+                                    ref
+                                        .read(chatProvider.notifier)
+                                        .deleteSession(s.id);
+                                    // 多端同步：删除要传播到其它设备，
+                                    // 记入待删队列由下次同步上传 tombstone
+                                    unawaited(ref
+                                        .read(cloudSyncServiceProvider)
+                                        .markSessionDeleted(s.id));
+                                  },
+                                ),
+                              ],
                             ),
                             onTap: () {
                               ref

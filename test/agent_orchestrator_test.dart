@@ -38,6 +38,7 @@ class FakeLlm implements LlmClient {
     dynamic cancelToken,
     bool thinking = false,
     String reasoningEffort = 'medium',
+    String? agentSessionId,
   }) async* {
     seenMessages.add(List.of(messages));
     final idx = call < scripted.length ? call : scripted.length - 1;
@@ -98,6 +99,7 @@ class ScriptedLlm implements LlmClient {
     dynamic cancelToken,
     bool thinking = false,
     String reasoningEffort = 'medium',
+    String? agentSessionId,
   }) async* {
     final idx = call < rounds.length ? call : rounds.length - 1;
     call++;

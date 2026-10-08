@@ -134,6 +134,10 @@ class AgentOrchestrator {
     String persona = '',
     bool thinking = false,
     String reasoningEffort = 'medium',
+
+    /// 本轮绑定的 App 会话 id，透传给云端 Agent 请求（并行对话时
+    /// 各会话各传各的，避免静态字段互相覆盖导致串号）。
+    String? agentSessionId,
   }) async* {
     final messages = <Map<String, dynamic>>[
       {'role': 'system', 'content': _systemPrompt(knowledge, persona)},
@@ -199,6 +203,7 @@ class AgentOrchestrator {
             cancelToken: cancelToken,
             thinking: thinking,
             reasoningEffort: reasoningEffort,
+            agentSessionId: agentSessionId,
           )) {
             if (ev is ContentDelta) {
               roundDeltas++;
