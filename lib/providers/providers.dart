@@ -1710,6 +1710,7 @@ class CloudState {
     this.plan = 'free',
     this.planExpiresAt,
     this.usageToday = const {},
+    this.aiQuota = const CloudAiQuota(),
     this.licenses = const [],
     this.busy = false,
     this.error,
@@ -1724,6 +1725,12 @@ class CloudState {
   final int? planExpiresAt;
   final Map<String, int> usageToday;
 
+  /// 云端模型周额度（每周一 00:00 UTC+8 自动归零）。
+  ///
+  /// [CloudAiQuota.empty] 表示后端未下发该字段（旧版后端），此时额度
+  /// 卡片整节隐藏，而不是显示一个永远为 0 的进度条。
+  final CloudAiQuota aiQuota;
+
   /// 已激活的卡密记录。
   final List<CloudActivatedLicense> licenses;
   final bool busy;
@@ -1736,6 +1743,7 @@ class CloudState {
     String? plan,
     int? planExpiresAt,
     Map<String, int>? usageToday,
+    CloudAiQuota? aiQuota,
     List<CloudActivatedLicense>? licenses,
     bool? busy,
     String? error,
@@ -1748,6 +1756,7 @@ class CloudState {
         plan: plan ?? this.plan,
         planExpiresAt: planExpiresAt ?? this.planExpiresAt,
         usageToday: usageToday ?? this.usageToday,
+        aiQuota: aiQuota ?? this.aiQuota,
         licenses: licenses ?? this.licenses,
         busy: busy ?? this.busy,
         error: clearError ? null : (error ?? this.error),
@@ -1905,8 +1914,11 @@ final cloudModelsProvider =
   controller.addListener(() {
     configNotifier.injectCloudConfigs(controller.state.configs);
   });
+  // 监听登录态变化：登出后必须清掉云端配置，否则会把上一个账号的
+  // 供应商留在内存里。类型参数要显式给 CloudState —— ref.listen 接收的
+  // 是 notifier 暴露的 ProviderListenable<CloudState>，不是 StateNotifier。
   ref.listen<CloudState>(
-    ref.watch(cloudProvider),
+    ref.watch(cloudProvider.notifier),
     (prev, next) {
       final wasIn = prev?.loggedIn ?? false;
       if (next.loggedIn != wasIn) {

@@ -107,6 +107,12 @@ class CloudModelsController extends ChangeNotifier {
   CloudModelsState _state = const CloudModelsState();
   CloudModelsState get state => _state;
 
+  /// 可用的云端模型配置（便捷入口，等价于 [state].configs）。
+  List<LlmConfig> get configs => _state.configs;
+
+  /// 后端是否已配置供应商。UI 据此决定是否展示云端入口。
+  bool get available => _state.available;
+
   /// 上次成功加载的时间，用于避免频繁刷新。
   DateTime? _loadedAt;
 
