@@ -1192,7 +1192,8 @@ class _StreamingMarkdownState extends State<_StreamingMarkdown> {
 /// 流式期间每个 delta 都会触发整页 rebuild，未缓存的 MarkdownBody 会被
 /// 重新解析全部消息文本。这里以「亮度|文本」为键缓存解析结果（Widget 实例
 /// 复用后 Flutter 会直接跳过该子树的 rebuild），上限 32 条，满了先移除最早条目。
-class _CachedMarkdown extends StatelessWidget {  const _CachedMarkdown({required this.text});
+class _CachedMarkdown extends StatelessWidget {
+  const _CachedMarkdown({required this.text});
 
   final String text;
 
