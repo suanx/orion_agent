@@ -1072,10 +1072,15 @@ class ChatNotifier extends StateNotifier<ChatState> {
         if (ev is AgentDelta) {
           buf.write(ev.delta);
           // 合帧：每个 delta 都全量 toString + 重建整个 ChatState 是
-          // O(n²) 拷贝，长回答会明显卡顿。60ms 内的 delta 只累积，
+          // O(n²) 拷贝，长回答会明显卡顿。窗口内的 delta 只累积，
           // 到点或流结束时统一刷一次 UI。
+          //
+          // 90ms 而非 60ms：UI 侧每次刷新都要重新布局流式气泡并解析
+          // Markdown，60ms(约 16fps) 偏高，在中低端机上每帧都跑不满就
+          // 触发掉帧，视觉上反而是「一顿一顿」。90ms(约 11fps) 已
+          // 明显快于人眼阅读速度，且把每帧解析成本摊薄近三成。
           final now = DateTime.now();
-          if (now.difference(_lastStreamFlush).inMilliseconds >= 60) {
+          if (now.difference(_lastStreamFlush).inMilliseconds >= 90) {
             _lastStreamFlush = now;
             state = state.copyWith(streamingContent: buf.toString());
           }

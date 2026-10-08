@@ -5,9 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import '../services/announcement_service.dart';
 import '../services/navigation_service.dart';
 import '../services/terminal_service.dart';
 import 'about_screen.dart';
+import 'announcement_dialog.dart';
 import 'chat_screen.dart';
 import 'sessions_drawer.dart';
 import 'setup_screen.dart';
@@ -53,7 +55,35 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // 启动自动检查更新：延迟几秒避开启动高峰；
     // 发现新版本弹窗展示（用户要求：每次进入软件都自动检查）。
     WidgetsBinding.instance.addObserver(this);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _autoCheckUpdate());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _autoCheckUpdate();
+      // 启动后拉一次云端公告。后台新建的公告要在下次打开 App 时弹出来，
+      // 延迟 1.2 秒避开启动高峰，也避免与首屏的引导弹窗抢同一时刻。
+      Future.delayed(const Duration(milliseconds: 1200), _checkAnnouncement);
+    });
+  }
+
+  /// 拉取并展示云端公告。
+  ///
+  /// best-effort：网络不通、后端没配公告、已读过都静默跳过，
+  /// 任何异常都不能影响主流程（用户是来用 App 的，不是来看公告的）。
+  Future<void> _checkAnnouncement() async {
+    if (!mounted) return;
+    try {
+      final svc = AnnouncementService(ref.read(sharedPreferencesProvider));
+      final ann = await svc.fetchPending(version: kAppVersion);
+      if (ann == null || !mounted) return;
+      final seen = await showAnnouncementDialog(context, ann);
+      if (!mounted) return;
+      if (seen == true) {
+        await svc.markSeen(ann);
+      } else {
+        // 遮罩关闭/「稍后看」：静默 6 小时后再提醒
+        await svc.snooze();
+      }
+    } catch (_) {
+      // 公告是附加信息，失败静默
+    }
   }
 
   /// 启动时自动检查更新，发现新版本弹窗展示更新日志。

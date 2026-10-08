@@ -505,17 +505,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  void _scrollToBottom() {
+  void _scrollToBottom({bool instant = false}) {
     // Future.delayed / post-frame 回调触发时 State 可能已销毁，
     // 摸已 dispose 的 ScrollController 会抛异常。
     if (!mounted) return;
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 250),
-        curve: Curves.easeOut,
-      );
+    if (!_scrollController.hasClients) return;
+    final target = _scrollController.position.maxScrollExtent;
+    if (instant) {
+      // 流式期间用 jumpTo：animateTo 的 250ms 动画与 90ms 的合帧窗口
+      // 相互打断 —— 每次 animateTo 都重新从当前位置起步，永远推不到底，
+      // 表现为内容「抖动」。
+      _scrollController.jumpTo(target);
+      return;
     }
+    _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 250),
+      curve: Curves.easeOut,
+    );
   }
 
   @override
@@ -537,7 +544,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (chat.isStreaming && streamingLen != _lastScrollLen) {
       _lastScrollLen = streamingLen;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scrollToBottom();
+        // instant=true：流式期不用动画，避免与下一帧的合帧互相打断
+        if (mounted) _scrollToBottom(instant: true);
       });
     }
 
@@ -1083,13 +1091,108 @@ Widget _mdSafe(BuildContext context, String text) {
   }
 }
 
+/// 流式正文的渲染器：**已成型段落走 Markdown，正在写的那段走纯文本**。
+///
+/// 为什么不能直接对全文调 [_mdSafe]：
+///   flutter_markdown 每次 build 都要把整段文本**重新解析成一棵语法树**。
+///   流式期间每个 delta 都触发一次 build，于是长度为 n 的回答要解析
+///   n 次，累计 O(n²)——短回答无感，长回答（几千字）就会明显掉帧，
+///   表现为「字逐个往外蹦、一闪一闪」。
+///
+/// 这里的做法：
+///   以最后一个空行为界把文本切成 [settled]（已成型段落）与 [tail]
+///   （正在写的最后一段）。settled 用 Markdown 渲染且**按内容缓存**——
+///   只有当新段落真正成型时才会重新解析一次，而不是每个 delta 都解析；
+///   tail 用普通 [Text] 渲染，零解析成本。
+///
+/// 效果：解析次数从「每 delta 一次」降到「每段落一次」，量级从 O(n²)
+/// 降到 O(段落数)。视觉上已成型部分保持原有 Markdown 排版，
+/// 只有最后一行是纯文本，接缝处不可感知。
+///
+/// 为什么切成「段落」而不是「按字数」：段落边界是 Markdown 语法的天然
+/// 边界，切在这里保证 settled 部分永远是完整合法的 Markdown（不会出现
+/// 半截的 ``` 或未闭合的 **），渲染结果与流结束时一致。
+class _StreamingMarkdown extends StatefulWidget {
+  const _StreamingMarkdown({required this.text});
+
+  final String text;
+
+  @override
+  State<_StreamingMarkdown> createState() => _StreamingMarkdownState();
+}
+
+class _StreamingMarkdownState extends State<_StreamingMarkdown> {
+  /// 上一次已解析的 settled 前缀。内容不变则直接复用上次的 Widget，
+  /// 连 MarkdownBody 的 build 都不会再跑一遍。
+  String? _settledKey;
+  Widget? _settledBody;
+
+  /// 段落边界：最后一个空行（连续换行）的结束位置。
+  ///
+  /// 取不到时返回 0 —— 表示「还没有任何段落成型」，全文按纯文本渲染。
+  static int _splitTail(String text) {
+    var idx = text.lastIndexOf('\n\n');
+    if (idx < 0) return 0;
+    // 跳过连续的换行，取最后一段空行的结束处
+    while (idx + 2 < text.length && text[idx + 2] == '\n') {
+      idx += 1;
+    }
+    final cut = idx + 2;
+    // 切点太靠前（settled 不足 8 字）时没必要拆，纯文本渲染更快
+    return cut >= 8 ? cut : 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final text = widget.text;
+    final cut = _splitTail(text);
+    if (cut <= 0) {
+      // 还没成型任何段落：纯文本，零解析开销。
+      _settledKey = null;
+      _settledBody = null;
+      return _plainStream(context, text);
+    }
+
+    final settled = text.substring(0, cut);
+    final tail = text.substring(cut);
+    final key = '${Theme.of(context).brightness.name}|$settled';
+    if (key != _settledKey) {
+      _settledKey = key;
+      _settledBody = _mdSafe(context, settled);
+    }
+
+    // 纯文本样式对齐 Markdown 的 p（15.5 / 行高 1.6），接缝处不跳字号。
+    final on = onSurface(context, 0.88);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        _settledBody!,
+        Text(
+          tail,
+          style: TextStyle(fontSize: 15.5, height: 1.6, color: on),
+        ),
+      ],
+    );
+  }
+
+  /// 纯文本渲染流式正文。保留换行，且不做任何语法解析。
+  Widget _plainStream(BuildContext context, String text) => Text(
+        text,
+        style: TextStyle(
+          fontSize: 15.5,
+          height: 1.6,
+          color: onSurface(context, 0.88),
+        ),
+      );
+}
+
 /// 已完结消息的 Markdown 渲染缓存。
 ///
 /// 流式期间每个 delta 都会触发整页 rebuild，未缓存的 MarkdownBody 会被
 /// 重新解析全部消息文本。这里以「亮度|文本」为键缓存解析结果（Widget 实例
 /// 复用后 Flutter 会直接跳过该子树的 rebuild），上限 32 条，满了先移除最早条目。
-class _CachedMarkdown extends StatelessWidget {
-  const _CachedMarkdown({required this.text});
+class _CachedMarkdown extends StatelessWidget {  const _CachedMarkdown({required this.text});
 
   final String text;
 
@@ -1382,7 +1485,7 @@ class _StreamingBubble extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
             else if (content.isNotEmpty)
-              _mdSafe(context, content),
+              _StreamingMarkdown(text: content),
           ],
         ),
       ),
