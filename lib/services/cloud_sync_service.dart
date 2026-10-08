@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -266,8 +267,7 @@ class CloudSyncService {
     Map<String, dynamic>? remotePrefs;
     Map<String, dynamic>? remotePrefsRow;
 
-    for (final raw in rows) {
-      final row = raw as Map<String, dynamic>;
+    for (final row in rows) {
       final rowId = row['rowId'] as String? ?? '';
       final table = row['table'] as String? ?? '';
       if (rowId == _keyCheckRowId) continue; // 校验行不参与合并
@@ -311,7 +311,7 @@ class CloudSyncService {
 
     // 4) 配置/设置：远端更新则整域恢复（走 BackupService 已验证的导入路径）
     if (remotePrefs != null && remotePrefsRow != null) {
-      final at = (remotePrefsRow!['updatedAt'] as num?)?.toInt() ?? 0;
+      final at = (remotePrefsRow['updatedAt'] as num?)?.toInt() ?? 0;
       final localAt = _prefs.getInt(_prefsPushedAtKey) ?? 0;
       if (at > localAt) {
         final backupJson = jsonEncode({
@@ -385,7 +385,7 @@ class CloudSyncService {
     return pushed;
   }
 
-  Future<int> _pushRows(String _table, List<Map<String, dynamic>> rows) async {
+  Future<int> _pushRows(String table, List<Map<String, dynamic>> rows) async {
     final resp = await _cloud.authedPost('/api/sync/push', {'rows': rows});
     return (resp['accepted'] as num?)?.toInt() ?? 0;
   }
@@ -666,7 +666,7 @@ class _CipherText {
 
 /// 云同步通用错误。
 class CloudSyncException implements Exception {
-  CloudSyncException(this.message);
+  const CloudSyncException(this.message);
   final String message;
   @override
   String toString() => message;

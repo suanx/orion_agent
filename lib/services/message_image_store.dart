@@ -95,7 +95,8 @@ class MessageImageStore {
       final list = (jsonDecode(imagesJson) as List? ?? const [])
           .cast<String>()
           .toList();
-      return resolve(list);
+      // 必须 await：否则 resolve 抛出的异常会绕过下面的 catch
+      return await resolve(list);
     } catch (e) {
       AppLog.e('imagesJson 解析失败，按空图片处理', e);
       return const [];

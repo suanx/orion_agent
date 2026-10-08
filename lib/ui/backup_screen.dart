@@ -96,11 +96,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     return true;
   }
 
-  void _toast(String msg) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
-  }
-
-
   Future<void> _export() async {
     final selected = {
       for (final (id, key, _) in _domains) id: _switch(key),
