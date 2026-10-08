@@ -1934,6 +1934,12 @@ final cloudModelsProvider =
   // 与 watch 的用法完全一致（本文件 chatProvider 里就有
   // ref.watch(toolRegistryProvider) 这类直接 watch provider 的用法）。
   ref.watch(cloudProvider);
+  // ⚠️ 必须在这里触发首次加载：controller 只是被"创建"，并不会自己去拉数据。
+  // 之前漏了这句，导致 chat_screen 的 ref.read 永远读到空列表 —— 云端模型
+  // 已在后端配好、App 也已登录，但对话界面就是看不到。
+  // 用 Future.microtask 延到当前同步构建结束之后再发请求，避免在
+  // provider 构造过程中直接 await（Riverpod 不允许在 create 里改状态）。
+  Future.microtask(() => controller.load());
   return controller;
 });
 

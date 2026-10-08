@@ -268,6 +268,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// upsert 进本地配置才能被 activeConfig 指向。
   Future<void> _pickModel(BuildContext anchor) async {
     final state = ref.read(configProvider);
+    final cloudNotifier = ref.read(cloudModelsProvider.notifier);
+    // 点开时若还没拉过（首次进入对话页、或列表还是空的），先补一次拉取。
+    // controller 构造时已通过 Future.microtask 触发过，这里是兜底——
+    // 用户可能在加载完成前就点了图标，或者后端刚配好供应商还没同步过来。
+    if (cloudNotifier.state.configs.isEmpty) {
+      await cloudNotifier.load(force: true);
+      if (!mounted) return; // 拉取期间页面可能已销毁
+    }
     final cloud = ref.read(cloudModelsProvider);
     // (提供商, 模型) 平铺：对话不再局限于「第一个已启用」的提供商
     final entries = <(LlmConfig, ProviderModel)>[
@@ -281,11 +289,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         for (final m in c.chatModels) (c, m),
     ];
     if (entries.isEmpty && cloudEntries.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(ref.read(cloudServiceProvider).email == null
-              ? '请先在「我的 → 云服务」登录，即可使用免费云端模型；'
-                  '也可自行配置模型服务'
-              : '请先在「我的 → AI 提供商」配置模型服务')));
+      // 两个列表都空：区分是「没登录」「已登录但后端没配供应商」还是
+      // 「拉取失败」，给对应的提示而不是笼统地说"去配置模型服务"。
+      final email = ref.read(cloudServiceProvider).email;
+      final err = cloud.error;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
+            email == null
+                ? '请先在「我的 → 云服务」登录，即可使用免费云端模型；'
+                    '也可自行配置模型服务'
+                : (err != null
+                    ? '云端模型加载失败：$err'
+                    : '暂无云端模型。请在管理台「AI 模型 → 供应商配置」'
+                        '录入上游地址与 API Key 后启用'),
+          )));
       return;
     }
     final active = state.activeConfig;

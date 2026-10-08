@@ -175,13 +175,13 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
           ? const Center(child: CircularProgressIndicator())
           : state.loggedIn
               ? _buildCenter(context, state, cloud)
-              : _buildLogin(context, state, cloud),
+              : _buildLogin(context, state),
     );
   }
 
   // ================= 登录页 =================
 
-  Widget _buildLogin(BuildContext context, CloudState state, CloudService cloud) {
+  Widget _buildLogin(BuildContext context, CloudState state) {
     final scheme = Theme.of(context).colorScheme;
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
@@ -254,14 +254,6 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
           ),
         ),
         const SizedBox(height: 20),
-
-        // ------- 云端服务器（地址写死在 lib/services/cloud_config.dart）-------
-        _CompactRow(
-          icon: Icons.dns_outlined,
-          label: '云端服务器',
-          value: _hostOf(cloud.baseUrl),
-        ),
-        const SizedBox(height: 16),
 
         // ------- 登录 / 注册 -------
         Container(
@@ -492,19 +484,6 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
         ),
         const SizedBox(height: 20),
 
-        // ------- 服务器地址 -------
-        _Section(
-          title: '设置',
-          children: [
-            _CompactRow(
-              icon: Icons.dns_outlined,
-              label: '云端服务器',
-              value: _hostOf(cloud.baseUrl),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-
         // ------- 退出登录 -------
         InkWell(
           borderRadius: BorderRadius.circular(20),
@@ -539,11 +518,6 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
   }
 
   // ---------------- 小工具 ----------------
-
-  String _hostOf(String? base) {
-    if (base == null || base.isEmpty) return '未配置';
-    return base.replaceFirst(RegExp(r'^https?://'), '');
-  }
 
   String _expiryText(CloudState state) {
     if (state.plan == 'lifetime') return '永久有效';
@@ -748,46 +722,6 @@ class _Section extends StatelessWidget {
           ),
         ),
       ],
-    );
-  }
-}
-
-/// 登录页 Hero 下方的一行紧凑信息（服务器地址等）。
-class _CompactRow extends StatelessWidget {
-  const _CompactRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
-
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.only(left: 16, right: 4),
-      decoration: BoxDecoration(
-        color: surface(context),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: onSurface(context, 0.65)),
-          const SizedBox(width: 10),
-          Text(label,
-              style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500)),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              value,
-              style: TextStyle(fontSize: 13, color: onSurface(context, 0.45)),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
