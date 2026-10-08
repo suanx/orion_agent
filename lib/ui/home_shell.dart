@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
 import '../services/announcement_service.dart';
+import '../services/app_log.dart';
 import '../services/navigation_service.dart';
 import '../services/terminal_service.dart';
 import 'about_screen.dart';
@@ -65,24 +66,27 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   /// 拉取并展示云端公告。
   ///
-  /// best-effort：网络不通、后端没配公告、已读过都静默跳过，
-  /// 任何异常都不能影响主流程（用户是来用 App 的，不是来看公告的）。
+  /// best-effort：网络不通、后端没配公告都静默跳过，任何异常都不能影响
+  /// 主流程（用户是来用 App 的，不是来看公告的）。
+  ///
+  /// **每次启动必弹**（2026-10-09）：`force: true` 无视已读/静默期，
+  /// 只要后端配了匹配版本的公告就弹。[_annShownThisLaunch] 保证同一次
+  /// 启动内只弹一次 —— 避免 initState 与后续调用重复弹两个遮罩。
+  bool _annShownThisLaunch = false;
+
   Future<void> _checkAnnouncement() async {
-    if (!mounted) return;
+    if (!mounted || _annShownThisLaunch) return;
     try {
       final svc = AnnouncementService(ref.read(sharedPreferencesProvider));
-      final ann = await svc.fetchPending(version: kAppVersion);
+      final ann = await svc.fetchPending(version: kAppVersion, force: true);
       if (ann == null || !mounted) return;
-      final seen = await showAnnouncementDialog(context, ann);
-      if (!mounted) return;
-      if (seen == true) {
-        await svc.markSeen(ann);
-      } else {
-        // 遮罩关闭/「稍后看」：静默 6 小时后再提醒
-        await svc.snooze();
-      }
-    } catch (_) {
-      // 公告是附加信息，失败静默
+      _annShownThisLaunch = true;
+      AppLog.i('弹出公告：${ann.title}');
+      await showAnnouncementDialog(context, ann);
+    } catch (e) {
+      // 公告是附加信息，失败不影响主流程——但要留痕，
+      // 否则"后台建了公告用户说没弹"时无从判断是没配、没网还是抛异常。
+      AppLog.w('拉取/展示公告失败', e);
     }
   }
 
@@ -125,20 +129,31 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // 延迟：首帧渲染 + 终端自启任务 + MCP 连接都在抢启动窗口，
     // 更新检查不与它们竞争。
     await Future<void>.delayed(const Duration(seconds: 4));
-    final info = await ref.read(updateServiceProvider).checkForUpdate(
-        kAppVersion,
-        // Beta 用户：自动检查也走含预发布的通道（与关于页手动检查一致）
-        includePrereleases: ref.read(betaOptInProvider));
-    if (info == null || !mounted) return;
-    ref.read(pendingUpdateProvider.notifier).state = info;
-    if (!mounted) return;
-    // 统一更新弹窗（截图样式）：弹窗内直接下载（进度条 + 实时速度），
-    // 完成后自动拉起安装器；「稍后再说」随时可退出，下载中会取消。
-    _updateDialogOpen = true;
     try {
-      await UpdateDownloadDialog.show(context, info);
-    } finally {
-      _updateDialogOpen = false;
+      final info = await ref.read(updateServiceProvider).checkForUpdate(
+          kAppVersion,
+          // Beta 用户：自动检查也走含预发布的通道（与关于页手动检查一致）
+          includePrereleases: ref.read(betaOptInProvider));
+      // 记一条"检查过且没有新版"——排查"为什么不弹更新"时，
+      // 有这条才能排除"压根没发起检查"。
+      AppLog.i(info == null
+          ? '检查更新：已是最新版（v$kAppVersion）'
+          : '检查更新：发现 ${info.version}');
+      if (info == null || !mounted) return;
+      ref.read(pendingUpdateProvider.notifier).state = info;
+      if (!mounted) return;
+      // 统一更新弹窗（截图样式）：弹窗内直接下载（进度条 + 实时速度），
+      // 完成后自动拉起安装器；「稍后再说」随时可退出，下载中会取消。
+      _updateDialogOpen = true;
+      try {
+        await UpdateDownloadDialog.show(context, info);
+      } finally {
+        _updateDialogOpen = false;
+      }
+    } catch (e) {
+      // GitHub API 国内不稳定，失败很常见——记警告而非错误，
+      // 免得日志里一片红把真正的故障淹了。
+      AppLog.w('检查更新失败（不影响使用）', e);
     }
   }
 

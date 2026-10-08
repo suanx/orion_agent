@@ -25,6 +25,7 @@ class CloudService {
   static const _tokensKey = 'cloud_tokens';
   static const _deviceTokenKey = 'cloud_device_token';
   static const _emailKey = 'cloud_email';
+  static const _usernameKey = 'cloud_username';
 
   final SharedPreferences _prefs;
   final FlutterSecureStorage _secure;
@@ -56,6 +57,15 @@ class CloudService {
   String? get email {
     final v = _prefs.getString(_emailKey)?.trim();
     return (v == null || v.isEmpty) ? null : v;
+  }
+
+  /// 账号名（后端注册时生成的 `agent-` + 5 位随机数字）。
+  ///
+  /// 注册/登录响应与 `/api/license/status` 都会带回，三处择优取值：
+  /// 老用户在后端首次登录时才回填，所以早期会是空串 —— 展示侧要能回落。
+  String get username {
+    final v = _prefs.getString(_usernameKey)?.trim();
+    return v ?? '';
   }
 
   /// 当前套餐（来自最近一次登录/注册响应；精确值以 fetchAccountInfo 为准）。
@@ -108,6 +118,7 @@ class CloudService {
     });
     await _saveTokens(CloudTokens.fromJson(data));
     await _prefs.setString(_emailKey, email.trim().toLowerCase());
+    _rememberUsername(data['username']);
   }
 
   Future<void> login(String email, String password) async {
@@ -119,6 +130,13 @@ class CloudService {
     });
     await _saveTokens(CloudTokens.fromJson(data));
     await _prefs.setString(_emailKey, email.trim().toLowerCase());
+    _rememberUsername(data['username']);
+  }
+
+  /// 记录账号名（仅在非空时覆盖，避免后端未下发把已有值冲成空）。
+  void _rememberUsername(Object? raw) {
+    final v = raw?.toString().trim() ?? '';
+    if (v.isNotEmpty) _prefs.setString(_usernameKey, v);
   }
 
   /// 登出：尽力通知服务端吊销 refresh token，无论成败本地令牌都清掉。
@@ -129,6 +147,7 @@ class CloudService {
     await _secure.delete(key: _tokensKey);
     await _secure.delete(key: _deviceTokenKey);
     await _prefs.remove(_emailKey);
+    await _prefs.remove(_usernameKey);
     if (rt != null) {
       try {
         await _dio.post('$baseUrl/api/auth/logout',
@@ -153,8 +172,11 @@ class CloudService {
         .whereType<Map>()
         .map((m) => CloudActivatedLicense.fromJson(Map<String, dynamic>.from(m)))
         .toList();
+    final username = data['username']?.toString().trim() ?? '';
+    _rememberUsername(username);
     return CloudAccountInfo(
       userId: data['userId']?.toString() ?? '',
+      username: username,
       plan: data['plan']?.toString() ?? 'free',
       planExpiresAt: (data['planExpiresAt'] as num?)?.toInt(),
       usageToday: usage,
@@ -487,6 +509,7 @@ class CloudTokens {
 class CloudAccountInfo {
   const CloudAccountInfo({
     required this.userId,
+    this.username = '',
     required this.plan,
     required this.planExpiresAt,
     required this.usageToday,
@@ -495,6 +518,10 @@ class CloudAccountInfo {
   });
 
   final String userId;
+
+  /// 账号名 `agent-` + 5 位随机数字；后端未回传时为空串。
+  final String username;
+
   final String plan;
   final int? planExpiresAt;
   final Map<String, int> usageToday;

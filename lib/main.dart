@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show kReleaseMode;
+// 完整引入而非 show kReleaseMode：下面要用 FlutterError.onError /
+// FlutterErrorDetails，它们在 foundation/assertions.dart 里，
+// 不确定 material 是否原样转发，全量引入最省心（同源声明不冲突）。
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -138,25 +141,26 @@ Widget _buildErrorCard(String message) {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // ---- 诊断日志（必须最先就位）----
+  // 先接管 debugPrint：全 App 39 处既有调用点（网络失败、DB 降级、
+  // MCP 连不上……）从此自动进日志，不必逐处改代码。
+  // 再 init() 建日志目录，保证后续所有启动打点都落盘 —— 排障时最需要的
+  // 恰恰是"启动到第几步挂了"，而那段过程正是 runApp 之前。
+  AppLog.installDebugPrintBridge();
+  await AppLog.init();
+
   // ---- 启动异常可见化（必须在任何异步逻辑之前安装）----
   // 只在发布版替换：debug 版保留默认红屏，开发排障体验不变。
-  // FlutterError.onError 不覆盖——debug 默认 presentError 已打日志，
-  // release 的可视化由下面的 ErrorWidget.builder 负责。
   if (kReleaseMode) {
-    ErrorWidget.builder = (details) {
-      final sb = StringBuffer(details.exceptionAsString());
-      final st = details.stack?.toString();
-      if (st != null && st.isNotEmpty) {
-        sb.write('\n');
-        // 取堆栈前 14 行：框架帧之后通常就是出错的业务组件，
-        // 行数太少会把关键帧截掉（v0.2.5 的 8 行就没截到业务帧）。
-        sb.write(st.split('\n').take(14).join('\n'));
-      }
-      // 组件渲染错误同步进诊断日志（关于 → 日志 可查看/导出）
-      AppLog.e('组件渲染出错', sb.toString());
-      return _buildErrorCard(sb.toString());
-    };
+    ErrorWidget.builder = (details) => _buildErrorCard(_errorText(details));
   }
+  FlutterError.onError = (details) {
+    // 渲染/框架错误进诊断日志（关于 → 日志 可查看/导出）。
+    // 走 onError 而不是 ErrorWidget.builder：后者只在发布版可见，
+    // 且同一个错误两边都记会翻倍——onError 两种模式都触发且带完整堆栈。
+    AppLog.e('组件渲染出错', _errorText(details));
+    FlutterError.presentError(details);
+  };
   ui.PlatformDispatcher.instance.onError = (error, stack) {
     debugPrint('Uncaught async error: $error\n$stack');
     // 未捕获异步错误进诊断日志（只取堆栈前 10 行，防止刷爆环形缓冲）
@@ -164,9 +168,21 @@ Future<void> main() async {
     return true;
   };
 
+  // 启动时间线：每一阶段打一条，失败与否都能看出卡在哪一步。
+  final sw = Stopwatch()..start();
+  int stepMs = 0;
+  void mark(String what) {
+    final el = sw.elapsedMilliseconds - stepMs;
+    stepMs = sw.elapsedMilliseconds;
+    AppLog.i('启动：$what（${el}ms）');
+  }
+
   AppLog.i('应用启动 v$kAppVersion');
+  // 立刻落盘：万一 init 之后很快崩了，"启动到哪一步"这条线索还在。
+  await AppLog.flushNow();
 
   final prefs = await SharedPreferences.getInstance();
+  mark('读取偏好设置');
 
   // 状态栏图标亮度按已保存的明暗设置决定，避免启动瞬间图标反色。
   _applyImmersiveUI(
@@ -181,8 +197,11 @@ Future<void> main() async {
     sessions = await storage.loadSessions();
   } catch (e) {
     debugPrint('启动加载会话失败（${e.toString().split('\n').first}），已用空会话列表继续');
+    // 这条必须落盘：用户重启后发现消息丢了，日志里得有"会话加载失败"这条线索
+    AppLog.e('启动失败：加载聊天会话，已用空列表继续', e);
     sessions = const [];
   }
+  mark('打开数据库并加载会话');
   final memory = MemoryService(db);
   final skills = SkillService(db);
   final roles = RoleService(db);
@@ -193,14 +212,18 @@ Future<void> main() async {
   Future<void> guard(String what, Future<void> Function() op) async {
     try {
       await op();
+      AppLog.i('启动：$what 已加载');
     } catch (e) {
       debugPrint('启动预加载失败（$what），已用空数据继续：$e');
+      // 「哪项功能启动失败」就答在这里——按 what 精确指名
+      AppLog.e('启动失败：$what 预加载，已用空数据继续', e);
     }
   }
 
   await guard('长期记忆', memory.load);
   await guard('技能', skills.load);
   await guard('角色', roles.load);
+  mark('预加载长期记忆 / 技能 / 角色');
 
   final container = ProviderContainer(overrides: [
     sharedPreferencesProvider.overrideWithValue(prefs),
@@ -210,13 +233,29 @@ Future<void> main() async {
     skillServiceProvider.overrideWithValue(skills),
     roleServiceProvider.overrideWithValue(roles),
   ]);
+  mark('创建 Provider 容器');
+
+  // 后台启动的任务统一起跑线：谁先出错就指名道姓记下来，
+  // 而不是各自吞掉异常后在日志里留白。
+  Future<void> launch(String what, Future<void> Function() op) async {
+    AppLog.i('启动后台任务：$what');
+    try {
+      await op();
+      AppLog.i('启动后台任务完成：$what');
+    } catch (e) {
+      debugPrint('启动后台任务失败（$what）：$e');
+      AppLog.e('启动失败：后台任务「$what」', e);
+    }
+  }
 
   // MCP 服务器后台连接（不阻塞启动），工具注册进 ToolRegistry
-  unawaited(container.read(mcpServiceProvider).connectAll());
+  unawaited(launch(
+      'MCP 服务器连接', () => container.read(mcpServiceProvider).connectAll()));
 
   // 云端服务：恢复登录态（只读本地令牌，静默失败，不阻塞启动）。
   // 套餐/用量的联网刷新由 bootstrap 内部静默进行。
-  unawaited(container.read(cloudProvider.notifier).bootstrap());
+  unawaited(launch(
+      '云端登录态恢复', () => container.read(cloudProvider.notifier).bootstrap()));
 
   // 本地通知：初始化渠道（不请求权限，权限由设置页显式触发）
   //
@@ -224,31 +263,47 @@ Future<void> main() async {
   // 之后再补的回调永远不会生效（init 内部对 _ready 短路）。
   // 用户点通知 → 写入导航意图；冷启动时 runApp 还没跑，
   // 意图会先记在 provider 里，HomeShell 首帧后再执行。
-  unawaited(container.read(notificationServiceProvider).init(
-        onTap: (payload) {
-          debugPrint('notification tapped: $payload');
-          container.read(navigationServiceProvider).handlePayload(payload);
-        },
-      ));
+  unawaited(launch('本地通知初始化', () => container
+      .read(notificationServiceProvider)
+      .init(onTap: (payload) {
+        debugPrint('notification tapped: $payload');
+        container.read(navigationServiceProvider).handlePayload(payload);
+      })));
 
   // 自启动任务：环境就绪的在后台拉起（不阻塞启动）
-  unawaited(container
+  unawaited(launch('自启动任务', () => container
       .read(terminalServiceProvider)
-      .autostartTasks(TerminalTask.decodeList(prefs.getString(
-          TerminalService.tasksPrefsKey))));
+      .autostartTasks(TerminalTask.decodeList(
+          prefs.getString(TerminalService.tasksPrefsKey)))));
 
   // 自动任务调度：补跑错过的每天任务 + 存活期每分钟 tick（不阻塞启动）。
   // 注意：无系统级后台能力，App 进程被杀则调度停止，
   // 错过的任务在下次启动时补跑（见 TasksNotifier._catchUpMissed）。
-  unawaited(container.read(tasksProvider.notifier).start());
+  unawaited(launch('定时任务调度',
+      () => container.read(tasksProvider.notifier).start()));
 
   // 高危 run_command 的用户确认卡（S1/F7）：注册全局处理器
   CommandGuard.instance.handler = _confirmRiskyCommand;
 
+  mark('派发后台任务（不阻塞启动）');
   runApp(UncontrolledProviderScope(
     container: container,
     child: const OrionAgentApp(),
   ));
+}
+
+/// 框架错误的可读文本：异常 + 堆栈前 14 行。
+///
+/// 行数太少会截掉出错的业务组件帧（v0.2.5 用 8 行就没截到），
+/// 太长则会把日志环形缓冲刷爆 —— 14 行是这两者的平衡点。
+String _errorText(FlutterErrorDetails details) {
+  final sb = StringBuffer(details.exceptionAsString());
+  final st = details.stack?.toString();
+  if (st != null && st.isNotEmpty) {
+    sb.write('\n');
+    sb.write(st.split('\n').take(14).join('\n'));
+  }
+  return sb.toString();
 }
 
 class OrionAgentApp extends ConsumerWidget {

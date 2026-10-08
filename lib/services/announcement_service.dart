@@ -45,6 +45,12 @@ class CloudAnnouncement {
 /// 与其他云功能的区别：这里不做「登录才拉取」的短路，也不在网络失败时
 /// 抛错 —— 公告属于 best-effort 的附加信息，拉不到就静默跳过，绝不能
 /// 影响主流程。
+///
+/// **展示策略（2026-10-09 用户要求「每次启动软件都要弹出公告」）**：
+/// 冷启动走 `force: true`，无视已读记录与「稍后看」静默期 —— 后台
+/// 建的公告在下一次打开 App 时必须弹出来，不能因为上次点过「我知道了」
+/// 就永远不再提示。已读/静默逻辑保留在非 force 路径，供将来
+/// 「运行中二次提醒」这类场景复用。
 class AnnouncementService {
   AnnouncementService(this._prefs, {Dio? dio})
       : _dio = dio ?? Dio(BaseOptions(connectTimeout: const Duration(seconds: 8)));
@@ -57,14 +63,18 @@ class AnnouncementService {
 
   /// 拉取当前应展示的公告。
   ///
-  /// 返回 null 的四种情况（都属正常，不该报错）：
+  /// [force] = true（冷启动用）：跳过「已读」与「稍后看」检查，只要后端
+  /// 配了匹配的公告就返回 —— 每次启动必弹。
+  ///
+  /// 返回 null 的情况（都属正常，不该报错）：
   /// - 后端没配置公告 / 公告被停用 / 版本范围不匹配
   /// - 网络不可达
-  /// - 本机已读过这一条
-  /// - 用户本次会话内点了「稍后看」，尚未到重试时间
+  /// - 非 force 且本机已读过这一条
+  /// - 非 force 且用户点过「稍后看」，尚未到重试时间
   Future<CloudAnnouncement?> fetchPending({
     required String version,
     String platform = 'android',
+    bool force = false,
   }) async {
     try {
       final resp = await _dio.get<Map<String, dynamic>>(
@@ -75,6 +85,8 @@ class AnnouncementService {
       if (raw is! Map) return null;
       final ann = CloudAnnouncement.fromJson(Map<String, dynamic>.from(raw));
       if (ann.id.isEmpty || ann.content.trim().isEmpty) return null;
+
+      if (force) return ann;
 
       // 已读过同一版本 → 不再弹
       if (_prefs.getString('$_seenPrefix${ann.seenKey}') != null) return null;

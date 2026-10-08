@@ -11,7 +11,7 @@ import 'log_screen.dart';
 /// 当前版本号。发版时与 pubspec.yaml 的 `version` 同步更新
 /// （只升 pubspec 不升这里 → 应用自报版本落后，更新检查会一直
 /// 提示安装「新版本」，即使用户已经装上了最新包）。
-const String kAppVersion = '0.2.40';
+const String kAppVersion = '0.2.41';
 
 /// 关于页：软件介绍 + 在线更新。
 class AboutScreen extends ConsumerStatefulWidget {
@@ -250,7 +250,7 @@ class _AboutScreenState extends ConsumerState<AboutScreen>
               title: const Text('日志',
                   style: TextStyle(
                       fontSize: 15, fontWeight: FontWeight.w500)),
-              subtitle: Text('运行事件与错误记录，可复制或导出排查问题',
+              subtitle: Text('启动过程、运行事件与错误记录，可筛选/搜索/导出',
                   style: TextStyle(
                       fontSize: 12, color: onSurface(context, 0.4))),
               trailing: Icon(Icons.chevron_right_rounded,

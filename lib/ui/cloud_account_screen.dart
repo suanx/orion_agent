@@ -383,6 +383,7 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
         // ------- 账号 Hero -------
         _AccountHero(
           email: state.email ?? cloud.email ?? '',
+          username: cloud.username,
           plan: state.plan,
           expiryText: _expiryText(state),
           userId: cloud.userId,
@@ -771,6 +772,7 @@ class _FeatureRow extends StatelessWidget {
 class _AccountHero extends StatelessWidget {
   const _AccountHero({
     required this.email,
+    required this.username,
     required this.plan,
     required this.expiryText,
     required this.userId,
@@ -780,6 +782,11 @@ class _AccountHero extends StatelessWidget {
   });
 
   final String email;
+
+  /// 账号名 `agent-` + 5 位随机数字（后端注册时生成）。
+  /// 老用户还没回填时为空串 → 回落显示 userId。
+  final String username;
+
   final String plan;
   final String expiryText;
   final String userId;
@@ -791,9 +798,12 @@ class _AccountHero extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final initial = email.isEmpty ? 'O' : email.substring(0, 1).toUpperCase();
-    final shortId = userId.isEmpty
-        ? '—'
-        : (userId.length > 16 ? '${userId.substring(0, 14)}…' : userId);
+    // 账号名优先（短、可读、可告诉别人）；拿不到再退回 u_xxxx 这种内部 id。
+    final accountId = username.isNotEmpty
+        ? username
+        : (userId.isEmpty
+            ? '—'
+            : (userId.length > 16 ? '${userId.substring(0, 14)}…' : userId));
     // 液态玻璃卡片（2026-10-06 用户要求：去掉蓝色渐变背景）：玻璃自带模糊 +
     // 半透明白底 + 亮边；卡片内文字从白字改为 onSurface 体系才可读。
     return glassPanel(
@@ -902,7 +912,7 @@ class _AccountHero extends StatelessWidget {
                   const SizedBox(width: 6),
                   Expanded(
                     child: Text(
-                      '账号 $shortId · 点按复制邮箱',
+                      '账号 $accountId · 点按复制邮箱',
                       style: TextStyle(
                         color: onSurface(context, 0.55),
                         fontSize: 11.5,
