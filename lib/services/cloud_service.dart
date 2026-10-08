@@ -527,10 +527,23 @@ class CloudAiQuota {
   String get resetText {
     if (!isSupported) return '';
     if (resetInMs <= 0) return '即将重置';
+    // 取整规则：floor 取完整单位，有余数才进一档。
+    // 不能对"天"直接 ceil —— ceil(2 小时 / 24) = 1，2 小时会显示成"1 天后"。
+    // 但也不能纯 floor —— 剩 3 天 1 小时要说"3 天后"，用户会以为当天就重置。
+    // 所以按单位分别 floor，再看是否有余数决定是否 +1。
     final d = resetInMs ~/ 86400000;
-    if (d >= 1) return '${d + 1} 天后重置';
+    if (d >= 1) {
+      // 不足一天的余数（只在 d==0 时可能）不单独显示；
+      // d>=1 时若还有零头，说明"还有 N 天多"，仍报 N 天更贴近直觉。
+      return '$d 天后重置';
+    }
     final h = resetInMs ~/ 3600000;
-    return h >= 1 ? '${h + 1} 小时后重置' : '1 小时内重置';
+    if (h >= 1) {
+      // 小时有余数 → 向上取整到小时（2h30m 显示"3 小时后"）
+      final hasRemainder = resetInMs % 3600000 != 0;
+      return hasRemainder ? '${h + 1} 小时后重置' : '$h 小时后重置';
+    }
+    return '1 小时内重置';
   }
 
   factory CloudAiQuota.fromJson(Map<String, dynamic> json) {

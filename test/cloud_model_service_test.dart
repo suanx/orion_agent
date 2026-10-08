@@ -66,6 +66,21 @@ void main() {
       expect(text(0), '即将重置');
     });
 
+    test('重置倒计时：整单位不四舍五入，有零头才进一档', () {
+      String text(int ms) =>
+          CloudAiQuota.fromJson({'limit': 100, 'resetInMs': ms}).resetText;
+      // 正好 N 天 → N 天（run #129 实测：曾经写成 floor+1 会多报一天）
+      expect(text(86400000), '1 天后重置');
+      expect(text(7 * 86400000), '7 天后重置');
+      // 天有余数仍按整天报（3 天 1 小时说"3 天后"比"4 天后"贴近实际）
+      expect(text(3 * 86400000 + 3600000), '3 天后重置');
+      // 小时有余数才进一档
+      expect(text(2 * 3600000), '2 小时后重置');
+      expect(text(2 * 3600000 + 1800000), '3 小时后重置');
+      // 不足 1 小时一律"1 小时内"
+      expect(text(3600000 - 1000), '1 小时内重置');
+    });
+
     test('免费/专业/永久三档的中文名透传', () {
       for (final e in {'free': '免费版', 'pro': '专业版', 'lifetime': '永久版'}.entries) {
         final q = CloudAiQuota.fromJson({'tier': e.key, 'tierLabel': e.value});
