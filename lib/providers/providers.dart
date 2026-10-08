@@ -1915,10 +1915,20 @@ final cloudModelsProvider =
     configNotifier.injectCloudConfigs(controller.state.configs);
   });
   // 监听登录态变化：登出后必须清掉云端配置，否则会把上一个账号的
-  // 供应商留在内存里。类型参数要显式给 CloudState —— ref.listen 接收的
-  // 是 notifier 暴露的 ProviderListenable<CloudState>，不是 StateNotifier。
-  ref.listen<CloudState>(
-    ref.watch(cloudProvider.notifier),
+  // 供应商留在内存里。
+  //
+  // 写法要点（前后两次踩坑才搞对，已核对 riverpod 2.6.1 源码）：
+  //   ProviderSubscription<T> listen<T>(ProviderListenable<T>, ...)
+  // StateNotifierProvider<CloudNotifier, CloudState> 本身就是
+  // ProviderListenable<CloudState>，**直接传 provider 即可**。
+  // - 加 .notifier 会让 T 推断成 CloudNotifier，与回调里按 CloudState
+  //   访问 next.loggedIn 冲突；
+  // - 写显式类型参数 <CloudState> 更糟：T 被固定后参数类型变成
+  //   ProviderListenable<ProviderListenable<CloudState>>（多嵌一层），
+  //   notifier 与 provider 都对不上。
+  // 所以：既不要 .notifier，也不要显式类型参数，让 Riverpod 自己推断。
+  ref.listen(
+    ref.watch(cloudProvider),
     (prev, next) {
       final wasIn = prev?.loggedIn ?? false;
       if (next.loggedIn != wasIn) {
