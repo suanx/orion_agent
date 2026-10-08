@@ -1917,17 +1917,19 @@ final cloudModelsProvider =
   // 监听登录态变化：登出后必须清掉云端配置，否则会把上一个账号的
   // 供应商留在内存里。
   //
-  // 写法要点（前后两次踩坑才搞对，已核对 riverpod 2.6.1 源码）：
-  //   ProviderSubscription<T> listen<T>(ProviderListenable<T>, ...)
-  // StateNotifierProvider<CloudNotifier, CloudState> 本身就是
-  // ProviderListenable<CloudState>，**直接传 provider 即可**。
-  // - 加 .notifier 会让 T 推断成 CloudNotifier，与回调里按 CloudState
-  //   访问 next.loggedIn 冲突；
-  // - 写显式类型参数 <CloudState> 更糟：T 被固定后参数类型变成
-  //   ProviderListenable<ProviderListenable<CloudState>>（多嵌一层），
-  //   notifier 与 provider 都对不上。
-  // 所以：既不要 .notifier，也不要显式类型参数，让 Riverpod 自己推断。
-  ref.listen(
+  // 写法（已核对 riverpod 2.6.1 源码：Ref.listen<T>(ProviderListenable<T>)）：
+  // StateNotifierProvider<CloudNotifier, CloudState> 经
+  // _StateNotifierProviderBase<NotifierT, T> extends ProviderBase<T>，
+  // 而 ProviderBase<StateT> with ProviderListenable<StateT>，
+  // 所以它本身就是 ProviderListenable<CloudState>。
+  //
+  // 显式给 <CloudState> 是必需的（run #127 实测）：不给时 Dart 会试图把 T
+  // 推断成 provider 的第一个类型参数，报 "Couldn't infer type parameter
+  // 'T' … inferred from: Parameter 'provider'"。
+  // 同时**不能**加 .notifier —— 那样参数类型是
+  // AlwaysAliveRefreshable<CloudNotifier>，与 ProviderListenable<CloudState>
+  // 不匹配（run #126 实测）。
+  ref.listen<CloudState>(
     ref.watch(cloudProvider),
     (prev, next) {
       final wasIn = prev?.loggedIn ?? false;
