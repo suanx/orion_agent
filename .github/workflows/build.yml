@@ -424,20 +424,51 @@ jobs:
         run: dart run build_runner build --delete-conflicting-outputs
 
       - name: Analyze
-        # 分析结果同时以 annotation + job summary 两种形式暴露：
-        # annotation 需要 checks:write 权限且日志接口要 repo scope，
-        # summary 只要默认 GITHUB_TOKEN，任何人都能在页面上直接看到。
+        # 分析结果以三种方式暴露，按可读性从高到低：
+        #  1. commit 到 docs/CI_ANALYZE_REPORT.md —— 只要 contents:write 即可，
+        #     本地 `git fetch` 就能读到，不依赖任何 API scope（最可靠）。
+        #  2. $GITHUB_STEP_SUMMARY —— 网页上直接可见。
+        #  3. ::error annotation —— 需要 checks:write，且外部 token 常缺 scope。
+        #
+        # 之所以要落到文件：2026-10-09 连挂两次 Analyze，check-runs 的
+        # annotations 为空、/actions/jobs/{id}/logs 返回 401（token 无 repo
+        # scope），完全看不到报错原文，只能靠猜。
         run: |
           set +e
           flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee /tmp/analyze.txt
           RC=${PIPESTATUS[0]}
           if [ "$RC" -ne 0 ]; then
+            echo "### flutter analyze 失败（退出码 $RC）" >  /tmp/summary.md
+            echo '```'                                        >> /tmp/summary.md
+            grep -E '(error|warning) •' /tmp/analyze.txt | head -60 >> /tmp/summary.md \
+              || echo '(未匹配到 error/warning 行)'           >> /tmp/summary.md
+            echo '```'                                        >> /tmp/summary.md
+            cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+            # 落到仓库文件。用 system identity + [skip ci] 避免触发新一轮构建，
+            # 且用 `|| true` 保证即便 commit 失败也不掩盖原始退出码。
             {
-              echo "### flutter analyze 失败（退出码 $RC）"
+              echo "<!-- 由 CI 自动生成：Analyze 失败时的完整报错 -->"
+              echo
+              echo "更新时间：$(date -u +%Y-%m-%dT%H:%M:%SZ)　commit：${GITHUB_SHA:0:7}"
+              echo
+              cat /tmp/summary.md
+              echo
+              echo "<details><summary>analyze 原始输出（前 120 行）</summary>"
+              echo
               echo '```'
-              grep -E '(error|warning) •' /tmp/analyze.txt | head -60 || echo '(未匹配到 error/warning 行)'
+              head -120 /tmp/analyze.txt
               echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
+              echo "</details>"
+            } > docs/CI_ANALYZE_REPORT.md
+
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/CI_ANALYZE_REPORT.md
+            git commit -m "chore: 记录 flutter analyze 报错 [skip ci]" \
+              || echo "(报告已生成，commit 跳过)"
+            git push || echo "(报告已生成，推送失败：本地仍可读 docs/CI_ANALYZE_REPORT.md)"
+
             grep -E '^\s*(error|warning|info)' /tmp/analyze.txt | head -60 | \
               awk '{printf "::error ::%s\n", $0}'
             echo "::error ::flutter analyze 退出码 $RC"
