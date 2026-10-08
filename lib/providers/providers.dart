@@ -1833,7 +1833,14 @@ class CloudNotifier extends StateNotifier<CloudState> {
 
   Future<void> logout() async {
     await _cloud.logout();
-    state = const CloudState();
+    // 不用 const CloudState()：那会把整个 state 换成新的常量对象，
+    // loggedIn 由 true 变 false 仍会触发 watch（等价），但保留 copyWith
+    // 语义更清晰——后续新增字段时不会静默丢值。
+    state = state.copyWith(
+      loggedIn: false,
+      email: null,
+      clearError: true,
+    );
   }
 
   /// 云端模型对话后就地更新额度（不重新拉取账号信息）。
@@ -1903,7 +1910,7 @@ final cloudServiceProvider = Provider<CloudService>((ref) =>
 
 /// 云端模型列表（登录后可用）。
 ///
-/// 登录状态变化时自动失效重拉：登出后必须清掉，否则会把上一个账号的
+/// 登录状态变化时自动重拉：登出后必须清掉，否则会把上一个账号的
 /// 供应商列表留在内存里。令牌本身由 [llmClientProvider] 注入。
 final cloudModelsProvider =
     ChangeNotifierProvider<CloudModelsController>((ref) {
@@ -1914,30 +1921,19 @@ final cloudModelsProvider =
   controller.addListener(() {
     configNotifier.injectCloudConfigs(controller.state.configs);
   });
-  // 监听登录态变化：登出后必须清掉云端配置，否则会把上一个账号的
-  // 供应商留在内存里。
+  // 依赖登录态：watch 整个 CloudState，登录/登出都会重建 controller，
+  // 新的 controller 从头加载（登出后 _cloud.email 为空会直接置空列表）。
   //
-  // 写法（已核对 riverpod 2.6.1 源码：Ref.listen<T>(ProviderListenable<T>)）：
-  // StateNotifierProvider<CloudNotifier, CloudState> 经
-  // _StateNotifierProviderBase<NotifierT, T> extends ProviderBase<T>，
-  // 而 ProviderBase<StateT> with ProviderListenable<StateT>，
-  // 所以它本身就是 ProviderListenable<CloudState>。
-  //
-  // 显式给 <CloudState> 是必需的（run #127 实测）：不给时 Dart 会试图把 T
-  // 推断成 provider 的第一个类型参数，报 "Couldn't infer type parameter
-  // 'T' … inferred from: Parameter 'provider'"。
-  // 同时**不能**加 .notifier —— 那样参数类型是
-  // AlwaysAliveRefreshable<CloudNotifier>，与 ProviderListenable<CloudState>
-  // 不匹配（run #126 实测）。
-  ref.listen<CloudState>(
-    ref.watch(cloudProvider),
-    (prev, next) {
-      final wasIn = prev?.loggedIn ?? false;
-      if (next.loggedIn != wasIn) {
-        controller.refresh();
-      }
-    },
-  );
+  // ⚠️ 这里刻意**不用 ref.listen**：本回调的 ref 是
+  // `ChangeNotifierProviderRef<CloudModelsController>`，即 `Ref<NotifierT>`，
+  // 而 cloudProvider 是 `ProviderListenable<CloudState>`，State 泛型对不上，
+  // ref.listen 会报 argument_type_not_assignable（连踩三轮：加 .notifier /
+  // 去显式泛型 / 只传 provider）。
+  // 也不要用 .select —— riverpod 2.6.1 的 ProviderListenable 没有 select 方法。
+  // 直接 watch 整个 CloudState 最稳：它实现 ProviderListenable<CloudState>，
+  // 与 watch 的用法完全一致（本文件 chatProvider 里就有
+  // ref.watch(toolRegistryProvider) 这类直接 watch provider 的用法）。
+  ref.watch(cloudProvider);
   return controller;
 });
 
