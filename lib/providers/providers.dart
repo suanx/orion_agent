@@ -19,6 +19,7 @@ import '../models/llm_config.dart';
 import '../services/agent_orchestrator.dart';
 import '../services/backup_service.dart';
 import '../services/cloud_service.dart';
+import '../services/cloud_sync_service.dart';
 import '../services/database.dart';
 import '../services/llm_client.dart';
 import '../services/mcp_service.dart';
@@ -60,6 +61,36 @@ final backupServiceProvider = Provider<BackupService>((ref) => BackupService(
       ref.watch(sharedPreferencesProvider),
       const FlutterSecureStorage(),
     ));
+
+/// 启动时自动同步一次（仅当已登录 + 已开启 + 已解锁）。
+///
+/// 失败一律静默：网络不通或密钥缺失都不该阻塞启动，用户可在
+/// 「备份与恢复 → 多端同步」里手动触发并看到错误。
+final cloudAutoSyncProvider = FutureProvider<void>((ref) async {
+  final cloud = ref.watch(cloudServiceProvider);
+  if (!cloud.isLoggedIn) return;
+  final sync = ref.watch(cloudSyncServiceProvider);
+  if (!sync.isEnabled || !sync.isUnlocked) return;
+  try {
+    await sync.syncNow();
+  } catch (_) {
+    // 忽略
+  }
+});
+
+/// 云端备份 + 多端同步（端上 AES-GCM 加密，服务端只存密文）。
+///
+/// 密钥由账号密码 PBKDF2 派生后存进系统安全存储，**不保存密码本身**；
+/// 因此换设备时需在新设备上输入同一密码解锁一次。
+final cloudSyncServiceProvider = Provider<CloudSyncService>((ref) {
+  return CloudSyncService(
+    ref.watch(cloudServiceProvider),
+    ref.watch(databaseProvider),
+    ref.watch(sharedPreferencesProvider),
+    const FlutterSecureStorage(),
+    backup: ref.watch(backupServiceProvider),
+  );
+});
 
 /// 长期记忆条数（响应式）。
 ///

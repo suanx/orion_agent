@@ -31,6 +31,9 @@ dependencies:
   flutter_tts: ">=4.0.0 <5.0.0"
   archive: ^3.6.1
   crypto: ^3.0.3
+  # 云端备份/同步的端上加密(AES-256-GCM)。纯 Dart 实现(pointycastle),
+  # 不含原生代码, 不影响 APK 体积与混淆。密钥 = PBKDF2(账号密码) 派生。
+  encrypt: ^5.0.3
   flutter_local_notifications: ^17.2.4
   open_filex: ^4.5.0
   # Edge TTS 合成出的 MP3 文件播放（ExoPlayer/MediaPlayer 封装）。

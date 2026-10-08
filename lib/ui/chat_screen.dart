@@ -458,6 +458,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 启动即触发一次云端自动同步（内部已按开关/登录态短路，失败静默）
+    ref.watch(cloudAutoSyncProvider);
     final chat = ref.watch(chatProvider);
     final session = chat.activeSession;
     // 错误横幅的语义色：跟随主题明暗，不再硬编码浅粉底/红字。

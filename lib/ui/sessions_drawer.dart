@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../theme.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -93,9 +95,16 @@ class SessionDrawer extends ConsumerWidget {
                             ),
                             trailing: IconButton(
                               icon: const Icon(Icons.close_rounded, size: 18),
-                              onPressed: () => ref
-                                  .read(chatProvider.notifier)
-                                  .deleteSession(s.id),
+                              onPressed: () {
+                                ref
+                                    .read(chatProvider.notifier)
+                                    .deleteSession(s.id);
+                                // 多端同步：删除要传播到其它设备，
+                                // 记入待删队列由下次同步上传 tombstone
+                                unawaited(ref
+                                    .read(cloudSyncServiceProvider)
+                                    .markSessionDeleted(s.id));
+                              },
                             ),
                             onTap: () {
                               ref

@@ -286,6 +286,20 @@ class CloudService {
   Future<Map<String, dynamic>> _authedDelete(String path) async =>
       _authed('delete', path, null);
 
+  // ---- 供同库其他服务复用的公开鉴权通道（云备份 / 多端同步）----
+  // 只暴露已鉴权的 GET/POST/PUT/DELETE，路径仍由调用方拼在 /api 前缀下。
+  Future<Map<String, dynamic>> authedGet(String path) => _authedGet(path);
+
+  Future<Map<String, dynamic>> authedPost(
+          String path, Map<String, dynamic> body) =>
+      _authedPost(path, body);
+
+  Future<Map<String, dynamic>> authedPut(
+          String path, Map<String, dynamic> body) =>
+      _authed('put', path, body);
+
+  Future<Map<String, dynamic>> authedDelete(String path) => _authedDelete(path);
+
   Future<Map<String, dynamic>> _authed(
       String method, String path, Map<String, dynamic>? body,
       {bool retried = false}) async {
