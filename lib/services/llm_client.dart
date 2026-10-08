@@ -402,6 +402,15 @@ class LlmClient {
     if (_isAgent(config)) {
       final sid = agentSessionId;
       if (sid != null && sid.isNotEmpty) body['appSessionId'] = sid;
+      // 透传 modelId：让用户在 App 里选中的模型真正生效。
+      //
+      // ⚠️ 不能下发 model 字段：Agent 侧的真实模型由用户实例自己的
+      // provider 配置决定，App 的 `agent` 只是虚拟名。body['model'] 会被
+      // llm_client 早先填成这个虚拟名，若一并转发，上游可能拿它去查一个
+      // 不存在的模型。modelId 是我们与后端约定的独立字段，由后端转交
+      // 实例的 modelId，语义上不污染 OpenAI 兼容协议。
+      final wanted = (m?.name ?? '').trim();
+      if (wanted.isNotEmpty && wanted != 'agent') body['modelId'] = wanted;
       // Agent 自行决定用哪个模型与参数，透传 temperature/tools 反而可能
       // 让上游网关因不认识的字段报错，因此这里不发。
       body.remove('temperature');

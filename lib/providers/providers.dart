@@ -17,6 +17,7 @@ import '../models/chat_message.dart';
 import '../models/chat_session.dart';
 import '../models/llm_config.dart';
 import '../services/agent_orchestrator.dart';
+import '../services/agent_artifact_service.dart';
 import '../services/backup_service.dart';
 import '../services/cloud_service.dart';
 import '../services/cloud_model_service.dart';
@@ -150,6 +151,10 @@ final orchestratorProvider = Provider<AgentOrchestrator>((ref) => AgentOrchestra
 /// Token 用量统计服务。
 final tokenStatsServiceProvider =
     Provider<TokenStatsService>((ref) => TokenStatsService(ref.watch(databaseProvider)));
+
+/// 云端 Agent 沙箱产物服务（文件树 / 文件内容 / dev server）。
+final agentArtifactServiceProvider = Provider<AgentArtifactService>(
+    (ref) => AgentArtifactService(ref.watch(cloudServiceProvider)));
 
 final voiceProvider = Provider<VoiceService>((ref) => VoiceService());
 

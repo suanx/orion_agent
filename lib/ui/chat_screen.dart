@@ -14,8 +14,10 @@ import 'package:image_picker/image_picker.dart';
 import 'format_utils.dart';
 import 'glass.dart';
 import 'status_bar_area.dart';
+import 'agent_artifact_screen.dart';
 
 import '../models/chat_message.dart';
+import '../models/chat_session.dart';
 import '../models/llm_config.dart';
 import '../providers/providers.dart';
 import '../services/skill_service.dart';
@@ -128,6 +130,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _inputController.dispose();
     _scrollController.dispose();
     super.dispose();
+  }
+
+  /// 打开云端 Agent 的沙箱产物页（改过的文件 + dev server 预览）。
+  ///
+  /// 传的是 **App 自己的会话 id** —— 后端靠它反查远端 Agent 会话，App 全程
+  /// 不需要知道实例地址。会话为空（新会话还没发过消息）时也照样打开：
+  /// 页面会显示「暂无产物」的引导，而不是拦在门口。
+  void _openArtifacts(ChatSession? session) {
+    final appSessionId = session?.id;
+    if (appSessionId == null || appSessionId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('当前还没有会话，先发一条消息给 Agent')));
+      return;
+    }
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => AgentArtifactScreen(appSessionId: appSessionId),
+    ));
   }
 
   /// 把消息内容以引用格式（markdown 块引用，多行逐行加 `> ` 前缀）填入
@@ -633,6 +652,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     ],
                   ),
                 ),
+                // 沙箱产物入口：仅当前模型是云端 Agent 时出现。
+                // 其他模型没有远端沙箱，按钮无意义 —— 直接隐藏而不是置灰。
+                if (ref.read(configProvider).activeConfig?.id
+                        .startsWith('agent:') ==
+                    true)
+                  IconButton(
+                    tooltip: 'Agent 产物',
+                    icon: const Icon(Icons.inventory_2_outlined, size: 22),
+                    onPressed: () => _openArtifacts(session),
+                  ),
                 IconButton(
                   icon: const Icon(Icons.history_rounded, size: 24),
                   onPressed: () => Scaffold.of(context).openDrawer(),
