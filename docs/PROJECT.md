@@ -847,6 +847,26 @@ State，只有 `HomeShell` 知道怎么切；navigatorKey 只能 push/pop。
 - 公告端点 `GET /api/announcement?version=`（公开，版本范围过滤），
   App 端弹窗展示为待接入项
 
+#### 云备份与多端同步（v0.2.37）
+
+- 后端 `orion_agent_cloud` 新增两组接口：
+  - `/api/backup/*` 整表快照（上传/列表/取回/删除/清空/占用统计），按
+    (用户, 设备, 表) 各存一份，恢复取该用户该表最新一份
+  - `/api/sync/*` 行级增量（push/pull/changes/stats/删除），冲突按
+    `updated_at` 末写胜出（SQLite UPSERT ... WHERE excluded.updated_at >= 现有），
+    删除写 tombstone；`sync_state` 扩了 device_id / payload_encrypted / nonce 三列，
+    migrate 按 pragma 幂等补列（SQLite 无 ADD COLUMN IF NOT EXISTS）
+- App 端 `cloud_sync_crypto.dart` + `cloud_sync_service.dart`：
+  密钥 = PBKDF2-HMAC-SHA256(账号密码, 固定盐, 2 万次) → AES-256-GCM。
+  **固定盐是跨设备互解的前提**（随机盐就得把盐也同步给服务端，与零知识冲突）；
+  迭代数 2 万是实测取舍——纯 Dart HMAC 循环桌面 1 万次≈270ms、5 万次≈1.5s，
+  手机 ARM 更慢，10 万次会让解锁卡住数秒
+- 同步粒度：`prefs` 单行（配置+MCP+设置，末写胜出）/ `sessions` 每会话一行 /
+  `messages` 每会话一行按 mid 合并—— 兼顾增量与合并安全，行数可控
+- 拉取分页 500/页（最多 40 页），用本页最大 updated_at-1 作为下一页起点，
+  避免超过单页上限被静默截断
+- 密钥只存系统安全存储（Keystore），不落密码；删除传播经端上待删队列
+
 ## 6. 状态层
 
 `lib/providers/providers.dart`（690 行），全部 provider 集中在此。
