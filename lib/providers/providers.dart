@@ -490,7 +490,7 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
   void upsert(LlmConfig config) {
     // 云端配置不落盘（见 injectCloudConfigs 的说明）：用户切换云端模型
     // 只影响本次会话的内存态，下次进来重新从后端拉。
-    if (!config.id.startsWith('cloud:)) {
+    if (!config.id.startsWith('cloud:')) {
       _localTouched = true;
     }
     final list = [...state.configs];
