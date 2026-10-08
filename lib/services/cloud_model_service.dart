@@ -113,6 +113,12 @@ class CloudModelsController extends ChangeNotifier {
   /// 后端是否已配置供应商。UI 据此决定是否展示云端入口。
   bool get available => _state.available;
 
+  /// 最近一次拉取失败的原因；null 表示正常（或尚未发起过请求）。
+  ///
+  /// 对话界面用它区分「拉挂了」与「后端确实没配供应商」——
+  /// 两者的处置完全不同，前者该重试/报错，后者该去管理台配置。
+  String? get error => _state.error;
+
   /// 上次成功加载的时间，用于避免频繁刷新。
   DateTime? _loadedAt;
 
