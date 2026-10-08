@@ -3,6 +3,13 @@ name: build
 on:
   push:
     branches: [main, beta]
+    # 排除 Analyze 失败时自动提交的报错报告 —— 否则那个 commit 会再次
+    # 触发本 workflow，在「分析失败 → 写报告 → 触发 → 分析失败」之间打环。
+    # 代码改动（Dart / workflow / 资源）仍会正常触发。
+    paths-ignore:
+      - 'docs/CI_ANALYZE_REPORT.md'
+      - 'RELEASE_NOTES.md'
+      - 'pubspec.lock'
   workflow_dispatch:
     inputs:
       obfuscate:
@@ -445,7 +452,8 @@ jobs:
             echo '```'                                        >> /tmp/summary.md
             cat /tmp/summary.md >> "$GITHUB_STEP_SUMMARY"
 
-            # 落到仓库文件。用 system identity + [skip ci] 避免触发新一轮构建，
+            # 落到仓库文件。用 system identity 提交，配合 on.push 的 paths-ignore
+            # 排除本文件，避免「分析失败 → 写报告 → 再触发 → 再失败」的死循环。
             # 且用 `|| true` 保证即便 commit 失败也不掩盖原始退出码。
             {
               echo "<!-- 由 CI 自动生成：Analyze 失败时的完整报错 -->"
@@ -465,7 +473,11 @@ jobs:
             git config user.name  "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/CI_ANALYZE_REPORT.md
-            git commit -m "chore: 记录 flutter analyze 报错 [skip ci]" \
+            # ⚠️ 不能用 [skip ci]：那个标记会让**本次推送根本不触发 workflow**，
+            # 于是报错提交永远推不出去，也就没人在本地看到报告（2026-10-09 踩过）。
+            # 改用路径过滤：只有当用户改了 lib/ 或 test/ 下的 Dart 文件才重跑构建，
+            # 单纯由本步骤产生的报告提交不会再次触发 Analyze。
+            git commit -m "chore: 记录 flutter analyze 报错" \
               || echo "(报告已生成，commit 跳过)"
             git push || echo "(报告已生成，推送失败：本地仍可读 docs/CI_ANALYZE_REPORT.md)"
 
