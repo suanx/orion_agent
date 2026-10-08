@@ -99,7 +99,8 @@ class AnnouncementService {
   Future<void> snooze() async {
     await _prefs.setInt(
       _snoozedKey,
-      DateTime.now().millisecondsSinceEpoch() + 6 * 3600 * 1000,
+      // millisecondsSinceEpoch 是 getter 不是方法，不能加 ()
+      DateTime.now().millisecondsSinceEpoch + 6 * 3600 * 1000,
     );
   }
 }
