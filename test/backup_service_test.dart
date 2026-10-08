@@ -150,18 +150,21 @@ void main() {
             contains('没有任何可恢复的数据域'))));
   });
 
-  test('AppLog：环形缓冲上限 500 条，导出文本可读', () {
-    for (var i = 0; i < 505; i++) {
+  test('AppLog：环形缓冲上限 2000 条，导出文本可读', () {
+    // 上限在 lib/services/app_log.dart 的 _maxEntries（2000）。
+    // 写 2010 条触发裁剪；缓冲里即便已有更早条目也全在被挤出之列，
+    // 首条稳定为 event-10。
+    for (var i = 0; i < 2010; i++) {
       AppLog.i('event-$i');
     }
     final text = AppLog.asText();
     final lines = text.split('\n');
-    expect(lines.length, 500, reason: '缓冲上限应裁剪到 500 条');
-    expect(lines.last, contains('event-504'), reason: '应保留最新的条目');
-    expect(lines.first, contains('event-5'), reason: '最旧的应被挤出');
-    // event-0~4 应被挤出（精确匹配整行，避免 event-40+ 子串误判）
-    expect(lines.any((l) => l.endsWith('event-4]') || l.endsWith('event-4')),
+    expect(lines.length, 2000, reason: '缓冲上限应裁剪到 2000 条');
+    expect(lines.last, contains('event-2009'), reason: '应保留最新的条目');
+    expect(lines.first, contains('event-10'), reason: '最旧的应被挤出');
+    // event-0~9 应被挤出（精确匹配整行，避免 event-10+ 子串误判）
+    expect(lines.any((l) => l.endsWith('event-9]') || l.endsWith('event-9')),
         isFalse,
-        reason: '缓冲外最旧的 5 条不应残留');
+        reason: '缓冲外最旧的 10 条不应残留');
   });
 }
