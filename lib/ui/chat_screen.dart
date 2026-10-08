@@ -262,22 +262,38 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// 来源提供商），跨提供商选中时同时切换使用中的提供商并记住偏好
   /// （activeId），解决「添加了新供应商但对话页不显示/选不了」的问题。
   /// 未配置模型时此入口在输入栏不可点（图标置灰），这里再兜底一次。
+  ///
+  /// 【云端模型】额外并入列表底部：它们由后端持 Key、不落盘（换设备
+  /// 登录同一账号即自动可用），因此只在本页临时拼进来，选中时需要先
+  /// upsert 进本地配置才能被 activeConfig 指向。
   Future<void> _pickModel(BuildContext anchor) async {
     final state = ref.read(configProvider);
+    final cloud = ref.read(cloudModelsProvider);
     // (提供商, 模型) 平铺：对话不再局限于「第一个已启用」的提供商
     final entries = <(LlmConfig, ProviderModel)>[
       for (final c in state.configs)
         if (c.enabled && c.ready)
           for (final m in c.chatModels) (c, m),
     ];
-    if (entries.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('请先在「我的 → AI 提供商」配置模型服务')));
+    final cloudConfigs = cloud.configs;
+    final cloudEntries = <(LlmConfig, ProviderModel)>[
+      for (final c in cloudConfigs)
+        for (final m in c.chatModels) (c, m),
+    ];
+    if (entries.isEmpty && cloudEntries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(ref.read(cloudServiceProvider).email == null
+              ? '请先在「我的 → 云服务」登录，即可使用免费云端模型；'
+                  '也可自行配置模型服务'
+              : '请先在「我的 → AI 提供商」配置模型服务')));
       return;
     }
     final active = state.activeConfig;
     final currentCfgId = active?.id;
     final currentModel = active?.chatModel?.name;
+    // 云端额度耗尽时提前告知，但不禁用入口 —— 用户仍可能想看有哪些模型。
+    final quota = ref.read(cloudProvider).aiQuota;
+    final cloudBlocked = cloudEntries.isNotEmpty && quota.isExhausted;
     final sel = await showGlassAnchoredMenu<(String, String)>(
       context: context,
       anchor: anchor,
@@ -294,6 +310,23 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             icon: Icons.auto_awesome_outlined,
             checked: cfg.id == currentCfgId && m.name == currentModel,
           ),
+        // 云端分组：标题用 provider 名，副标题标出额度与重置时间
+        for (final (cfg, m) in cloudEntries)
+          GlassMenuOption(
+            value: (cfg.id, m.name),
+            title: m.name,
+            subtitle: [
+              cfg.name,
+              if (quota.isSupported)
+                quota.isExhausted
+                    ? '本周额度已用完'
+                    : '剩 ${quota.remaining} 轮/${quota.resetText}',
+            ].join(' · '),
+            icon: quota.isExhausted
+                ? Icons.cloud_off_outlined
+                : Icons.cloud_done_outlined,
+            checked: cfg.id == currentCfgId && m.name == currentModel,
+          ),
       ],
     );
     if (!mounted) return; // 浮层关闭前的异步间隙里页面可能已被销毁
@@ -302,8 +335,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
     final notifier = ref.read(configProvider.notifier);
-    final target = notifier.byId(sel.$1);
-    if (target == null) return; // 浮层打开期间该提供商被删除
+    var target = notifier.byId(sel.$1);
+    // 云端配置不在本地表里：先写入一份（带 fullUrl 与占位 Key），
+    // 之后对话链路与自建配置完全同构，无需特殊分支。
+    if (target == null) {
+      target = cloudConfigs.where((c) => c.id == sel.$1).firstOrNull;
+      if (target == null) return;
+      if (cloudBlocked) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('本周云端额度已用完，${quota.resetText}')));
+        return;
+      }
+      notifier.upsert(target.copyWith(defaultChatModel: sel.$2));
+      notifier.setActive(target.id);
+      return;
+    }
     // ConfigNotifier.upsert 是 void（同步更新内存并落库），不能 await
     notifier.upsert(target.copyWith(defaultChatModel: sel.$2));
     if (sel.$1 != currentCfgId) notifier.setActive(sel.$1);

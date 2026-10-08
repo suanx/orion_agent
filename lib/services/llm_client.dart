@@ -58,6 +58,20 @@ class TokenUsage extends LlmEvent {
   bool get isEmpty => promptTokens <= 0 && completionTokens <= 0;
 }
 
+/// 云端额度变化（本轮请求后服务端扣减了多少）。
+///
+/// 只在云端模型（[cloudModelId] 非空）时下发：后端在响应头里带
+/// `x-orion-quota-used/limit`，对话结束后据此就地更新额度卡片，
+/// 免得用户还要手动刷新账号页才知道这轮花了多少。
+class QuotaUsed extends LlmEvent {
+  final int used;
+  final int limit;
+
+  const QuotaUsed({required this.used, required this.limit});
+
+  int get remaining => (limit - used).clamp(0, limit);
+}
+
 /// 拉取模型列表时返回的一项。
 class RemoteModel {
   final String id;
@@ -72,10 +86,17 @@ class _ToolCallAcc {
 
 /// OpenAI 兼容协议的客户端（SSE 流式）。
 class LlmClient {
-  LlmClient(this._defaultDio);
+  LlmClient(this._defaultDio, {this.cloudTokenProvider});
 
   /// 无代理时复用的 Dio（绝大多数请求走这里，不必每次新建连接池）。
   final Dio _defaultDio;
+
+  /// 云端模型的登录令牌提供器（由外部注入，避免本类依赖 CloudService）。
+  ///
+  /// 云端配置（[CloudModelService.isCloud]）的鉴权不是配置里的 Key，而是
+  /// 用户的云端登录令牌——由后端解密上游 Key 并转发。没有令牌时云端请求
+  /// 无法完成鉴权，此时会给出明确报错而不是拿占位串去撞 401。
+  final Future<String?> Function()? cloudTokenProvider;
 
   /// 按「代理 + UA」组合缓存的 Dio：同一组合的所有请求复用同一个连接池。
   ///
@@ -194,14 +215,37 @@ class LlmClient {
       : '${_trim(config.baseUrl.trim())}/models';
 
   /// 组装请求头。[apiKey] 单独传入是为了支持多 Key 轮换。
-  Map<String, String> _headers(LlmConfig config, String apiKey) => {
-        'Authorization': 'Bearer $apiKey',
-        'Content-Type': 'application/json',
-        HttpHeaders.userAgentHeader:
-            config.userAgent.trim().isEmpty
-                ? defaultUserAgent
-                : config.userAgent.trim(),
-      };
+  ///
+  /// 云端配置（[cloudModelId] 非空）例外：真正的鉴权凭据是云端登录令牌，
+  /// 由 [cloudTokenProvider] 异步取得后覆盖 Authorization —— 配置里那个
+  /// 占位 Key 只是为了通过「Key 不能为空」的校验。
+  Future<Map<String, String>> _headers(
+    LlmConfig config,
+    String apiKey,
+  ) async {
+    var bearer = apiKey;
+    if (_isCloud(config)) {
+      final token = await cloudTokenProvider?.call();
+      if (token == null || token.isEmpty) {
+        throw Exception('云端模型需要先登录云端账号');
+      }
+      bearer = token;
+    }
+    return {
+      'Authorization': 'Bearer $bearer',
+      'Content-Type': 'application/json',
+      HttpHeaders.userAgentHeader:
+          config.userAgent.trim().isEmpty
+              ? defaultUserAgent
+              : config.userAgent.trim(),
+    };
+  }
+
+  /// 判断配置是否为云端托管模型。
+  ///
+  /// 判定用「配置 id 带 `cloud:` 前缀」，而不是嗅探 baseUrl 是否指向自家
+  /// 后端——后者在用户自建指向同一域名的配置时会误判。
+  static bool _isCloud(LlmConfig c) => c.id.startsWith('cloud:');
 
   /// 本轮使用的模型参数：优先取当前聊天模型的设置。
   static ProviderModel? _activeModel(LlmConfig c) => c.chatModel;
@@ -347,7 +391,7 @@ class LlmClient {
       cancelToken: cancelToken,
       options: Options(
         responseType: ResponseType.stream,
-        headers: _headers(config, apiKey),
+        headers: await _headers(config, apiKey),
       ),
     );
 
@@ -531,6 +575,16 @@ class LlmClient {
     yield FinalMessage(finalMsg);
     // usage 放在最后：Agent 循环先处理消息再记账，顺序稳定。
     if (usage != null && !usage.isEmpty) yield usage;
+    // 云端模型：把本轮消耗的额度带回，调用方可就地更新额度卡片
+    if (_isCloud(config)) {
+      final used = int.tryParse(
+          resp.headers.value('x-orion-quota-used') ?? '');
+      final limit = int.tryParse(
+          resp.headers.value('x-orion-quota-limit') ?? '');
+      if (used != null && limit != null && limit > 0) {
+        yield QuotaUsed(used: used, limit: limit);
+      }
+    }
   }
 
   /// 提示词缓存键。同一提供商下保持稳定，才能让服务端命中缓存。
@@ -580,7 +634,7 @@ class LlmClient {
         final resp = await _dioFor(config).get<Map<String, dynamic>>(
           url,
           cancelToken: cancelToken,
-          options: Options(headers: _headers(config, key)),
+          options: Options(headers: await _headers(config, key)),
         );
         final data = resp.data?['data'];
         if (data is! List) {
@@ -709,7 +763,7 @@ class LlmClient {
           embeddingUrl(config),
           data: {'model': modelName, 'input': inputs},
           cancelToken: cancelToken,
-          options: Options(headers: _headers(config, key)),
+          options: Options(headers: await _headers(config, key)),
         );
         break;
       } on DioException catch (e) {

@@ -52,6 +52,18 @@ class AgentTokenUsage extends AgentEvent {
   const AgentTokenUsage(this.promptTokens, this.completionTokens);
 }
 
+/// 云端额度被消耗（仅云端模型会发）。
+///
+/// 一轮对话 = 一次 /api/ai/chat = 扣 1 点周额度。转发这个事件是为了让
+/// 额度卡片能就地更新，不必等用户手动刷新账号页。
+class AgentQuotaUsed extends AgentEvent {
+  final int used;
+  final int limit;
+  const AgentQuotaUsed(this.used, this.limit);
+
+  int get remaining => (limit - used).clamp(0, limit);
+}
+
 /// 最终回答（不含工具调用的 assistant 消息）。
 class AgentAnswer extends AgentEvent {
   final ChatMessage message;
@@ -210,6 +222,9 @@ class AgentOrchestrator {
               // TokenUsage 是 LlmEvent 不是 AgentEvent，不能直接 yield，
               // 用 AgentTokenUsage 包装（providers 侧按此类型累计）。
               yield AgentTokenUsage(ev.promptTokens, ev.completionTokens);
+            } else if (ev is QuotaUsed) {
+              // 云端模型：把本轮扣掉的额度往上传，UI 层就地更新额度卡片
+              yield AgentQuotaUsed(ev.used, ev.limit);
             }
           }
           lastError = null;

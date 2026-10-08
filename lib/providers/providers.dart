@@ -19,6 +19,7 @@ import '../models/llm_config.dart';
 import '../services/agent_orchestrator.dart';
 import '../services/backup_service.dart';
 import '../services/cloud_service.dart';
+import '../services/cloud_model_service.dart';
 import '../services/cloud_sync_service.dart';
 import '../services/database.dart';
 import '../services/llm_client.dart';
@@ -131,8 +132,12 @@ final toolRegistryProvider = Provider<ToolRegistry>((ref) => ToolRegistry(
       cloudService: ref.watch(cloudServiceProvider),
     ));
 
-final llmClientProvider = Provider<LlmClient>(
-    (ref) => LlmClient(Dio(BaseOptions(connectTimeout: const Duration(seconds: 30)))));
+final llmClientProvider = Provider<LlmClient>((ref) => LlmClient(
+      Dio(BaseOptions(connectTimeout: const Duration(seconds: 30))),
+      // 云端模型的鉴权用云端登录令牌（真正的上游 Key 在后端），
+      // 令牌在过期前自动续期。
+      cloudTokenProvider: ref.watch(cloudServiceProvider).validAccessToken,
+    ));
 
 final orchestratorProvider = Provider<AgentOrchestrator>((ref) => AgentOrchestrator(
       llm: ref.watch(llmClientProvider),
@@ -483,7 +488,11 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
   }
 
   void upsert(LlmConfig config) {
-    _localTouched = true;
+    // 云端配置不落盘（见 injectCloudConfigs 的说明）：用户切换云端模型
+    // 只影响本次会话的内存态，下次进来重新从后端拉。
+    if (!config.id.startsWith('cloud:)) {
+      _localTouched = true;
+    }
     final list = [...state.configs];
     final idx = list.indexWhere((c) => c.id == config.id);
     if (idx >= 0) {
@@ -494,7 +503,9 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     // 沿用 copyWith 而非新建 ConfigState：直接构造会把上一轮的 error 清空，
     // 让"保存失败"的提示在用户下一次编辑时凭空消失。
     state = state.copyWith(configs: list);
-    _schedulePersist();
+    if (!config.id.startsWith('cloud:')) {
+      _schedulePersist();
+    }
   }
 
   /// 就地替换某条配置（按 id）。
@@ -505,7 +516,30 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     return null;
   }
 
+  /// 注入云端模型配置（**仅内存，不落盘**）。
+  ///
+  /// 云端配置由后端持 Key、随账号下发，不该写进 shared_preferences：
+  /// 一是会把配置混入备份/多端同步，二是后端改了供应商后本地这份就成了
+  /// 过期副本。每次刷新云端列表都整体替换，避免残留。
+  ///
+  /// 落盘的 `defaultChatModel` 切换则走 [upsert]（用户主动选模型时），
+  /// 那里同样会跳过云端配置的持久化。
+  void injectCloudConfigs(List<LlmConfig> cloudConfigs) {
+    // 先剔除旧的云端配置，再追加新的
+    final localOnly =
+        state.configs.where((c) => !c.id.startsWith('cloud:')).toList();
+    state = state.copyWith(configs: [...localOnly, ...cloudConfigs]);
+    // activeId 指向已消失的云端配置时清空，避免 activeConfig 取不到值
+    if (state.activeId.startsWith('cloud:') &&
+        !cloudConfigs.any((c) => c.id == state.activeId)) {
+      state = state.copyWith(activeId: '');
+    }
+  }
+
   void remove(String id) {
+    // 云端配置由后端托管，用户删不掉（下次刷新会重新注入）。
+    // 真正的"停用"需求由后端供应商的 enabled 开关承担。
+    if (id.startsWith('cloud:')) return;
     _localTouched = true;
     final list = state.configs.where((c) => c.id != id).toList();
     state = state.copyWith(
@@ -684,6 +718,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
     String Function()? getVisionModel,
     String Function()? getSummaryModel,
     String Function()? getCompressModel,
+    void Function(int used, int limit)? onQuotaUsed,
   })  : _storage = storage,
         _orchestrator = orchestrator,
         _rag = rag,
@@ -703,6 +738,7 @@ class ChatNotifier extends StateNotifier<ChatState> {
         _getVisionModel = getVisionModel ?? (() => ''),
         _getSummaryModel = getSummaryModel ?? (() => ''),
         _getCompressModel = getCompressModel ?? (() => ''),
+        _onQuotaUsed = onQuotaUsed,
         super(ChatState(
           sessions: initialSessions,
           activeSessionId: initialSessions.isEmpty ? null : initialSessions.first.id,
@@ -737,6 +773,10 @@ class ChatNotifier extends StateNotifier<ChatState> {
   final String Function() _getVisionModel;
   final String Function() _getSummaryModel;
   final String Function() _getCompressModel;
+
+  /// 云端模型每轮对话后回调（把已用/上限传出去更新额度卡片）。
+  /// 为 null 表示不关心额度（非云端场景）。
+  final void Function(int used, int limit)? _onQuotaUsed;
 
   /// 已做过标题总结的会话 id（内存即可：重启后标题已持久化）。
   final _titleSummarized = <String>{};
@@ -1047,6 +1087,9 @@ class ChatNotifier extends StateNotifier<ChatState> {
         } else if (ev is AgentTokenUsage) {
           _bumpUsage(sessionId, 0, ev.promptTokens);
           _bumpUsage(sessionId, 1, ev.completionTokens);
+        } else if (ev is AgentQuotaUsed) {
+          // 云端模型：本轮扣掉的周额度即时回填，额度卡片无需手动刷新
+          _onQuotaUsed?.call(ev.used, ev.limit);
         } else if (ev is AgentRoundRestart) {
           // 断流整轮重发：丢弃本轮残缺增量，思考面板回退到已完成轮次。
           // 不清 steps——「正在自动重试」的状态行要留着给用户看。
@@ -1363,6 +1406,11 @@ final chatProvider = StateNotifierProvider<ChatNotifier, ChatState>((ref) {
     getVisionModel: () => ref.read(visionModelProvider),
     getSummaryModel: () => ref.read(summaryModelProvider),
     getCompressModel: () => ref.read(compressModelProvider),
+    // 云端模型每轮扣掉额度后即时回填 CloudState.aiQuota，
+    // 额度卡片无需手动刷新账号页
+    onQuotaUsed: (used, limit) => ref
+        .read(cloudProvider.notifier)
+        .updateAiQuota(used: used, limit: limit),
     getPersona: () {
       final id = ref.read(activeRoleIdProvider);
       return ref.read(roleServiceProvider).promptOf(id) ?? '';
@@ -1779,6 +1827,25 @@ class CloudNotifier extends StateNotifier<CloudState> {
     state = const CloudState();
   }
 
+  /// 云端模型对话后就地更新额度（不重新拉取账号信息）。
+  ///
+  /// 只改 used/limit 两个字段：tier 与重置时间在这一轮里没变，
+  /// 没必要为一次扣减再打一次 /api/license/status。
+  void updateAiQuota({required int used, required int limit}) {
+    final old = state.aiQuota;
+    if (!old.isSupported) return;
+    state = state.copyWith(
+      aiQuota: CloudAiQuota(
+        tier: old.tier,
+        tierLabel: old.tierLabel,
+        used: used,
+        limit: limit,
+        remaining: (limit - used).clamp(0, limit),
+        resetInMs: old.resetInMs,
+      ),
+    );
+  }
+
   /// 刷新套餐与今日用量。静默失败（不打扰 UI）。
   Future<void> refreshStatus() async {
     try {
@@ -1789,6 +1856,7 @@ class CloudNotifier extends StateNotifier<CloudState> {
         plan: info.plan,
         planExpiresAt: info.planExpiresAt,
         usageToday: info.usageToday,
+        aiQuota: info.aiQuota,
         licenses: info.licenses,
       );
     } catch (_) {
@@ -1823,6 +1891,31 @@ class CloudNotifier extends StateNotifier<CloudState> {
 
 final cloudServiceProvider = Provider<CloudService>((ref) =>
     CloudService(ref.watch(sharedPreferencesProvider), const FlutterSecureStorage()));
+
+/// 云端模型列表（登录后可用）。
+///
+/// 登录状态变化时自动失效重拉：登出后必须清掉，否则会把上一个账号的
+/// 供应商列表留在内存里。令牌本身由 [llmClientProvider] 注入。
+final cloudModelsProvider =
+    ChangeNotifierProvider<CloudModelsController>((ref) {
+  final controller = CloudModelsController(ref.watch(cloudServiceProvider));
+  final configNotifier = ref.watch(configProvider.notifier);
+  // 列表一变就把云端配置注入 ConfigNotifier（仅内存），对话链路因此
+  // 与自建供应商完全同构，无需在 UI 层到处判断「这条是不是云端」。
+  controller.addListener(() {
+    configNotifier.injectCloudConfigs(controller.state.configs);
+  });
+  ref.listen<CloudState>(
+    ref.watch(cloudProvider),
+    (prev, next) {
+      final wasIn = prev?.loggedIn ?? false;
+      if (next.loggedIn != wasIn) {
+        controller.refresh();
+      }
+    },
+  );
+  return controller;
+});
 
 final cloudProvider = StateNotifierProvider<CloudNotifier, CloudState>((ref) =>
     CloudNotifier(

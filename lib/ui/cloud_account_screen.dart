@@ -432,6 +432,13 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
         ),
         const SizedBox(height: 20),
 
+        // ------- 云端模型额度（每周自动重置）-------
+        _AiQuotaSection(
+          quota: state.aiQuota,
+          modelCount: _cloudModelCount(context),
+        ),
+        const SizedBox(height: 20),
+
         // ------- 设备管理 -------
         _Section(
           title: '设备管理',
@@ -550,6 +557,145 @@ class _CloudAccountScreenState extends ConsumerState<CloudAccountScreen> {
   }
 
   static String _two(int n) => n.toString().padLeft(2, '0');
+
+  /// 当前可用的云端模型数量（0 表示后端未配置供应商）。
+  ///
+  /// 只用于在额度卡片上给一句「可用模型」的提示，不在这里触发拉取 ——
+  /// 列表由 cloudModelsProvider 独立管理，避免账号页刷新时顺带打网络。
+  int _cloudModelCount(BuildContext context) =>
+      ref.watch(cloudModelsProvider).state.configs.length;
+}
+
+/// 云端模型额度卡片。
+///
+/// 三档（免费版 / 专业版 / 永久版）的周额度，**每周一 00:00（UTC+8）
+/// 自动归零** —— 重置在后端按周起始日实现，App 端不做任何本地计时。
+class _AiQuotaSection extends StatelessWidget {
+  const _AiQuotaSection({required this.quota, required this.modelCount});
+
+  final CloudAiQuota quota;
+
+  /// 后端已下发的可用模型数；0 时不展示模型相关文案。
+  final int modelCount;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!quota.isSupported) {
+      // 后端未开通云端模型功能（旧版后端 / 尚未发布）：不显示这一节，
+      // 免得给用户一个永远为 0 的进度条。
+      return const SizedBox.shrink();
+    }
+    final scheme = Theme.of(context).colorScheme;
+    final fraction = quota.usedFraction;
+    final exhausted = quota.isExhausted;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+          child: Row(
+            children: [
+              Text(
+                '云端模型额度',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  color: onSurface(context, 0.45),
+                ),
+              ),
+              const SizedBox(width: 8),
+              // 档位徽章：免费版 / 专业版 / 永久版
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: scheme.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  quota.tierLabel,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.primary,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              Text(
+                quota.resetText,
+                style: TextStyle(fontSize: 11.5, color: onSurface(context, 0.4)),
+              ),
+            ],
+          ),
+        ),
+        Container(
+          decoration: BoxDecoration(
+            color: surface(context),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
+                children: [
+                  Text(
+                    '${quota.remaining}',
+                    style: TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.w700,
+                      color: exhausted ? scheme.error : onSurface(context, 0.9),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    '/ ${quota.limit} 轮可用',
+                    style: TextStyle(fontSize: 13.5, color: onSurface(context, 0.5)),
+                  ),
+                  const Spacer(),
+                  Text(
+                    exhausted ? '本周已用完' : '本周已用 ${quota.used} 轮',
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: exhausted ? scheme.error : onSurface(context, 0.45),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: fraction,
+                  minHeight: 7,
+                  backgroundColor: onSurface(context, 0.08),
+                  valueColor: AlwaysStoppedAnimation(
+                    exhausted ? scheme.error : scheme.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                exhausted
+                    ? '额度将在下周一 00:00 自动重置，也可联系管理员提升档位'
+                    : (modelCount > 0
+                        ? '当前有 $modelCount 个云端模型可用，对话时选择「云端」即可使用'
+                        : '登录后可在对话界面直接使用云端模型，无需自备 API Key'),
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1.45,
+                  color: onSurface(context, 0.42),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 String _fmtDate(int? ms) {
