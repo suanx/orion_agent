@@ -424,12 +424,20 @@ jobs:
         run: dart run build_runner build --delete-conflicting-outputs
 
       - name: Analyze
-        # 分析结果同时以 annotation 形式暴露，便于无 repo 管理员权限时排查
+        # 分析结果同时以 annotation + job summary 两种形式暴露：
+        # annotation 需要 checks:write 权限且日志接口要 repo scope，
+        # summary 只要默认 GITHUB_TOKEN，任何人都能在页面上直接看到。
         run: |
           set +e
           flutter analyze --no-fatal-infos --no-fatal-warnings 2>&1 | tee /tmp/analyze.txt
           RC=${PIPESTATUS[0]}
           if [ "$RC" -ne 0 ]; then
+            {
+              echo "### flutter analyze 失败（退出码 $RC）"
+              echo '```'
+              grep -E '(error|warning) •' /tmp/analyze.txt | head -60 || echo '(未匹配到 error/warning 行)'
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
             grep -E '^\s*(error|warning|info)' /tmp/analyze.txt | head -60 | \
               awk '{printf "::error ::%s\n", $0}'
             echo "::error ::flutter analyze 退出码 $RC"
