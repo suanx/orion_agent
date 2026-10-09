@@ -54,8 +54,19 @@ void main() {
       final c = CloudModelService.agentToConfig(info);
       // 关键：后端路径不是 OpenAI 标准路径，绝不能再拼 /chat/completions
       expect(c.fullUrl, isTrue);
-      expect(c.baseUrl, 'https://orion.example.com/api/agent/chat');
+      // relayUrl：路径保留，主机重锚到 App 写死的后端根地址
+      // （后端下发的站点地址不可信——曾产出相对路径导致 HTTP null）
+      expect(c.baseUrl, 'https://orion.suen.us.ci/api/agent/chat');
       expect(c.baseUrl.endsWith('/chat/completions'), isFalse);
+    });
+
+    test('chatUrl 是相对路径时锚定到本 App 后端根地址（HTTP null 修复）', () {
+      final rel = CloudAgentInfo.fromJson(const {
+        'enabled': true,
+        'chatUrl': '/api/agent/chat',
+      });
+      final c = CloudModelService.agentToConfig(rel);
+      expect(c.baseUrl, 'https://orion.suen.us.ci/api/agent/chat');
     });
 
     test('id 带 agent: 前缀，与云端模型区分', () {

@@ -143,9 +143,10 @@ void main() {
 
     test('fullUrl=true 且 baseUrl 就是中继完整地址', () {
       final c = CloudModelService.toConfig(provider);
-      // 后端路径不是 OpenAI 标准路径，绝不能再拼 /chat/completions
+      // 后端路径不是 OpenAI 标准路径，绝不能再拼 /chat/completions。
+      // 主机被 relayUrl 重锚到 App 写死的后端根地址（路径保留）。
       expect(c.fullUrl, isTrue);
-      expect(c.baseUrl, 'https://orion.example.com/api/ai/chat');
+      expect(c.baseUrl, 'https://orion.suen.us.ci/api/ai/chat');
       expect(c.baseUrl.endsWith('/chat/completions'), isFalse);
     });
 

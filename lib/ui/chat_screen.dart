@@ -231,13 +231,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         !_isAgentConfig(cur.id)) {
       ref.read(lastLocalConfigIdProvider.notifier).state = cur.id;
     }
-    // 确保云端列表已拉取（首进 / 尚未加载完成时兜底）
+    // 确保云端列表与 Agent 授权信息是新的。
+    // ⚠️ 必须无条件 force：load() 的 5 分钟缓存守卫以「_agentConfig != null」
+    // 为跳过条件之一——旧会话里缓存的 agentConfig 若带着坏 chatUrl（后端
+    // 修复前下发的相对路径），守卫会让它永远不被刷新（2026-10-10 实测，
+    // 表现为「请求失败（HTTP null）」修了后端也不生效）。
     final cloudNotifier = ref.read(cloudModelsProvider.notifier);
-    if (cloudNotifier.state.configs.isEmpty &&
-        cloudNotifier.state.agentConfig == null) {
-      await cloudNotifier.load(force: true);
-      if (!mounted) return;
-    }
+    await cloudNotifier.load(force: true);
+    if (!mounted) return;
     final agentCfg = ref.read(cloudModelsProvider).state.agentConfig;
     if (agentCfg == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

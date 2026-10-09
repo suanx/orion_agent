@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/llm_config.dart';
+import 'cloud_config.dart';
 import 'cloud_service.dart';
 
 /// 云端模型（由后端持 Key 中继的免费额度模型）。
@@ -31,6 +32,34 @@ class CloudModelService {
   /// 占位 API Key。真正的鉴权走登录令牌，这个值只为通过非空校验。
   static const placeholderApiKey = 'cloud-managed';
 
+  /// 把后端下发的中继地址归一到本 App 的后端根地址（CloudConfig.baseUrl）。
+  ///
+  /// Agent / 云端模型中继永远与 /api/auth、/api/agent/info 同源——App 平时
+  /// 就用 [CloudConfig.baseUrl] 访问它们（且一直成功）。而后端下发的
+  /// chatUrl 依赖后端自己判断「站点地址」（请求 Origin/Referer 头、
+  /// PUBLIC_BASE_URL 环境变量、边缘运行时 request 对象），任何一环不符都会
+  /// 产出相对路径或错误主机，App 端表现为「请求失败（HTTP null）」
+  /// （2026-10-10 实测）。
+  ///
+  /// 因此这里**只取下发 URL 的路径部分**，重新锚定到 App 写死的后端根地址：
+  /// 相对路径（"/api/agent/chat"）、绝对路径都统一处理，与后端站点地址
+  /// 判断彻底解耦。
+  static String relayUrl(String chatUrl, {required String defaultPath}) {
+    final u = chatUrl.trim();
+    var path = defaultPath;
+    if (u.isNotEmpty) {
+      if (u.startsWith('/')) {
+        path = u;
+      } else {
+        final parsed = Uri.tryParse(u);
+        final p = parsed?.path ?? '';
+        if (p.isNotEmpty) path = p;
+      }
+    }
+    if (!path.startsWith('/')) path = '/$path';
+    return '${CloudConfig.baseUrl}$path';
+  }
+
   /// 判断是否为云端 Agent 配置。
   static bool isAgent(LlmConfig c) => c.id.startsWith(agentPrefix);
 
@@ -41,7 +70,7 @@ class CloudModelService {
   static LlmConfig agentToConfig(CloudAgentInfo info) => LlmConfig(
         id: '$agentPrefix${info.model}',
         name: info.label,
-        baseUrl: info.chatUrl,
+        baseUrl: relayUrl(info.chatUrl, defaultPath: '/api/agent/chat'),
         apiKey: placeholderApiKey,
         fullUrl: true,
         enabled: true,
@@ -64,8 +93,9 @@ class CloudModelService {
     return LlmConfig(
       id: '$idPrefix${p.id}',
       name: '${p.name}（云端）',
-      // fullUrl=true：baseUrl 即完整请求地址，后端路径不是 OpenAI 标准路径
-      baseUrl: p.chatUrl,
+      // fullUrl=true：baseUrl 即完整请求地址，后端路径不是 OpenAI 标准路径。
+      // 同样经 relayUrl 归一（见其注释：不信任后端下发的站点地址）。
+      baseUrl: relayUrl(p.chatUrl, defaultPath: '/api/ai/chat'),
       apiKey: placeholderApiKey,
       fullUrl: true,
       enabled: true,
