@@ -386,23 +386,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   /// 弹出模型选择——锚定在输入栏调音图标上方的浮层。
   ///
-  /// 模型列表聚合【所有已启用且就绪的本地提供商】的聊天模型（副标题标注
-  /// 来源提供商），跨提供商选中时同时切换使用中的提供商并记住偏好
-  /// （activeId），解决「添加了新供应商但对话页不显示/选不了」的问题。
+  /// 模型列表聚合【所有已启用且就绪的提供商（含云端模型）】的聊天模型
+  /// （副标题标注来源提供商），跨提供商选中时同时切换使用中的提供商并
+  /// 记住偏好（activeId），解决「添加了新供应商但对话页不显示/选不了」的问题。
   ///
-  /// 【云端模型 / 云端 Agent 不在这里】（2026-10-10 用户要求：从 AI
-  /// 供应商里隐藏）：云端 Agent 走顶栏设备切换的独立会话页；云端模型
-  /// 同样由后端托管，不再混进供应商选择浮层。
+  /// 【云端 Agent 不在这里】（2026-10-10 用户确认）：它不是「一个模型」
+  /// 而是独立会话端，入口在顶栏设备切换的「云端 Agent」。
   Future<void> _pickModel(BuildContext anchor) async {
     final state = ref.read(configProvider);
     // (提供商, 模型) 平铺：对话不再局限于「第一个已启用」的提供商。
-    // 过滤掉云端托管配置（cloud: / agent:），它们不出现在模型选择里。
+    // 云端模型（cloud:）照常显示；云端 Agent（agent:）不进模型选择。
     final entries = <(LlmConfig, ProviderModel)>[
       for (final c in state.configs)
-        if (c.enabled &&
-            c.ready &&
-            !c.id.startsWith('cloud:') &&
-            !c.id.startsWith('agent:'))
+        if (c.enabled && c.ready && !c.id.startsWith('agent:'))
           for (final m in c.chatModels) (c, m),
     ];
     if (entries.isEmpty) {
@@ -426,7 +422,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               cfg.name,
               if (m.contextWindow > 0) '上下文 ${compactTokens(m.contextWindow)}',
             ].join(' · '),
-            icon: Icons.auto_awesome_outlined,
+            // 云端模型用云图标，与自建供应商一眼区分
+            icon: cfg.id.startsWith('cloud:')
+                ? Icons.cloud_outlined
+                : Icons.auto_awesome_outlined,
             checked: cfg.id == currentCfgId && m.name == currentModel,
           ),
       ],
@@ -1476,41 +1475,51 @@ class _MessageBubble extends StatelessWidget {
       );
     }
 
-    // 助手消息：无气泡纯正文（与主流 AI 对话产品一致），
-    // Markdown 直接铺在页面背景上，满宽阅读。
-    return _selectionArea(
-      hasText: message.content.trim().isNotEmpty ||
-          (message.reasoning ?? '').trim().isNotEmpty,
-      onQuote: onQuote,
-      onSend: onSend,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看；
-            // 调用过的工具/技能名并入思考行（只显示名称，不显示详情）。
-            if ((message.reasoning ?? '').trim().isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: _ReasoningPanel(
-                  text: message.reasoning!,
-                  toolNames: [for (final tc in message.toolCalls) tc.name],
-                ),
+    // 助手消息：左侧 App 吉祥物头像（明暗主题各一）+ 无气泡纯正文
+    // （与主流 AI 对话产品一致），Markdown 铺在页面背景上满宽阅读。
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          MascotAvatar(size: 28, image: mascotAsset(context)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _selectionArea(
+              hasText: message.content.trim().isNotEmpty ||
+                  (message.reasoning ?? '').trim().isNotEmpty,
+              onQuote: onQuote,
+              onSend: onSend,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 思考过程：开启思考且模型返回了推理流时展示，可折叠回看；
+                  // 调用过的工具/技能名并入思考行（只显示名称，不显示详情）。
+                  if ((message.reasoning ?? '').trim().isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: _ReasoningPanel(
+                        text: message.reasoning!,
+                        toolNames: [for (final tc in message.toolCalls) tc.name],
+                      ),
+                    ),
+                  // 无思考行时工具名单独列出（有思考行时名称已在行内，避免重复）。
+                  if ((message.reasoning ?? '').trim().isEmpty)
+                    for (final tc in message.toolCalls)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 4),
+                        child: Text('🔧 已调用 ${tc.name}',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: onSurface(context, 0.45))),
+                      ),
+                  if (message.content.isNotEmpty)
+                    _CachedMarkdown(text: message.content),
+                ],
               ),
-            // 无思考行时工具名单独列出（有思考行时名称已在行内，避免重复）。
-            if ((message.reasoning ?? '').trim().isEmpty)
-              for (final tc in message.toolCalls)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 4),
-                  child: Text('🔧 已调用 ${tc.name}',
-                      style: TextStyle(
-                          fontSize: 12, color: onSurface(context, 0.45))),
-                ),
-            if (message.content.isNotEmpty)
-              _CachedMarkdown(text: message.content),
-          ],
-        ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1544,42 +1553,99 @@ class _StreamingBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     // 工具调用等过程状态（⏳/🔧 行）全部并入下方思考面板滚动展示
     // （2026-10-06 用户要求：不再散落在消息流里逐行显示）。
-    // 与已完成消息一致：无气泡纯正文。
-    return _selectionArea(
-      hasText: content.trim().isNotEmpty || reasoning.trim().isNotEmpty,
-      onQuote: onQuote,
-      onSend: onSend,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // 思考阶段（content 还没开始）默认展开实时思考内容；
-            // 正文开始后由面板自己收起，保留可展开回看。
-            // 只有工具调用、没有思考流时也渲染，工具调用在面板内滚动显示。
-            if (reasoning.isNotEmpty || steps.isNotEmpty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 6),
-                child: _ReasoningPanel(
-                  text: reasoning,
-                  inProgress: content.isEmpty,
-                  initiallyExpanded: content.isEmpty,
-                  badgeLabel: modeLabel,
-                  steps: steps,
-                ),
+    // 与已完成消息一致：左侧头像 + 无气泡纯正文。
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          MascotAvatar(size: 28, image: mascotAsset(context)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: _selectionArea(
+              hasText: content.trim().isNotEmpty || reasoning.trim().isNotEmpty,
+              onQuote: onQuote,
+              onSend: onSend,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // 思考阶段（content 还没开始）默认展开实时思考内容；
+                  // 正文开始后由面板自己收起，保留可展开回看。
+                  // 只有工具调用、没有思考流时也渲染，工具调用在面板内滚动显示。
+                  if (reasoning.isNotEmpty || steps.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: _ReasoningPanel(
+                        text: reasoning,
+                        inProgress: content.isEmpty,
+                        initiallyExpanded: content.isEmpty,
+                        badgeLabel: modeLabel,
+                        steps: steps,
+                      ),
+                    ),
+                  // 思考流本身就是"在进行中"的可视反馈，此时不再叠加等待动画；
+                  // 两者都空才是真正的等待（首字节未到）→ 省略号动画
+                  // （2026-10-10 用户要求：转圈改为 … 起伏点）。
+                  if (content.isEmpty && reasoning.isEmpty && steps.isEmpty)
+                    const _TypingDots()
+                  else if (content.isNotEmpty)
+                    _StreamingMarkdown(text: content),
+                ],
               ),
-            // 思考流本身就是"在进行中"的可视反馈，此时不再叠加转圈；
-            // 两者都空才是真正的等待（首字节未到）。
-            if (content.isEmpty && reasoning.isEmpty && steps.isEmpty)
-              const SizedBox(
-                width: 18,
-                height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            else if (content.isNotEmpty)
-              _StreamingMarkdown(text: content),
-          ],
-        ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 「等待首字节」省略号动画：三个圆点依次明暗起伏（替代原来的转圈）。
+class _TypingDots extends StatefulWidget {
+  const _TypingDots();
+
+  @override
+  State<_TypingDots> createState() => _TypingDotsState();
+}
+
+class _TypingDotsState extends State<_TypingDots>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _c = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  /// 三角波：0→1→0 平滑起伏；[t] 为相位（各点错开 0.2）。
+  double _wave(double t) {
+    final x = t < 0 ? t + 1.0 : (t > 1 ? t - 1.0 : t);
+    return x < 0.5 ? x * 2 : (1 - x) * 2;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = onSurface(context, 0.45);
+    return AnimatedBuilder(
+      animation: _c,
+      builder: (_, __) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < 3; i++)
+            Opacity(
+              opacity: 0.2 + 0.8 * _wave(_c.value - i * 0.2),
+              child: Container(
+                margin: const EdgeInsets.symmetric(horizontal: 2.5),
+                width: 7,
+                height: 7,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+            ),
+        ],
       ),
     );
   }
