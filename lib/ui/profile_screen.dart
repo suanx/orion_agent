@@ -16,6 +16,7 @@ import 'mcp_screen.dart';
 import 'memory_screen.dart';
 import 'notification_settings_screen.dart';
 import 'permission_screen.dart';
+import 'privacy_screen.dart';
 import 'roles_screen.dart';
 import 'settings_screen.dart';
 import 'tts_settings_screen.dart';
@@ -75,7 +76,11 @@ class ProfileScreen extends ConsumerWidget {
             _Row(
               icon: Icons.cloud_outlined,
               label: 'AI 提供商',
-              value: config.configs.isEmpty ? '未配置' : '${config.configs.length} 个',
+              // 只统计用户自己配置的本地提供商；cloud:/agent: 是云端登录后
+              // 内存注入的托管配置，不属于「AI 提供商」（2026-10-10 截图反馈）。
+              value: _localConfigs(config).isEmpty
+                  ? '未配置'
+                  : '${_localConfigs(config).length} 个',
               onTap: () => _push(context, const SettingsScreen()),
             ),
             _Row(
@@ -210,6 +215,11 @@ class ProfileScreen extends ConsumerWidget {
               onTap: () => _push(context, const TokenStatsScreen()),
             ),
             _Row(
+              icon: Icons.privacy_tip_outlined,
+              label: '隐私协议',
+              onTap: () => _push(context, const PrivacyScreen()),
+            ),
+            _Row(
               icon: Icons.info_outline_rounded,
               label: '关于',
               value: 'V$kAppVersion',
@@ -251,6 +261,12 @@ class ProfileScreen extends ConsumerWidget {
     Navigator.of(context)
         .push(MaterialPageRoute(builder: (_) => page));
   }
+
+  /// 用户自己配置的本地 AI 提供商（排除云端登录后注入的托管配置）。
+  static List<dynamic> _localConfigs(dynamic config) => config.configs
+      .where((c) =>
+          !c.id.startsWith('cloud:') && !c.id.startsWith('agent:'))
+      .toList();
 
   static String _modeLabel(ThemeMode m) => switch (m) {
         ThemeMode.system => '跟随系统',

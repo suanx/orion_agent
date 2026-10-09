@@ -221,6 +221,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // 消失怎么都出不来，重启才恢复」。只有本路由处于栈顶时，键盘才是
     // 本页的，才允许折叠底栏。
     final isTopRoute = ModalRoute.of(context)?.isCurrent ?? true;
+    // 自愈守卫（第二道保险）：viewInsets 卡死时 kb 恒 >0，但键盘真开着
+    // 的前提是「有文本框持有焦点」。转场后焦点早已不在任何输入框上，
+    // 此时把 kb>0 视为过期脏值，照常显示底栏——底栏永远能自行恢复。
+    final focus = WidgetsBinding.instance.focusManager.primaryFocus;
+    final typing = focus?.context?.widget is EditableText;
+    final kbOpen = kb > 0 && typing;
 
     return Scaffold(
       // 必须用 scaffoldBg（= scaffoldBackgroundColor，页面底色）而不是
@@ -268,7 +274,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         // AnimatedSize 的裁剪走 ClipRect（不需要 decoration），无此陷阱。
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
-        child: kb > 0 && isTopRoute
+        child: kbOpen && isTopRoute
             ? const SizedBox(width: double.infinity)
             : _FrostedNavBar(
                 index: _tab,

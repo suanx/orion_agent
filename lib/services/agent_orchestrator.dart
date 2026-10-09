@@ -448,6 +448,13 @@ class AgentOrchestrator {
       return '网络连接中断（自动重试后仍失败）。请检查网络后重新发送，'
           '已完成的部分已保留。';
     }
+    // 无状态码（response=null）说明请求根本没拿到 HTTP 响应——典型是
+    // 复用的 keep-alive 连接被服务端/边缘节点关闭（type=unknown，
+    // 真实异常在 e.error）。渲染成「HTTP null」只会让用户以为 App 坏了。
+    if (code == null) {
+      return '网络连接中断（自动重试后仍失败）。请检查网络后重新发送，'
+          '已完成的部分已保留。';
+    }
     return '请求失败（HTTP $code）$detail'.trim();
   }
 }

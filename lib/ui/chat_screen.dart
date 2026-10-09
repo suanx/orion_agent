@@ -213,7 +213,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
       notifier.setActive(target.id);
     }
-    if (widget.cloudPage && mounted) Navigator.of(context).pop();
+    if (widget.cloudPage && mounted) {
+      // 转场前主动收键盘（防 viewInsets 竞态卡死底栏，见 home_shell）
+      FocusManager.instance.primaryFocus?.unfocus();
+      Navigator.of(context).pop();
+    }
   }
 
   /// 切到「云端 Agent」：记住当前本地配置 → 拉取云端列表 → 激活 agent
@@ -260,6 +264,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _pushCloudPage() {
+    // 转场前主动收键盘：路由 push/pop 与键盘 inset 动画的竞态是「底栏
+    // 卡消失」的诱因之一（见 home_shell 的键盘归属守卫注释）。
+    FocusManager.instance.primaryFocus?.unfocus();
     return Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => const _CloudAgentPage(),
     ));

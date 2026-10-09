@@ -365,7 +365,17 @@ class LlmClient {
           final code = e.response?.statusCode ?? 0;
           return code >= 500 || code == 429;
         default:
-          return false; // cancel / badCertificate / unknown：不重试
+          // cancel / badCertificate 不重试；unknown 要解包看真实原因——
+          // Dio 会把底层 socket 错误包成 type=unknown、response=null，
+          // 真实异常在 e.error 里（2026-10-10 实测：EdgeOne 关闭空闲
+          // keep-alive 连接后，App 复用死 socket 立即失败，表现为
+          // 「请求失败（HTTP null）」且完全不重试。前几条成功、之后
+          // 秒失败的间歇性正是连接复用撞上边缘节点回收的典型形态）。
+          if (e.type == DioExceptionType.cancel ||
+              e.type == DioExceptionType.badCertificate) {
+            return false;
+          }
+          return isTransientFailure(e.error);
       }
     }
     if (e is SocketException) return true;
