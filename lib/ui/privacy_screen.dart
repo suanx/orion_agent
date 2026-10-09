@@ -33,7 +33,7 @@ class PrivacyScreen extends StatelessWidget {
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
                 child:
-                    DefaultTextStyle(style: TextStyle(fontSize: 14.5, height: 1.6, color: onSurface(context, 0.85)), child: const Column(
+                    DefaultTextStyle(style: TextStyle(fontSize: 14.5, height: 1.6, color: onSurface(context, 0.85)), child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text('生效日期：2026 年 10 月 10 日',
@@ -88,7 +88,6 @@ class PrivacyScreen extends StatelessWidget {
 class _H extends StatelessWidget {
   final String text;
   const _H(this.text);
-
   @override
   Widget build(BuildContext context) {
     return Padding(
