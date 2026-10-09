@@ -232,14 +232,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       ref.read(lastLocalConfigIdProvider.notifier).state = cur.id;
     }
     // 确保云端列表与 Agent 授权信息是新的。
-    // ⚠️ 必须无条件 force：load() 的 5 分钟缓存守卫以「_agentConfig != null」
-    // 为跳过条件之一——旧会话里缓存的 agentConfig 若带着坏 chatUrl（后端
-    // 修复前下发的相对路径），守卫会让它永远不被刷新（2026-10-10 实测，
-    // 表现为「请求失败（HTTP null）」修了后端也不生效）。
+    // 策略：没有缓存的 agentConfig 时才同步等待（首次切换必须有结果才能
+    // 判断是否开通）；已有缓存则先用缓存直接进页（relayUrl() 会把 chatUrl
+    // 重锚到 CloudConfig.baseUrl，即使缓存里带坏地址也安全），后台静默
+    // force 刷新供下次使用。这样来回切换不再每次都卡一个网络往返
+    // （2026-10-10 用户反馈「切换云端 Agent 卡」的根因就是无条件 await）。
     final cloudNotifier = ref.read(cloudModelsProvider.notifier);
-    await cloudNotifier.load(force: true);
+    var agentCfg = ref.read(cloudModelsProvider).state.agentConfig;
+    if (agentCfg == null) {
+      await cloudNotifier.load(force: true);
+      if (!mounted) return;
+      agentCfg = ref.read(cloudModelsProvider).state.agentConfig;
+    } else {
+      unawaited(cloudNotifier.load(force: true));
+    }
     if (!mounted) return;
-    final agentCfg = ref.read(cloudModelsProvider).state.agentConfig;
     if (agentCfg == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
           content: Text('云端 Agent 未开通：请先在「我的 → 云服务」登录，'

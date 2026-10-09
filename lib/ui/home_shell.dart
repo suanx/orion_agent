@@ -213,6 +213,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // 必须显式设 resizeToAvoidBottomInset: false，把避让完全交给
     // 下面的手动 padding，键盘与输入栏才能贴合。
     final kb = MediaQuery.viewInsetsOf(context).bottom;
+    // 键盘归属守卫（导航栏消失根因修复，2026-10-10）：MediaQuery 的
+    // viewInsets 是全局广播的——云端 Agent 页（独立 push 的路由）里键盘
+    // 开合时，本页也会收到 kb>0。此时底栏照常显示即可（反正被上层路由
+    // 盖住），绝不能据此折叠：路由转场与键盘动画存在竞态，viewInsets
+    // 可能卡在非零值，AnimatedSize 就永远停在 0 高度，表现为「导航栏
+    // 消失怎么都出不来，重启才恢复」。只有本路由处于栈顶时，键盘才是
+    // 本页的，才允许折叠底栏。
+    final isTopRoute = ModalRoute.of(context)?.isCurrent ?? true;
 
     return Scaffold(
       // 必须用 scaffoldBg（= scaffoldBackgroundColor，页面底色）而不是
@@ -260,7 +268,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         // AnimatedSize 的裁剪走 ClipRect（不需要 decoration），无此陷阱。
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOutCubic,
-        child: kb > 0
+        child: kb > 0 && isTopRoute
             ? const SizedBox(width: double.infinity)
             : _FrostedNavBar(
                 index: _tab,

@@ -369,7 +369,15 @@ class LlmClient {
       }
     }
     if (e is SocketException) return true;
-    return e.toString().contains('模型响应超时');
+    // dart:io HttpException：socket 级断连在 Android 上常以 HttpException
+    // 形态抛出（2026-10-10 实测：EdgeOne 边缘把 SSE 连接中途切断时抛
+    // "HttpException: Connection closed while receiving data"）。之前只认
+    // SocketException，这条被判为「不可重试」直接报错给用户。原地重试对
+    // 「还没吐字就被断」的场景是安全的（已吐字的内容上层会 rethrow 不重试）。
+    if (e is HttpException) return true;
+    return e.toString().contains('模型响应超时') ||
+        // 兜底：部分厂商 SDK 包装过的异常会丢失类型，只留消息文本
+        e.toString().contains('Connection closed');
   }
 
   Stream<LlmEvent> _chatStreamOnce({
