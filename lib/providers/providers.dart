@@ -2069,3 +2069,9 @@ final cloudProvider = StateNotifierProvider<CloudNotifier, CloudState>((ref) =>
       ref.watch(cloudServiceProvider),
       ref.watch(mcpServiceProvider),
     ));
+
+/// 「我的手机」（本地）最近使用的配置 id。
+///
+/// 顶部设备切换进「云端 Agent」前记下当前本地配置；从云端 Agent 页
+/// 切回本地时恢复它，而不是粗暴跳到第一个可用配置。
+final lastLocalConfigIdProvider = StateProvider<String>((ref) => '');

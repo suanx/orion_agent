@@ -13,6 +13,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'format_utils.dart';
 import 'glass.dart';
+import 'sessions_drawer.dart';
 import 'status_bar_area.dart';
 import 'agent_artifact_screen.dart';
 
@@ -76,8 +77,14 @@ void _showImageViewer(BuildContext context, String dataUrl) {
 }
 
 /// 对话 Tab（body，无 Scaffold；drawer 由 HomeShell 提供）。
+///
+/// [cloudPage]：作为「云端 Agent」独立会话页运行（顶部设备切换进入）。
+/// 两种形态共用同一套对话链路（ChatNotifier / 会话 / 沙箱产物入口），
+/// 区别只在顶栏交互：云端页选「我的手机」时切换配置并退出本页。
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key});
+  const ChatScreen({super.key, this.cloudPage = false});
+
+  final bool cloudPage;
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -146,6 +153,107 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => AgentArtifactScreen(appSessionId: appSessionId),
+    ));
+  }
+
+  /// 当前激活配置是否为云端 Agent（`agent:` 托管配置）。
+  bool _isAgentConfig(String? id) => id?.startsWith('agent:') ?? false;
+
+  /// 顶栏设备切换浮层（参考 Marvis：标题区点击弹出「我的手机 / 云端 Agent」）。
+  ///
+  /// 云端 Agent 是独立会话页：主页面选择后切换 activeConfig 并 push 新路由；
+  /// 云端页选择「我的手机」则恢复上次的本地配置并退出本页。
+  Future<void> _showDeviceMenu(BuildContext anchor) async {
+    final isAgent = _isAgentConfig(ref.read(configProvider).activeConfig?.id);
+    final sel = await showGlassAnchoredMenu<String>(
+      context: context,
+      anchor: anchor,
+      width: 250,
+      options: [
+        GlassMenuOption(
+          value: 'local',
+          title: '我的手机',
+          icon: Icons.smartphone_outlined,
+          checked: !isAgent,
+        ),
+        GlassMenuOption(
+          value: 'cloud',
+          title: '云端 Agent',
+          icon: Icons.cloud_outlined,
+          checked: isAgent,
+        ),
+      ],
+    );
+    if (!mounted || sel == null) return;
+    if (sel == 'local') {
+      await _switchToLocal();
+    } else {
+      await _switchToCloud();
+    }
+  }
+
+  /// 切回「我的手机」：恢复上次的本地配置（没有则取第一个已启用就绪的）；
+  /// 在云端 Agent 页里还顺带退出该页。
+  Future<void> _switchToLocal() async {
+    if (_isAgentConfig(ref.read(configProvider).activeConfig?.id)) {
+      final state = ref.read(configProvider);
+      final notifier = ref.read(configProvider.notifier);
+      var target = notifier.byId(ref.read(lastLocalConfigIdProvider));
+      final isLocal = (LlmConfig c) =>
+          !c.id.startsWith('cloud:') && !_isAgentConfig(c.id);
+      if (target == null || !target.enabled || !target.ready) {
+        target = state.configs
+            .where((c) => isLocal(c) && c.enabled && c.ready)
+            .firstOrNull;
+      }
+      if (target == null) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('还没有可用的本地模型，请到「我的 → 模型设置」添加')));
+        return;
+      }
+      notifier.setActive(target.id);
+    }
+    if (widget.cloudPage && mounted) Navigator.of(context).pop();
+  }
+
+  /// 切到「云端 Agent」：记住当前本地配置 → 拉取云端列表 → 激活 agent
+  /// 托管配置 → 主页面再 push 独立会话页。未开通时给出明确指引。
+  Future<void> _switchToCloud() async {
+    if (_isAgentConfig(ref.read(configProvider).activeConfig?.id)) {
+      // 已经是云端 Agent：云端页无需动作；主页面直接开新页。
+      if (!widget.cloudPage) await _pushCloudPage();
+      return;
+    }
+    // 记住当前本地配置，切回时恢复
+    final cur = ref.read(configProvider).activeConfig;
+    if (cur != null &&
+        !cur.id.startsWith('cloud:') &&
+        !_isAgentConfig(cur.id)) {
+      ref.read(lastLocalConfigIdProvider.notifier).state = cur.id;
+    }
+    // 确保云端列表已拉取（首进 / 尚未加载完成时兜底）
+    final cloudNotifier = ref.read(cloudModelsProvider.notifier);
+    if (cloudNotifier.state.configs.isEmpty &&
+        cloudNotifier.state.agentConfig == null) {
+      await cloudNotifier.load(force: true);
+      if (!mounted) return;
+    }
+    final agentCfg = ref.read(cloudModelsProvider).state.agentConfig;
+    if (agentCfg == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('云端 Agent 未开通：请先在「我的 → 云服务」登录，'
+              '并由管理员在后台授权 Agent 实例')));
+      return;
+    }
+    final notifier = ref.read(configProvider.notifier);
+    notifier.upsert(agentCfg);
+    notifier.setActive(agentCfg.id);
+    if (!widget.cloudPage) await _pushCloudPage();
+  }
+
+  Future<void> _pushCloudPage() {
+    return Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => const _CloudAgentPage(),
     ));
   }
 
@@ -277,58 +385,33 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   /// 弹出模型选择——锚定在输入栏调音图标上方的浮层。
   ///
-  /// 模型列表聚合【所有已启用且就绪的提供商】的聊天模型（副标题标注
+  /// 模型列表聚合【所有已启用且就绪的本地提供商】的聊天模型（副标题标注
   /// 来源提供商），跨提供商选中时同时切换使用中的提供商并记住偏好
   /// （activeId），解决「添加了新供应商但对话页不显示/选不了」的问题。
-  /// 未配置模型时此入口在输入栏不可点（图标置灰），这里再兜底一次。
   ///
-  /// 【云端模型】额外并入列表底部：它们由后端持 Key、不落盘（换设备
-  /// 登录同一账号即自动可用），因此只在本页临时拼进来，选中时需要先
-  /// upsert 进本地配置才能被 activeConfig 指向。
+  /// 【云端模型 / 云端 Agent 不在这里】（2026-10-10 用户要求：从 AI
+  /// 供应商里隐藏）：云端 Agent 走顶栏设备切换的独立会话页；云端模型
+  /// 同样由后端托管，不再混进供应商选择浮层。
   Future<void> _pickModel(BuildContext anchor) async {
     final state = ref.read(configProvider);
-    final cloudNotifier = ref.read(cloudModelsProvider.notifier);
-    // 点开时若还没拉过（首次进入对话页、或列表还是空的），先补一次拉取。
-    // controller 构造时已通过 Future.microtask 触发过，这里是兜底——
-    // 用户可能在加载完成前就点了图标，或者后端刚配好供应商还没同步过来。
-    if (cloudNotifier.state.configs.isEmpty) {
-      await cloudNotifier.load(force: true);
-      if (!mounted) return; // 拉取期间页面可能已销毁
-    }
-    final cloud = ref.read(cloudModelsProvider);
-    // (提供商, 模型) 平铺：对话不再局限于「第一个已启用」的提供商
+    // (提供商, 模型) 平铺：对话不再局限于「第一个已启用」的提供商。
+    // 过滤掉云端托管配置（cloud: / agent:），它们不出现在模型选择里。
     final entries = <(LlmConfig, ProviderModel)>[
       for (final c in state.configs)
-        if (c.enabled && c.ready)
+        if (c.enabled &&
+            c.ready &&
+            !c.id.startsWith('cloud:') &&
+            !c.id.startsWith('agent:'))
           for (final m in c.chatModels) (c, m),
     ];
-    final cloudConfigs = cloud.configs;
-    final cloudEntries = <(LlmConfig, ProviderModel)>[
-      for (final c in cloudConfigs)
-        for (final m in c.chatModels) (c, m),
-    ];
-    if (entries.isEmpty && cloudEntries.isEmpty) {
-      // 两个列表都空：区分是「没登录」「已登录但后端没配供应商」还是
-      // 「拉取失败」，给对应的提示而不是笼统地说"去配置模型服务"。
-      final email = ref.read(cloudServiceProvider).email;
-      final err = cloud.error;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(
-            email == null
-                ? '请先在「我的 → 云服务」登录，即可使用免费云端模型；'
-                    '也可自行配置模型服务'
-                : (err != null
-                    ? '云端模型加载失败：$err'
-                    : '暂无云端模型。请在管理台「AI 模型 → 供应商配置」'
-                        '录入上游地址与 API Key 后启用'),
-          )));
+    if (entries.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('请先在「我的 → 模型设置」添加并启用模型服务')));
       return;
     }
     final active = state.activeConfig;
     final currentCfgId = active?.id;
     final currentModel = active?.chatModel?.name;
-    // 云端额度耗尽时提前告知，但不禁用入口 —— 用户仍可能想看有哪些模型。
-    final quota = ref.read(cloudProvider).aiQuota;
-    final cloudBlocked = cloudEntries.isNotEmpty && quota.isExhausted;
     final sel = await showGlassAnchoredMenu<(String, String)>(
       context: context,
       anchor: anchor,
@@ -345,23 +428,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             icon: Icons.auto_awesome_outlined,
             checked: cfg.id == currentCfgId && m.name == currentModel,
           ),
-        // 云端分组：标题用 provider 名，副标题标出额度与重置时间
-        for (final (cfg, m) in cloudEntries)
-          GlassMenuOption(
-            value: (cfg.id, m.name),
-            title: m.name,
-            subtitle: [
-              cfg.name,
-              if (quota.isSupported)
-                quota.isExhausted
-                    ? '本周额度已用完'
-                    : '剩 ${quota.remaining} 轮/${quota.resetText}',
-            ].join(' · '),
-            icon: quota.isExhausted
-                ? Icons.cloud_off_outlined
-                : Icons.cloud_done_outlined,
-            checked: cfg.id == currentCfgId && m.name == currentModel,
-          ),
       ],
     );
     if (!mounted) return; // 浮层关闭前的异步间隙里页面可能已被销毁
@@ -370,21 +436,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
     final notifier = ref.read(configProvider.notifier);
-    var target = notifier.byId(sel.$1);
-    // 云端配置不在本地表里：先写入一份（带 fullUrl 与占位 Key），
-    // 之后对话链路与自建配置完全同构，无需特殊分支。
-    if (target == null) {
-      target = cloudConfigs.where((c) => c.id == sel.$1).firstOrNull;
-      if (target == null) return;
-      if (cloudBlocked) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text('本周云端额度已用完，${quota.resetText}')));
-        return;
-      }
-      notifier.upsert(target.copyWith(defaultChatModel: sel.$2));
-      notifier.setActive(target.id);
-      return;
-    }
+    final target = notifier.byId(sel.$1);
+    if (target == null) return;
     // ConfigNotifier.upsert 是 void（同步更新内存并落库），不能 await
     notifier.upsert(target.copyWith(defaultChatModel: sel.$2));
     if (sel.$1 != currentCfgId) notifier.setActive(sel.$1);
@@ -622,31 +675,42 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                   icon: const Icon(Icons.menu_rounded, size: 26),
                   onPressed: () => Scaffold.of(context).openDrawer(),
                 ),
+                // 标题区可点击：弹出「我的手机 / 云端 Agent」设备切换浮层
+                // （参考 Marvis 顶栏交互，2026-10-10 用户截图要求）。
                 Expanded(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Orion Agent',
-                          style: TextStyle(
-                              fontSize: 18, fontWeight: FontWeight.w600)),
-                      Row(
+                  child: Builder(
+                    builder: (titleCtx) => InkWell(
+                      borderRadius: BorderRadius.circular(10),
+                      onTap: () => _showDeviceMenu(titleCtx),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            width: 6,
-                            height: 6,
-                            decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.primary,
-                                shape: BoxShape.circle),
-                          ),
-                          const SizedBox(width: 5),
-                          Text('本机 · ${session?.messages.length ?? 0} 条消息',
+                          const Text('Orion Agent',
                               style: TextStyle(
-                                  fontSize: 12,
-                                  color: onSurface(context, 0.4))),
+                                  fontSize: 18, fontWeight: FontWeight.w600)),
+                          Row(
+                            children: [
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: BoxDecoration(
+                                    color:
+                                        Theme.of(context).colorScheme.primary,
+                                    shape: BoxShape.circle),
+                              ),
+                              const SizedBox(width: 5),
+                              Text(
+                                  '${_isAgentConfig(ref.watch(configProvider).activeConfig?.id) ? '云端 Agent' : '我的手机'}'
+                                  ' · ${session?.messages.length ?? 0} 条消息',
+                                  style: TextStyle(
+                                      fontSize: 12,
+                                      color: onSurface(context, 0.4))),
+                            ],
+                          ),
                         ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
                 // 沙箱产物入口：仅当前模型是云端 Agent 时出现。
@@ -2489,6 +2553,32 @@ class _InputBar extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 云端 Agent 独立会话页：顶栏设备切换选「云端 Agent」后进入。
+///
+/// 复用 [ChatScreen] 的完整对话链路（ChatNotifier / 会话历史 / 沙箱
+/// 产物入口），只是以独立路由展示——进入前 activeConfig 已被切到
+/// `agent:` 托管配置，顶栏副标题因此显示「云端 Agent · N 条消息」，
+/// 再选「我的手机」即恢复本地配置并退出本页。
+class _CloudAgentPage extends StatelessWidget {
+  const _CloudAgentPage();
+
+  @override
+  Widget build(BuildContext context) {
+    final kb = MediaQuery.viewInsetsOf(context).bottom;
+    return Scaffold(
+      backgroundColor: scaffoldBg(context),
+      // 新路由里没有 HomeShell，会话历史按钮（Scaffold.of.openDrawer）
+      // 需要本页自带抽屉；快捷入口不传 onGoTab（不在本页切主 Tab）。
+      drawer: const SessionDrawer(),
+      resizeToAvoidBottomInset: false,
+      body: Padding(
+        padding: EdgeInsets.only(bottom: kb),
+        child: const ChatScreen(cloudPage: true),
       ),
     );
   }

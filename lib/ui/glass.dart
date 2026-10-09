@@ -98,9 +98,19 @@ Widget glassAlertDialog({
       if (title != null)
         Padding(
           padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
-          child: DefaultTextStyle(
-            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
-            child: title,
+          // 标题必须显式给颜色：玻璃面板不带 Material AppBar 那种
+          // 文本主题继承，浅色主题下 ambient 样式是白色 → 标题不可见
+          // （2026-10-10 用户截图：MCP 弹窗标题白字看不见）。
+          // 用 onPanelText 取面板文字色：深色=白，浅色=近黑。
+          child: Builder(
+            builder: (tctx) => DefaultTextStyle(
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w600,
+                color: onPanelText(tctx, 0.92),
+              ),
+              child: title,
+            ),
           ),
         ),
       if (content != null)
@@ -111,7 +121,13 @@ Widget glassAlertDialog({
             child: SingleChildScrollView(
               // 内容通常是 Column(mainAxisSize: min)/Text/TextField：
               // 垂直滚动给出无界高度，min 的 Column 不会报错。
-              child: content,
+              // content 同样显式给面板文字色（带自己 style 的子组件不受影响）。
+              child: Builder(
+                builder: (cctx) => DefaultTextStyle(
+                  style: TextStyle(color: onPanelText(cctx, 0.85)),
+                  child: content,
+                ),
+              ),
             ),
           ),
         ),

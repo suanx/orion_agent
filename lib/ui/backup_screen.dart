@@ -176,11 +176,14 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   }
 
   Future<bool> showConfirm(String msg) async {
-    final r = await showDialog<bool>(
+    // 必须走 showGlassDialog：裸 showDialog 没有紧凑约束（maxWidth 340），
+    // glassAlertDialog 会被撑满整屏宽、标题继承巨型样式 —— 2026-10-10
+    // 用户截图「导入备份弹窗排版错乱」的根因。
+    final r = await showGlassDialog<bool>(
       context: context,
       builder: (ctx) => glassAlertDialog(
         title: const Text('导入备份'),
-        content: Text(msg),
+        content: Text(msg, style: const TextStyle(color: Color(0xFFD64545))),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -195,7 +198,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   }
 
   Future<void> showInfo(String msg) {
-    return showDialog<void>(
+    return showGlassDialog<void>(
       context: context,
       builder: (ctx) => glassAlertDialog(
         title: const Text('导入结果'),

@@ -36,17 +36,22 @@ class SettingsScreen extends ConsumerWidget {
           // 配置持久化失败（Keystore 损坏 / 加密存储初始化失败）时，
           // 不提示的话用户会以为保存成功，重启后才发现配置全丢了。
           if (state.error != null) _ErrorBanner(message: state.error!),
-          if (state.configs.isEmpty)
-            const _EmptyProviders()
-          else ...[
-            ...state.configs.map((c) => _ProviderCard(
-                  config: c,
-                  // 「使用中」= activeConfig 选中的那条：优先是用户在对话页
-                  // 模型浮层里最近选中的提供商，否则退回第一个已启用且可用。
-                  inUse: c.id == state.usingId,
-                  onTap: () => _openProvider(context, c.id),
-                  onDelete: () => _confirmDelete(context, ref, c),
-                )),
+          // 云端托管配置（cloud: / agent:）不出现在 AI 供应商列表
+          // （2026-10-10 用户要求隐藏）：云端 Agent 入口在对话页顶栏
+          // 设备切换，云端模型同样由后端托管、不作为本地供应商管理。
+          ...state.configs
+              .where((c) =>
+                  !c.id.startsWith('cloud:') && !c.id.startsWith('agent:'))
+              .map((c) => _ProviderCard(
+                    config: c,
+                    // 「使用中」= activeConfig 选中的那条：优先是用户在对话页
+                    // 模型浮层里最近选中的提供商，否则退回第一个已启用且可用。
+                    inUse: c.id == state.usingId,
+                    onTap: () => _openProvider(context, c.id),
+                    onDelete: () => _confirmDelete(context, ref, c),
+                  )),
+          if (state.configs.isEmpty) const _EmptyProviders(),
+          if (state.configs.isNotEmpty) ...[
             const SizedBox(height: 12),
             Text(
               '多个提供商可同时「已启用」；对话默认用列表中第一个已启用的，'
