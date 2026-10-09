@@ -29,7 +29,7 @@ class PrivacyScreen extends StatelessWidget {
                         style: TextStyle(
                             fontSize: 20,
                             fontWeight: FontWeight.w600,
-                            color: onSurface(context))),
+                            color: onSurface(context, 1))),
                   ],
                 ),
               ),
@@ -106,7 +106,7 @@ class _H extends StatelessWidget {
           style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
-              color: onSurface(context))),
+              color: onSurface(context, 1))),
     );
   }
 }
