@@ -35,9 +35,23 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   void _goChat() => setState(() => _tab = 0);
 
+  /// 焦点变化强制重建（导航栏卡消失的根治，2026-10-10）。
+  ///
+  /// build 里读 `FocusManager.primaryFocus` 判断「键盘是否真的开着」，
+  /// 但 primaryFocus **不是响应式信号**——焦点从输入框移走（unfocus、
+  /// TextField dispose、路由转场）时若 viewInsets 恰好不再变化（已卡住
+  /// 或动画已结束），本页根本不会重建，`kb>0 && typing` 的旧值就被
+  /// 固化：底栏持续折叠、点什么都出不来，重启才恢复。
+  /// FocusManager 的 listener 在任何焦点切换后都会通知，注册它之后
+  /// 「焦点变了 = 必然重建」，卡死窗口被彻底关闭。
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void initState() {
     super.initState();
+    FocusManager.instance.addListener(_onFocusChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeShowSetup();
       // 冷启动场景：通知回调可能在 runApp 之前就写入了意图，
@@ -115,6 +129,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   @override
   void dispose() {
+    FocusManager.instance.removeListener(_onFocusChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -224,6 +239,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // 自愈守卫（第二道保险）：viewInsets 卡死时 kb 恒 >0，但键盘真开着
     // 的前提是「有文本框持有焦点」。转场后焦点早已不在任何输入框上，
     // 此时把 kb>0 视为过期脏值，照常显示底栏——底栏永远能自行恢复。
+    // ⚠️ 该值依赖 [_onFocusChanged] 的强制重建才真正可靠：焦点变化
+    // 若不触发 build，这里的判断会停留在旧值上（底栏卡消失的根因）。
     final focus = WidgetsBinding.instance.focusManager.primaryFocus;
     final typing = focus?.context?.widget is EditableText;
     final kbOpen = kb > 0 && typing;

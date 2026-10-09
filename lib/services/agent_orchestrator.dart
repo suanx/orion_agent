@@ -214,6 +214,22 @@ class AgentOrchestrator {
               yield AgentReasoning(ev.delta);
             } else if (ev is FinalMessage) {
               assistant = ev.message;
+              // 云端 Agent 双保险（2026-10-10 双循环错配根因修复）：
+              // forge 侧的 Agent 已自行完成全部工具轮次（auto-approve），
+              // 一轮请求 = 一次完整任务。旧版后端可能仍把工具过程转成
+              // tool_calls 下发——若在本地再执行一轮工具循环，会触发
+              // 上游把同一任务整个重跑（表现为云端 Agent「没有回复内容」）。
+              // 后端已改为一律丢弃工具事件；这里兜历史后端与异常流。
+              if (config.id.startsWith('agent:') &&
+                  assistant.toolCalls.isNotEmpty) {
+                assistant = ChatMessage(
+                  id: assistant.id,
+                  role: assistant.role,
+                  content: assistant.content,
+                  reasoning: assistant.reasoning,
+                  createdAt: assistant.createdAt,
+                );
+              }
             } else if (ev is TokenUsage) {
               // 记账：每个工具调用轮次都单独计一次
               _stats?.record(
