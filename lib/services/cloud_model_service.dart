@@ -74,7 +74,13 @@ class CloudModelService {
         apiKey: placeholderApiKey,
         fullUrl: true,
         enabled: true,
-        models: [ProviderModel(name: info.model, kind: ModelKind.chat)],
+        // 上下文窗口写死 20K（2026-10-10 用户要求）：Agent 走后端托管的
+        // 会话，真实窗口由 Agent 实例决定，App 侧不下发也不可配置；
+        // 这里给出确定值供「上下文用量」展示与自动压缩（75% 阈值）使用。
+        models: [
+          ProviderModel(
+              name: info.model, kind: ModelKind.chat, contextWindow: 20000)
+        ],
         defaultChatModel: info.model,
       );
 
