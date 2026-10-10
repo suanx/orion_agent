@@ -15,6 +15,7 @@ import '../services/terminal_service.dart';
 import 'about_screen.dart';
 import 'announcement_dialog.dart';
 import 'chat_screen.dart';
+import 'keyboard_safe_padding.dart';
 import 'sessions_drawer.dart';
 import 'setup_screen.dart';
 import 'skills_screen.dart';
@@ -223,8 +224,11 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // 键盘的高度，表现为输入栏浮在屏幕顶端、与键盘之间一大片空白。
     // 必须显式设 resizeToAvoidBottomInset: false，把避让完全交给
     // 下面的手动 padding，键盘与输入栏才能贴合。
-    final kb = MediaQuery.viewInsetsOf(context).bottom;
-
+    // 键盘避让（2026-10-11 根因修复）：不再直接信任 viewInsets——
+    // 云端 Agent 页 push/pop 与 IME 收起竞态后 insets 可能停在旧值
+    // （内容被顶起、底部一大块空白，重启才恢复）。KeyboardSafePadding
+    // 在「insets>0 且无焦点」超过 500ms 时判定为残留并钳 0，任何路径
+    // 卡住都能在半秒内自愈；正常键盘避让行为不变。
     return Scaffold(
       // 必须用 scaffoldBg（= scaffoldBackgroundColor，页面底色）而不是
       // surface（卡片色）。Scaffold 的背景会铺满整个窗口，edge-to-edge 下
@@ -242,8 +246,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       // body 外层的 Padding(bottom: kb) 做一次，否则双重避让会把
       // 输入栏顶到屏幕顶端（与键盘之间留下一整块空白）。
       resizeToAvoidBottomInset: false,
-      body: Padding(
-        padding: EdgeInsets.only(bottom: kb),
+      body: KeyboardSafePadding(
         child: IndexedStack(
           index: _tab,
           children: [

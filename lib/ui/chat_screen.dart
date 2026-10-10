@@ -13,6 +13,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'format_utils.dart';
 import 'glass.dart';
+import 'keyboard_safe_padding.dart';
 import 'sessions_drawer.dart';
 import 'status_bar_area.dart';
 import 'agent_artifact_screen.dart';
@@ -159,36 +160,49 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// 当前激活配置是否为云端 Agent（`agent:` 托管配置）。
   bool _isAgentConfig(String? id) => id?.startsWith('agent:') ?? false;
 
+  /// 切换互斥（2026-10-11）：_switchToCloud 在首次无缓存时会 await 网络
+  /// （数秒），期间用户再次打开菜单点「切云端」会并发进入第二个
+  /// _switchToCloud → push 两个全屏云端页叠起来——上层页 pop 后底下
+  /// 还是一张云端页（没有底栏），用户看到的就是「导航栏怎么都回不来」。
+  bool _switching = false;
+
   /// 顶栏设备切换浮层（参考 Marvis：标题区点击弹出「我的手机 / 云端 Agent」）。
   ///
   /// 云端 Agent 是独立会话页：主页面选择后切换 activeConfig 并 push 新路由；
   /// 云端页选择「我的手机」则恢复上次的本地配置并退出本页。
   Future<void> _showDeviceMenu(BuildContext anchor) async {
-    final isAgent = _isAgentConfig(ref.read(configProvider).activeConfig?.id);
-    final sel = await showGlassAnchoredMenu<String>(
-      context: context,
-      anchor: anchor,
-      width: 250,
-      options: [
-        GlassMenuOption(
-          value: 'local',
-          title: '我的手机',
-          icon: Icons.smartphone_outlined,
-          checked: !isAgent,
-        ),
-        GlassMenuOption(
-          value: 'cloud',
-          title: '云端 Agent',
-          icon: Icons.cloud_outlined,
-          checked: isAgent,
-        ),
-      ],
-    );
-    if (!mounted || sel == null) return;
-    if (sel == 'local') {
-      await _switchToLocal();
-    } else {
-      await _switchToCloud();
+    if (_switching) return;
+    _switching = true;
+    try {
+      final isAgent =
+          _isAgentConfig(ref.read(configProvider).activeConfig?.id);
+      final sel = await showGlassAnchoredMenu<String>(
+        context: context,
+        anchor: anchor,
+        width: 250,
+        options: [
+          GlassMenuOption(
+            value: 'local',
+            title: '我的手机',
+            icon: Icons.smartphone_outlined,
+            checked: !isAgent,
+          ),
+          GlassMenuOption(
+            value: 'cloud',
+            title: '云端 Agent',
+            icon: Icons.cloud_outlined,
+            checked: isAgent,
+          ),
+        ],
+      );
+      if (!mounted || sel == null) return;
+      if (sel == 'local') {
+        await _switchToLocal();
+      } else {
+        await _switchToCloud();
+      }
+    } finally {
+      _switching = false;
     }
   }
 
@@ -2665,15 +2679,16 @@ class _CloudAgentPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final kb = MediaQuery.viewInsetsOf(context).bottom;
     return Scaffold(
       backgroundColor: scaffoldBg(context),
       // 新路由里没有 HomeShell，会话历史按钮（Scaffold.of.openDrawer）
       // 需要本页自带抽屉；快捷入口不传 onGoTab（不在本页切主 Tab）。
       drawer: const SessionDrawer(),
       resizeToAvoidBottomInset: false,
-      body: Padding(
-        padding: EdgeInsets.only(bottom: kb),
+      // 键盘 insets 残留自愈（2026-10-11 根因修复）：本页 push/pop 与
+      // IME 收起竞态是「底部错位卡死」的直接触发路径，与 HomeShell
+      // 同样套 KeyboardSafePadding。
+      body: KeyboardSafePadding(
         child: const ChatScreen(cloudPage: true),
       ),
     );
