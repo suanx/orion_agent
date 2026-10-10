@@ -72,6 +72,38 @@ class QuotaUsed extends LlmEvent {
   int get remaining => (limit - used).clamp(0, limit);
 }
 
+/// 云端 Agent 长任务降级信号（2026-10-11 长任务异步化）。
+///
+/// 中继在 EdgeOne 120s 平台上限前（105s）主动关流时会下发这一帧：
+/// 任务**没有被取消**，只是这条流到点了。App 应改为轮询
+/// `GET /agent/tasks/{taskId}/status?from=N` 把剩余输出接完。
+///
+/// [from] 是中继已消费的 forge chunk 数，正好是轮询的起始游标——带上它
+/// 才不会把已经显示过的内容再取一遍。
+class TaskFallback extends LlmEvent {
+  final String taskId;
+  final int from;
+  const TaskFallback({required this.taskId, required this.from});
+}
+
+/// 一次任务轮询的结果。
+class AgentTaskPoll {
+  /// running | done | failed | stopped
+  final String status;
+  /// forge 已产出的 chunk 总数，即下一次轮询的游标。
+  final int total;
+  /// 本次新增的增量（元素形如 {'content': '...'} / {'reasoning_content': '...'}）。
+  final List<Map<String, dynamic>> deltas;
+
+  const AgentTaskPoll({
+    required this.status,
+    required this.total,
+    required this.deltas,
+  });
+
+  bool get isRunning => status == 'running';
+}
+
 /// 拉取模型列表时返回的一项。
 class RemoteModel {
   final String id;
@@ -483,6 +515,10 @@ class LlmClient {
     // 深度推理误杀成「响应超时」——表现为长任务跑着跑着就断。
     const idle = Duration(seconds: 180);
 
+    // 长任务降级信号：非空表示本条流被中继在 105s 处主动截断（任务仍在
+    // forge 侧运行），本轮改由轮询路径续完。
+    TaskFallback? taskFallback;
+
     await for (final line in lines.timeout(
       idle,
       onTimeout: (sink) => sink.addError(
@@ -564,6 +600,22 @@ class LlmClient {
           ? rawDelta.cast<String, dynamic>()
           : const <String, dynamic>{};
 
+      // 长任务降级信号（2026-10-11）：中继抢在 EdgeOne 120s 平台强杀前
+      // 主动关流，并告知「任务还在跑，改轮询接着取」。此时本条流到此为止，
+      // 不发 FinalMessage——内容还没完，最终消息由轮询路径产出。
+      final Object? rawFallback = delta['task_fallback'];
+      if (rawFallback is Map) {
+        final fb = rawFallback.cast<String, dynamic>();
+        final tid = fb['taskId'];
+        if (tid is String && tid.isNotEmpty) {
+          taskFallback = TaskFallback(
+            taskId: tid,
+            from: (fb['from'] as num?)?.toInt() ?? 0,
+          );
+          break;
+        }
+      }
+
       final c = delta['content'];
       if (c is String && c.isNotEmpty) {
         contentBuf.write(c);
@@ -614,6 +666,18 @@ class LlmClient {
       }
     }
 
+    // 降级：本条流只是「到点了」，不是结束。把 taskId 与游标交给上层，
+    // 由 resumeAgentTask 轮询续完；这里绝不能发 FinalMessage——内容是
+    // 残缺的，发了会被当成完整回答落库。
+    if (taskFallback != null) {
+      yield taskFallback!;
+      if (_isCloud(config)) {
+        final q = _quotaFromHeaders(resp);
+        if (q != null) yield q;
+      }
+      return;
+    }
+
     final entries = toolAcc.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
     final finalMsg = ChatMessage(
@@ -634,14 +698,131 @@ class LlmClient {
     if (usage != null && !usage.isEmpty) yield usage;
     // 云端模型：把本轮消耗的额度带回，调用方可就地更新额度卡片
     if (_isCloud(config)) {
-      final used = int.tryParse(
-          resp.headers.value('x-orion-quota-used') ?? '');
-      final limit = int.tryParse(
-          resp.headers.value('x-orion-quota-limit') ?? '');
-      if (used != null && limit != null && limit > 0) {
-        yield QuotaUsed(used: used, limit: limit);
+      final q = _quotaFromHeaders(resp);
+      if (q != null) yield q;
+    }
+  }
+
+  /// 从响应头读云端额度（本轮请求后服务端扣减了多少）。
+  static QuotaUsed? _quotaFromHeaders(Response<dynamic> resp) {
+    final used = int.tryParse(resp.headers.value('x-orion-quota-used') ?? '');
+    final limit = int.tryParse(resp.headers.value('x-orion-quota-limit') ?? '');
+    if (used == null || limit == null || limit <= 0) return null;
+    return QuotaUsed(used: used, limit: limit);
+  }
+
+  /// 云端 Agent 异步任务端点基址：`.../agent/chat` → `.../agent/tasks`。
+  static String _agentTaskBase(LlmConfig config) {
+    final chat = chatUrl(config);
+    final i = chat.lastIndexOf('/chat');
+    return i > 0 ? '${chat.substring(0, i)}/tasks' : '${_trim(chat)}/tasks';
+  }
+
+  /// 轮询一次云端 Agent 任务的增量输出。
+  ///
+  /// 长任务异步化（2026-10-11）：中继把长任务拆成「提交即返回 + 带游标
+  /// 轮询」，本方法对应后者。返回已转换好的 delta（content /
+  /// reasoning_content），与流式路径完全同构。
+  Future<AgentTaskPoll> pollAgentTask({
+    required LlmConfig config,
+    required String taskId,
+    int from = 0,
+    CancelToken? cancelToken,
+  }) async {
+    final resp = await _dioFor(config).get<Map<String, dynamic>>(
+      '${_agentTaskBase(config)}/$taskId/status?from=$from',
+      cancelToken: cancelToken,
+      options: Options(headers: await _headers(config, '')),
+    );
+    final d = resp.data ?? const <String, dynamic>{};
+    final raw = d['deltas'];
+    final deltas = <Map<String, dynamic>>[];
+    if (raw is List) {
+      for (final item in raw) {
+        if (item is Map) deltas.add(item.cast<String, dynamic>());
       }
     }
+    return AgentTaskPoll(
+      status: (d['status'] as String?) ?? 'running',
+      total: (d['total'] as num?)?.toInt() ?? from,
+      deltas: deltas,
+    );
+  }
+
+  /// 轮询续完一个云端 Agent 任务（降级续传 / App 重开自动续接共用）。
+  ///
+  /// 语义与 [chatStream] 一致：一路 yield ContentDelta / ReasoningDelta，
+  /// 结束时给 FinalMessage。上层（AgentOrchestrator）无需区分内容是流来的
+  /// 还是轮询来的。
+  Stream<LlmEvent> resumeAgentTask({
+    required LlmConfig config,
+    required String taskId,
+    int from = 0,
+    CancelToken? cancelToken,
+    Duration interval = const Duration(seconds: 2),
+    int maxPolls = 900,
+  }) async* {
+    var cursor = from;
+    final content = StringBuffer();
+    final reasoning = StringBuffer();
+
+    for (var i = 0; i < maxPolls; i++) {
+      if (cancelToken?.isCancelled ?? false) break;
+      AgentTaskPoll poll;
+      try {
+        poll = await pollAgentTask(
+          config: config,
+          taskId: taskId,
+          from: cursor,
+          cancelToken: cancelToken,
+        );
+      } catch (e) {
+        // 单次轮询抖动不该让整个任务失败：退避后继续。
+        debugPrint('任务轮询失败（第 ${i + 1} 次）：$e');
+        await Future<void>.delayed(interval);
+        continue;
+      }
+      for (final d in poll.deltas) {
+        final c = d['content'];
+        if (c is String && c.isNotEmpty) {
+          content.write(c);
+          yield ContentDelta(c);
+        }
+        final rc = d['reasoning_content'] ?? d['reasoning'];
+        if (rc is String && rc.isNotEmpty) {
+          reasoning.write(rc);
+          yield ReasoningDelta(rc);
+        }
+      }
+      cursor = poll.total;
+      if (!poll.isRunning) break;
+      await Future<void>.delayed(interval);
+    }
+
+    yield FinalMessage(ChatMessage(
+      id: 'asst_${DateTime.now().millisecondsSinceEpoch}',
+      role: 'assistant',
+      content: content.toString(),
+      reasoning: reasoning.isEmpty ? null : reasoning.toString(),
+    ));
+  }
+
+  /// 当前用户未完成的云端 Agent 任务（App 重开自动续接用）。
+  Future<List<Map<String, dynamic>>> listActiveAgentTasks({
+    required LlmConfig config,
+    CancelToken? cancelToken,
+  }) async {
+    final resp = await _dioFor(config).get<Map<String, dynamic>>(
+      _agentTaskBase(config),
+      cancelToken: cancelToken,
+      options: Options(headers: await _headers(config, '')),
+    );
+    final raw = resp.data?['tasks'];
+    if (raw is! List) return const [];
+    return raw
+        .whereType<Map>()
+        .map((e) => e.cast<String, dynamic>())
+        .toList(growable: false);
   }
 
   /// 提示词缓存键。同一提供商下保持稳定，才能让服务端命中缓存。

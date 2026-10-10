@@ -226,6 +226,30 @@ class AgentOrchestrator {
               roundDeltas++;
               reasoningBuf.write(ev.delta);
               yield AgentReasoning(ev.delta);
+            } else if (ev is TaskFallback) {
+              // 长任务降级（2026-10-11 长任务异步化）：
+              // 中继抢在 EdgeOne 120s 平台强杀前主动关流，任务**仍在 forge
+              // 侧继续跑**。这里改为带游标轮询把剩余输出接完——对上层来说
+              // 事件形态与流式完全一致（AgentDelta / AgentReasoning），
+              // 用户看到的是一条连续的消息，不会断成两截。
+              yield AgentStatus('任务仍在后台运行，已切后台续传…');
+              await for (final rev in _llm.resumeAgentTask(
+                config: config,
+                taskId: ev.taskId,
+                from: ev.from,
+                cancelToken: cancelToken,
+              )) {
+                if (rev is ContentDelta) {
+                  roundDeltas++;
+                  yield AgentDelta(rev.delta);
+                } else if (rev is ReasoningDelta) {
+                  roundDeltas++;
+                  reasoningBuf.write(rev.delta);
+                  yield AgentReasoning(rev.delta);
+                } else if (rev is FinalMessage) {
+                  assistant = rev.message;
+                }
+              }
             } else if (ev is FinalMessage) {
               assistant = ev.message;
               // 云端 Agent 双保险（2026-10-10 双循环错配根因修复）：

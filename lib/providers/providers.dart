@@ -1350,6 +1350,98 @@ class ChatNotifier extends StateNotifier<ChatState> {
     _endStream(sessionId);
   }
 
+  /// 回到前台 / 重开 App 时续接未完成的云端 Agent 任务。
+  ///
+  /// 长任务异步化（2026-10-11）：任务在 forge 侧照常跑，App 被杀也不丢。
+  /// 用户选择的「完成后通知」方式就是**App 内自动续接**——不引入推送通道，
+  /// 而是在 App 回到前台时把未完成任务捞回来接着取，完成后消息自动补齐。
+  ///
+  /// 已在前台 streaming 的会话不重复拉（_sending / streams 双重守卫）。
+  Future<void> resumeCloudTasks() async {
+    // 云端 Agent 走的是当前激活配置（ChatState 里没有配置列表，
+    // 配置在 ConfigNotifier 里），直接用 _getConfig()。
+    final config = _getConfig();
+    if (config == null || !config.id.startsWith('agent:')) return;
+
+    List<Map<String, dynamic>> tasks;
+    try {
+      tasks = await _llm.listActiveAgentTasks(config: config);
+    } catch (e) {
+      debugPrint('云端任务续接：拉取未完成任务失败 $e');
+      return;
+    }
+    for (final t in tasks) {
+      final sid = (t['appSessionId'] as String?) ?? '';
+      if (sid.isEmpty) continue;
+      if (_sending.contains(sid) || state.streams.containsKey(sid)) continue;
+      unawaited(_resumeOneCloudTask(config, sid, t));
+    }
+  }
+
+  /// 续接单个任务：轮询剩余输出 → 落库 → 收尾。
+  Future<void> _resumeOneCloudTask(
+    LlmConfig config,
+    String sessionId,
+    Map<String, dynamic> task,
+  ) async {
+    final taskId = (task['taskId'] as String?) ?? '';
+    if (taskId.isEmpty) return;
+    // cursor 是中继已下发的 chunk 数：从它之后取，不重复显示已有内容。
+    final from = (task['cursor'] as num?)?.toInt() ?? 0;
+
+    await _ensureMessages(sessionId);
+    if (state.sessions.where((s) => s.id == sessionId).isEmpty) return;
+
+    _sending.add(sessionId);
+    state = state.copyWith(
+      streams: {...state.streams, sessionId: const SessionStream()},
+      clearError: true,
+    );
+
+    final buf = StringBuffer();
+    ChatMessage? answer;
+    try {
+      await for (final ev in _llm.resumeAgentTask(
+        config: config,
+        taskId: taskId,
+        from: from,
+      )) {
+        if (!mounted) return;
+        if (ev is ContentDelta) {
+          buf.write(ev.delta);
+          _mutateStream(
+              sessionId, (s) => s.copyWith(content: buf.toString()));
+        } else if (ev is ReasoningDelta) {
+          _mutateStream(
+              sessionId, (s) => s.copyWith(reasoning: s.reasoning + ev.delta));
+        } else if (ev is FinalMessage) {
+          answer = ev.message;
+        }
+      }
+    } catch (e) {
+      debugPrint('云端任务续接失败（$taskId）：$e');
+    }
+
+    if (!mounted) return;
+    final s2 = state.sessions.where((s) => s.id == sessionId).firstOrNull;
+    if (answer != null && s2 != null) {
+      final msg = answer;
+      final withAnswer = ChatSession(
+        id: s2.id,
+        title: s2.title,
+        messages: [...s2.messages, msg],
+        createdAt: s2.createdAt,
+        updatedAt: DateTime.now(),
+      );
+      _touch(withAnswer);
+      await _persistOp(
+          () => _storage.insertMessage(withAnswer.id, msg), 'AI 回答');
+    }
+    // 放在 finally 语义位置：任何提前 return 都不会让会话卡在生成态。
+    _sending.remove(sessionId);
+    _endStream(sessionId);
+  }
+
   /// 统一处理数据库写入：原来是裸 Future，磁盘满/DB 关闭时错误被完全吞掉，
   /// 用户重启后发现消息丢了，日志里也没有任何线索。
   Future<void> _persistOp(Future<void> Function() op, String what) async {

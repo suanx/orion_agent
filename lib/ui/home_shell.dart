@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import '../theme.dart';
 import 'dart:ui';
 
@@ -105,6 +107,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state != AppLifecycleState.resumed) return;
+
+    // 云端 Agent 长任务续接（2026-10-11）：App 退后台/被杀期间任务在
+    // forge 侧照常跑，回到前台把未完成的捞回来接着取，完成后消息自动
+    // 补齐——这就是用户选定的「完成后通知」方式（App 内自动续接，
+    // 不引入推送通道）。必须放在下面的 30 分钟限流之前：续接与更新
+    // 检查频率无关，每次回前台都要试。
+    unawaited(ref.read(chatProvider.notifier).resumeCloudTasks());
+
     final last = _lastUpdateCheck;
     if (last != null &&
         DateTime.now().difference(last) < const Duration(minutes: 30)) {
