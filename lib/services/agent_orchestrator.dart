@@ -272,8 +272,16 @@ class AgentOrchestrator {
             return;
           }
           lastError = e;
+          // 断流原因必须落日志（debugPrint 已桥接进 AppLog，用户可从
+          // 「关于 → 日志」导出）：吐字后断流会走轮级重试，重试期间
+          // 正文会经历重放对齐（见 providers 的防闪处理），排查时只有
+          // 日志能回答「到底是什么在断、断了几次」。2026-10-10 用户
+          // 反馈「正文一闪一闪」后补上。
+          debugPrint('模型流中断（第 ${attempt + 1}/${maxRoundRetries + 1} 次尝试）：'
+              'DioException(${e.type}) ${e.message ?? e.error}');
         } catch (e) {
           lastError = e;
+          debugPrint('模型流中断（第 ${attempt + 1}/${maxRoundRetries + 1} 次尝试）：$e');
         }
         // 只对临时性故障重试（网络中断/超时/5xx/429）。模型服务明确报错
         // （余额不足、参数错误等）重试没有意义，立即走失败路径。

@@ -1136,6 +1136,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
     final buf = StringBuffer();
     ChatMessage? answer;
 
+    // 断流重连的「重放对齐」状态（正文一闪一闪修复，2026-10-10）。
+    //
+    // 背景：吐字后断流 → 轮级重试重发请求 → 旧实现把正文清空，文字
+    // 凭空消失；而 forge 对仍在跑的 run 会从 index 0 全量重放，于是
+    // 文本又从头打出来——用户看到的就是「正文一闪一闪、消失又重新出现」。
+    //
+    // 关键事实：重放来自同一 run 的同一段流，与已显示文本**同源必然
+    // 一致**。因此断流时不清屏，改用锚点前缀比对：重放逐段追上已显示
+    // 内容（前缀成立）后把余量并回 buf 无缝续流；锚点期间 UI 保持原样。
+    // 只有对不上（重连到新一轮 run、模型重新生成、文本已变）才整体
+    // 换成新内容——退化为旧行为，不会更差。
+    String? replayAnchor; // 断流瞬间已显示的正文（比对基准）
+    StringBuffer? replayBuf; // 重放期临时累积（对齐成功前不展示）
+
     // 识图模型：带图消息走识图模型（当前聊天模型可能不支持视觉输入）。
     // 未设置时保持原样，图片直接随聊天模型发送。
     var effConfig = config;
@@ -1161,21 +1175,48 @@ class ChatNotifier extends StateNotifier<ChatState> {
         // 此时写 state 会抛 StateError 并让进度条目永远无法清除。
         if (!mounted) return;
         if (ev is AgentDelta) {
-          buf.write(ev.delta);
-          // 合帧：每个 delta 都全量 toString + 重建整个 ChatState 是
-          // O(n²) 拷贝，长回答会明显卡顿。窗口内的 delta 只累积，
-          // 到点或流结束时统一刷一次 UI。
-          //
-          // 90ms 而非 60ms：UI 侧每次刷新都要重新布局流式气泡并解析
-          // Markdown，60ms(约 16fps) 偏高，在中低端机上每帧都跑不满就
-          // 触发掉帧，视觉上反而是「一顿一顿」。90ms(约 11fps) 已
-          // 明显快于人眼阅读速度，且把每帧解析成本摊薄近三成。
-          final now = DateTime.now();
-          final last = _lastFlush[sessionId] ??
-              DateTime.fromMillisecondsSinceEpoch(0);
-          if (now.difference(last).inMilliseconds >= 90) {
-            _lastFlush[sessionId] = now;
-            _mutateStream(sessionId, (s) => s.copyWith(content: buf.toString()));
+          final anchor = replayAnchor;
+          if (anchor != null) {
+            // ---- 重放对齐期（断流重连后，见 send() 头部注释）----
+            // delta 先进临时缓冲与已显示正文做前缀比对，期间**不刷新
+            // UI**——这是防「一闪一闪」的核心：旧文本一直保持显示，
+            // 直到重放追上它为止。
+            final rb = replayBuf!;
+            rb.write(ev.delta);
+            final rep = rb.toString();
+            final aligned = rep.length <= anchor.length
+                ? anchor.startsWith(rep)
+                : rep.startsWith(anchor);
+            // 仍在重放已显示过的部分（前缀成立且更短）→ 保持界面不动；
+            // 否则采纳：对齐完成（rep 已含重放之后的实时新内容），
+            // 或文本分叉（重连到新一轮 run、模型重新生成）→ 整体换新。
+            if (!aligned || rep.length >= anchor.length) {
+              replayAnchor = null;
+              replayBuf = null;
+              buf.clear();
+              buf.write(rep);
+              _lastFlush[sessionId] = DateTime.now();
+              _mutateStream(
+                  sessionId, (s) => s.copyWith(content: buf.toString()));
+            }
+          } else {
+            buf.write(ev.delta);
+            // 合帧：每个 delta 都全量 toString + 重建整个 ChatState 是
+            // O(n²) 拷贝，长回答会明显卡顿。窗口内的 delta 只累积，
+            // 到点或流结束时统一刷一次 UI。
+            //
+            // 90ms 而非 60ms：UI 侧每次刷新都要重新布局流式气泡并解析
+            // Markdown，60ms(约 16fps) 偏高，在中低端机上每帧都跑不满就
+            // 触发掉帧，视觉上反而是「一顿一顿」。90ms(约 11fps) 已
+            // 明显快于人眼阅读速度，且把每帧解析成本摊薄近三成。
+            final now = DateTime.now();
+            final last = _lastFlush[sessionId] ??
+                DateTime.fromMillisecondsSinceEpoch(0);
+            if (now.difference(last).inMilliseconds >= 90) {
+              _lastFlush[sessionId] = now;
+              _mutateStream(
+                  sessionId, (s) => s.copyWith(content: buf.toString()));
+            }
           }
         } else if (ev is AgentReasoning) {
           _mutateStream(sessionId,
@@ -1201,11 +1242,20 @@ class ChatNotifier extends StateNotifier<ChatState> {
           // 云端模型：本轮扣掉的周额度即时回填，额度卡片无需手动刷新
           _onQuotaUsed?.call(ev.used, ev.limit);
         } else if (ev is AgentRoundRestart) {
-          // 断流整轮重发：丢弃本轮残缺增量，思考面板回退到已完成轮次。
+          // 断流整轮重发：**不清正文**（防「一闪一闪」，见 send() 头部
+          // 重放对齐注释）——以当前正文为锚点进入对齐期，等同一 run 的
+          // 重放文本追上后无缝续流；正文还没开始（首包前断）无内容可
+          // 保留，维持原清空语义。思考面板仍回退到已完成轮次。
           // 不清 steps——「正在自动重试」的状态行要留着给用户看。
-          buf.clear();
-          _mutateStream(sessionId,
-              (s) => s.copyWith(content: '', reasoning: ev.reasoningPrefix));
+          if (buf.toString().trim().isEmpty) {
+            _mutateStream(sessionId,
+                (s) => s.copyWith(content: '', reasoning: ev.reasoningPrefix));
+          } else {
+            replayAnchor = buf.toString();
+            replayBuf = StringBuffer();
+            _mutateStream(
+                sessionId, (s) => s.copyWith(reasoning: ev.reasoningPrefix));
+          }
         } else if (ev is AgentAnswer) {
           answer = ev.message;
         } else if (ev is AgentFailure) {
