@@ -21,7 +21,7 @@ import 'profile_screen.dart';
 import 'tasks_screen.dart';
 import 'update_dialog.dart';
 
-/// 应用外壳：4 个 Tab + 磨砂玻璃底部导航。
+/// 应用外壳：4 个 Tab + 悬浮液态玻璃底部导航。
 class HomeShell extends ConsumerStatefulWidget {
   const HomeShell({super.key});
 
@@ -273,7 +273,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
       // - 键盘收起/卡死后，底栏始终钉在屏幕底部，不存在任何可以「卡住
       //   消失」的动画状态；四个信号（kb/焦点/路由/动画）全部与底栏
       //   显隐解耦，此 bug 类被结构性消灭。
-      bottomNavigationBar: _FrostedNavBar(
+      bottomNavigationBar: _FloatingGlassNavBar(
         index: _tab,
         height: _navHeight,
         // 与 HomeTab 常量保持一致：HomeShell 的 children 顺序即 Tab 顺序，
@@ -305,8 +305,15 @@ const _navItems = <_NavItem>[
   _NavItem(Icons.person_outline_rounded, Icons.person_rounded, '我的'),
 ];
 
-class _FrostedNavBar extends StatelessWidget {
-  const _FrostedNavBar({
+/// 悬浮液态玻璃底栏（2026-10-11）：
+/// - 悬浮：四边留白、圆角胶囊造型，投影让它「漂」在内容之上；
+///   extendBody 下页面内容从栏后穿过，磨砂实时模糊的就是底下内容，
+///   液态玻璃的通透感来自这里。
+/// - 液态玻璃：BackdropFilter 模糊 + 半透明表面渐变 + 左上高光sheen。
+/// - 点击特效：按压缩放回弹（Listener+AnimatedScale）+ 水波纹
+///   （InkWell）+ 选中项药丸高亮（AnimatedContainer）。
+class _FloatingGlassNavBar extends StatelessWidget {
+  const _FloatingGlassNavBar({
     required this.index,
     required this.onTap,
     required this.height,
@@ -316,57 +323,158 @@ class _FrostedNavBar extends StatelessWidget {
   final ValueChanged<int> onTap;
   final double height;
 
+  static const _radius = 30.0;
+
   @override
   Widget build(BuildContext context) {
     final primary = Theme.of(context).colorScheme.primary;
-    return ClipRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
-        child: Container(
-          decoration: BoxDecoration(
-            color: surface(context).withValues(alpha: 0.72),
-            border: Border(
-              top: BorderSide(color: onSurface(context, 0.06)),
+    return Padding(
+      // 悬浮留白：左右与底部都不贴边，SafeArea 负责手势条以上的净空。
+      padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+      // 投影必须画在 ClipRRect 外面，否则会被裁掉。
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(_radius),
+          boxShadow: [
+            BoxShadow(
+              color: Theme.of(context)
+                  .colorScheme
+                  .shadow
+                  .withValues(alpha: 0.16),
+              blurRadius: 18,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(_radius),
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 22, sigmaY: 22),
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    surface(context).withValues(alpha: 0.80),
+                    surface(context).withValues(alpha: 0.64),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(_radius),
+                border: Border.all(color: onSurface(context, 0.10)),
+              ),
+              // 玻璃高光：左上亮、右下微返光的液态质感。
+              foregroundDecoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(_radius),
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Colors.white.withValues(alpha: 0.14),
+                    Colors.white.withValues(alpha: 0.0),
+                    Colors.white.withValues(alpha: 0.05),
+                  ],
+                  stops: const [0.0, 0.55, 1.0],
+                ),
+              ),
+              child: SafeArea(
+                top: false,
+                child: SizedBox(
+                  height: height,
+                  child: Row(
+                    children: [
+                      for (var i = 0; i < _navItems.length; i++)
+                        Expanded(
+                          child: _NavTile(
+                            item: _navItems[i],
+                            selected: i == index,
+                            primary: primary,
+                            onTap: () => onTap(i),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
-          child: SafeArea(
-            top: false,
-            child: SizedBox(
-              height: height,
-              child: Row(
-                children: [
-                  for (var i = 0; i < _navItems.length; i++)
-                    Expanded(
-                      child: InkWell(
-                        onTap: () => onTap(i),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              i == index ? _navItems[i].activeIcon : _navItems[i].icon,
-                              size: 26,
-                              color: i == index
-                                  ? primary
-                                  : onSurface(context, 0.35),
-                            ),
-                            const SizedBox(height: 3),
-                            Text(
-                              _navItems[i].label,
-                              style: TextStyle(
-                                fontSize: 11,
-                                fontWeight:
-                                    i == index ? FontWeight.w500 : FontWeight.w500,
-                                color: i == index
-                                    ? primary
-                                    : onSurface(context, 0.35),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                ],
-              ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 单个导航项：按压缩放回弹 + 水波纹 + 选中药丸高亮。
+class _NavTile extends StatefulWidget {
+  const _NavTile({
+    required this.item,
+    required this.selected,
+    required this.primary,
+    required this.onTap,
+  });
+
+  final _NavItem item;
+  final bool selected;
+  final Color primary;
+  final VoidCallback onTap;
+
+  @override
+  State<_NavTile> createState() => _NavTileState();
+}
+
+class _NavTileState extends State<_NavTile> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.selected
+        ? widget.primary
+        : onSurface(context, 0.38);
+    // Listener 而非 GestureDetector：只读指针事件、不参与手势竞技场，
+    // 与 InkWell 的 tap 互不干扰。
+    return Listener(
+      onPointerDown: (_) => setState(() => _pressed = true),
+      onPointerUp: (_) => setState(() => _pressed = false),
+      onPointerCancel: (_) => setState(() => _pressed = false),
+      child: InkWell(
+        onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(22),
+        splashColor: widget.primary.withValues(alpha: 0.10),
+        highlightColor: widget.primary.withValues(alpha: 0.05),
+        child: AnimatedScale(
+          scale: _pressed ? 0.86 : 1.0,
+          duration: const Duration(milliseconds: 120),
+          curve: Curves.easeOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+            decoration: BoxDecoration(
+              color: widget.selected
+                  ? widget.primary.withValues(alpha: 0.14)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(22),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  widget.selected ? widget.item.activeIcon : widget.item.icon,
+                  size: 25,
+                  color: color,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  widget.item.label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: widget.selected
+                        ? FontWeight.w600
+                        : FontWeight.w500,
+                    color: color,
+                  ),
+                ),
+              ],
             ),
           ),
         ),
