@@ -74,12 +74,16 @@ class CloudModelService {
         apiKey: placeholderApiKey,
         fullUrl: true,
         enabled: true,
-        // 上下文窗口写死 20K（2026-10-10 用户要求）：Agent 走后端托管的
-        // 会话，真实窗口由 Agent 实例决定，App 侧不下发也不可配置；
-        // 这里给出确定值供「上下文用量」展示与自动压缩（75% 阈值）使用。
+        // 上下文窗口 200K + 最大输出 32K（2026-10-10 用户要求）：Agent 走
+        // 后端托管的会话，App 侧用该值做「上下文用量」展示与自动压缩
+        // （75% 阈值 → 150K 触发），maxOutputTokens 会下发为请求的
+        // max_tokens，让云端回复上限提至 32K。
         models: [
           ProviderModel(
-              name: info.model, kind: ModelKind.chat, contextWindow: 20000)
+              name: info.model,
+              kind: ModelKind.chat,
+              contextWindow: 200000,
+              maxOutputTokens: 32768)
         ],
         defaultChatModel: info.model,
       );

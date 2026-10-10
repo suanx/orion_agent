@@ -214,7 +214,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       notifier.setActive(target.id);
     }
     if (widget.cloudPage && mounted) {
-      // 转场前主动收键盘（防 viewInsets 竞态卡死底栏，见 home_shell）
+      // 转场前主动收键盘：让下一页进场时没有残留的 IME 动画，
+      // 页面切换观感更干净（底栏已常驻，不再依赖此逻辑防卡死）。
       FocusManager.instance.primaryFocus?.unfocus();
       Navigator.of(context).pop();
     }
@@ -264,8 +265,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   Future<void> _pushCloudPage() {
-    // 转场前主动收键盘：路由 push/pop 与键盘 inset 动画的竞态是「底栏
-    // 卡消失」的诱因之一（见 home_shell 的键盘归属守卫注释）。
+    // 转场前主动收键盘：避免上一页的键盘动画压在转场上（观感问题；
+    // 底栏已常驻，不再依赖此逻辑防「卡消失」）。
     FocusManager.instance.primaryFocus?.unfocus();
     return Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => const _CloudAgentPage(),

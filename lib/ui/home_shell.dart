@@ -35,23 +35,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   void _goChat() => setState(() => _tab = 0);
 
-  /// 焦点变化强制重建（导航栏卡消失的根治，2026-10-10）。
-  ///
-  /// build 里读 `FocusManager.primaryFocus` 判断「键盘是否真的开着」，
-  /// 但 primaryFocus **不是响应式信号**——焦点从输入框移走（unfocus、
-  /// TextField dispose、路由转场）时若 viewInsets 恰好不再变化（已卡住
-  /// 或动画已结束），本页根本不会重建，`kb>0 && typing` 的旧值就被
-  /// 固化：底栏持续折叠、点什么都出不来，重启才恢复。
-  /// FocusManager 的 listener 在任何焦点切换后都会通知，注册它之后
-  /// 「焦点变了 = 必然重建」，卡死窗口被彻底关闭。
-  void _onFocusChanged() {
-    if (mounted) setState(() {});
-  }
-
   @override
   void initState() {
     super.initState();
-    FocusManager.instance.addListener(_onFocusChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeShowSetup();
       // 冷启动场景：通知回调可能在 runApp 之前就写入了意图，
@@ -129,7 +115,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   @override
   void dispose() {
-    FocusManager.instance.removeListener(_onFocusChanged);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -228,22 +213,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
     // 必须显式设 resizeToAvoidBottomInset: false，把避让完全交给
     // 下面的手动 padding，键盘与输入栏才能贴合。
     final kb = MediaQuery.viewInsetsOf(context).bottom;
-    // 键盘归属守卫（导航栏消失根因修复，2026-10-10）：MediaQuery 的
-    // viewInsets 是全局广播的——云端 Agent 页（独立 push 的路由）里键盘
-    // 开合时，本页也会收到 kb>0。此时底栏照常显示即可（反正被上层路由
-    // 盖住），绝不能据此折叠：路由转场与键盘动画存在竞态，viewInsets
-    // 可能卡在非零值，AnimatedSize 就永远停在 0 高度，表现为「导航栏
-    // 消失怎么都出不来，重启才恢复」。只有本路由处于栈顶时，键盘才是
-    // 本页的，才允许折叠底栏。
-    final isTopRoute = ModalRoute.of(context)?.isCurrent ?? true;
-    // 自愈守卫（第二道保险）：viewInsets 卡死时 kb 恒 >0，但键盘真开着
-    // 的前提是「有文本框持有焦点」。转场后焦点早已不在任何输入框上，
-    // 此时把 kb>0 视为过期脏值，照常显示底栏——底栏永远能自行恢复。
-    // ⚠️ 该值依赖 [_onFocusChanged] 的强制重建才真正可靠：焦点变化
-    // 若不触发 build，这里的判断会停留在旧值上（底栏卡消失的根因）。
-    final focus = WidgetsBinding.instance.focusManager.primaryFocus;
-    final typing = focus?.context?.widget is EditableText;
-    final kbOpen = kb > 0 && typing;
 
     return Scaffold(
       // 必须用 scaffoldBg（= scaffoldBackgroundColor，页面底色）而不是
@@ -279,33 +248,33 @@ class _HomeShellState extends ConsumerState<HomeShell>
           ],
         ),
       ),
-      bottomNavigationBar: AnimatedSize(
-        // 键盘弹起时整条底栏隐藏（用户要求：输入界面不显示底部导航），
-        // 键盘收起后展开回原高度。
-        //
-        // ⚠️ 历史教训（v0.2.2~v0.2.5 白屏/报错根因）：这里曾用
-        // AnimatedContainer(clipBehavior: Clip.hardEdge) 且没有 decoration——
-        // Container.build 对「clip ≠ none 且 decoration == null」在 release 下
-        // 会解引用 decoration!（framework container.dart:413），
-        // 抛 "Null check operator used on a null value"，首帧 mount 即崩。
-        // AnimatedSize 的裁剪走 ClipRect（不需要 decoration），无此陷阱。
-        duration: const Duration(milliseconds: 220),
-        curve: Curves.easeOutCubic,
-        child: kbOpen && isTopRoute
-            ? const SizedBox(width: double.infinity)
-            : _FrostedNavBar(
-                index: _tab,
-                height: _navHeight,
-                // 与 HomeTab 常量保持一致：HomeShell 的 children 顺序即 Tab 顺序，
-                // 两处都用常量，任一处调整顺序都会立刻暴露不一致。
-                // onTap 闭包引用了 ref（刷新记忆计数），不能保持 const。
-                onTap: (i) {
-                  setState(() => _tab = i);
-                  // Agent 在对话中可通过 save_memory 工具增删记忆，
-                  // IndexedStack 不重建子页，切到「我的」时强制刷新计数
-                  if (i == 3) ref.invalidate(memoryCountProvider);
-                },
-              ),
+      // 底栏常驻（2026-10-10 结构性根治「导航栏卡死」）。
+      //
+      // 历史上这里用 AnimatedSize 在 kb>0 && typing 时把底栏折叠成 0 高度，
+      // 配套了四道防线（isTopRoute 归属守卫、无焦点自愈、转场前 unfocus、
+      // FocusManager 强制重建）——真机上仍会卡死重启才恢复，因为只要
+      // viewInsets 与焦点同时停在「键盘开着」的旧值，任何信号都无法察觉
+      // 系统键盘其实已经没了，纯 Dart 侧也没有独立的键盘可见性信号可查。
+      //
+      // 现在改为底栏永远渲染、不再折叠：
+      // - App 是 edge-to-edge 全屏布局（main.dart SystemUiMode.edgeToEdge），
+      //   键盘弹起时 IME 窗口物理覆盖屏幕底部——底栏在键盘后面本来就
+      //   看不见，折叠只是视觉重复，去掉后打字时的观感完全一致；
+      // - 键盘收起/卡死后，底栏始终钉在屏幕底部，不存在任何可以「卡住
+      //   消失」的动画状态；四个信号（kb/焦点/路由/动画）全部与底栏
+      //   显隐解耦，此 bug 类被结构性消灭。
+      bottomNavigationBar: _FrostedNavBar(
+        index: _tab,
+        height: _navHeight,
+        // 与 HomeTab 常量保持一致：HomeShell 的 children 顺序即 Tab 顺序，
+        // 两处都用常量，任一处调整顺序都会立刻暴露不一致。
+        // onTap 闭包引用了 ref（刷新记忆计数），不能保持 const。
+        onTap: (i) {
+          setState(() => _tab = i);
+          // Agent 在对话中可通过 save_memory 工具增删记忆，
+          // IndexedStack 不重建子页，切到「我的」时强制刷新计数
+          if (i == 3) ref.invalidate(memoryCountProvider);
+        },
       ),
     );
   }
