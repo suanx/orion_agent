@@ -308,8 +308,8 @@ void main() {
     final events =
         await buildOrchestrator(llm).run(config: config, history: history).toList();
 
-    // 重试按轮计：第 1 轮 1 次成功；第 2 轮 1 次初始 + 2 次重试 = 3 次
-    expect(llm.call, 4, reason: '轮 1 一次成功 + 轮 2 初始一次 + 重试两次');
+    // 重试按轮计：第 1 轮 1 次成功；第 2 轮 1 次初始 + 4 次重试 = 5 次
+    expect(llm.call, 6, reason: '轮 1 一次成功 + 轮 2 初始一次 + 重试四次');
     final answers = events.whereType<AgentAnswer>().toList();
     expect(answers, hasLength(1), reason: 'lead 非空时必须保住已完成部分');
     expect(answers.single.message.content, contains('第一轮进展'));

@@ -120,7 +120,13 @@ class AgentOrchestrator {
 
   /// 每轮 LLM 请求因临时性故障（流中断/超时）整轮重发的最大次数。
   /// 首包前的失败由 LlmClient 内部处理，这里兜流中途断。
-  static const maxRoundRetries = 2;
+  ///
+  /// 云端 Agent 场景下断流大多来自中继/函数平台的执行时长上限被撞
+  /// （2026-10-10 根因：EdgeOne 默认 30s 强杀流式中继）。断流重试会
+  /// 经 forge 的 activeStreamId 分支接上同一个 run 续传，不重烧 token，
+  /// 因此多给几次窗口的代价很小、收益明显。2 → 4（配合中继 120s 上限，
+  /// 单轮最长可容错 ~10 分钟的任务）。
+  static const maxRoundRetries = 4;
 
   /// 重试退避基数（秒）：第 n 次重试等待 n×base。测试置 0 加速。
   @visibleForTesting
@@ -175,7 +181,7 @@ class AgentOrchestrator {
       Object? lastError;
       for (var attempt = 0; attempt <= maxRoundRetries; attempt++) {
         if (attempt > 0) {
-          // 退避：2s、4s（基数测试时置 0）
+          // 退避：2s、4s、6s、8s（基数测试时置 0）
           await Future<void>.delayed(
               Duration(seconds: retryBackoffBaseSeconds * attempt));
           if (cancelToken?.isCancelled ?? false) {
