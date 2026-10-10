@@ -1,3 +1,25 @@
+# Orion Agent v0.2.49 更新说明（正式版）
+
+> 云端 Agent「网络波动，重连 2 次都失败」根因修复。
+
+## 云端 Agent
+
+- **网络波动根因修复**：取证确认断流发生在平台层而非应用层——Vercel
+  函数日志显示 `POST /api/agent/chat` 全部 200、零服务端错误，但呈
+  burst 式重试；EdgeOne 官方文档确认中继 Cloud Functions **默认执行
+  上限仅 30 秒**（范围 10~120s），而云端 Agent 一轮 = 沙箱供应 +
+  多轮模型调用，远超 30 秒，平台到期直接强杀流式中继 → App 收到
+  断流 → 重试整轮重发 → 每次又被 30s 腰斩。这也解释了「偶尔一次
+  短对话正常、长任务必挂」的现象。
+- **三层修复**：① 中继 `edgeone.json` 显式 `maxDuration = 120`；
+  ② forge `agent/chat` 路由显式 `maxDuration = 120`（对齐同项目
+  generate-pr 写法）；③ App 轮级断流重试 **2 → 4 次**——重试会经
+  forge `activeStreamId` 分支接上同一 run 续传，**不重复触发 agent、
+  不重烧 token**。修复后中继单次窗口 120s、App 侧 5 个窗口接力，
+  单轮最长可容错约 10 分钟的任务。
+
+---
+
 # Orion Agent v0.2.48 更新说明（正式版）
 
 > 导航栏卡死结构性根治（底栏常驻）+ 云端 Agent 上下文 200K / 输出 32K。
