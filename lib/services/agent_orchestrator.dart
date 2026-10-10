@@ -200,6 +200,14 @@ class AgentOrchestrator {
           roundDeltas = 0;
           yield AgentStatus(
               '网络波动，正在自动重试（第 $attempt/$maxRoundRetries 次）…');
+        } else {
+          // 首次尝试也立刻给反馈（2026-10-10 用户反馈「云端 Agent 转圈
+          // 像卡死」的体验修复）：从点发送到首包，云端 Agent 要经过
+          // 中继鉴权 + forge 沙箱调度，正常也要数秒到数十秒；服务端故障
+          // 时更是单次就挂满 120s。此前这段完全静默，用户只能看到转圈，
+          // 分不清「在工作」和「已卡死」。先落一条状态进步骤区，App 活着
+          // 且正在连接这件事就始终可见。
+          yield const AgentStatus('正在连接…');
         }
         try {
           await for (final ev in _llm.chatStream(
