@@ -70,6 +70,36 @@ Future<T?> showGlassDialog<T>({
   );
 }
 
+/// 统一的删除二次确认（2026-10-11 P1）：会话 / 知识库文档 / MCP 服务器 /
+/// 记忆此前删除无任何确认，误触即永久删除。返回 true = 用户确认删除。
+Future<bool> confirmDestructive(
+  BuildContext context, {
+  required String title,
+  String? message,
+  String confirmLabel = '删除',
+}) async {
+  final res = await showGlassDialog<bool>(
+    context: context,
+    builder: (ctx) => glassAlertDialog(
+      title: Text(title),
+      content: message == null
+          ? null
+          : Text(message, style: const TextStyle(fontSize: 14)),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, false),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, true),
+          child: Text(confirmLabel),
+        ),
+      ],
+    ),
+  );
+  return res ?? false;
+}
+
 /// 紧凑弹窗内容（**替代 `AlertDialog`**）。
 ///
 /// ⚠️ 为什么不用 `AlertDialog`：它内部同样是 `Dialog` → `Align(居中, 因子为

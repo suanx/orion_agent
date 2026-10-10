@@ -216,6 +216,10 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
       children: [
         for (final t in tasks)
           _TaskCard(
+            // key 按任务 id（2026-10-11 P1）：_TaskCard 是 StatefulWidget
+            // （持有折叠展开态），无 key 时删除中间一项，Element 按位置
+            // 复用，展开态会「跳」到另一张卡片上。
+            key: ValueKey(t.id),
             task: t,
             running: running.contains(t.id),
             onRun: () => _run(t),

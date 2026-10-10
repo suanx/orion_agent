@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import 'glass.dart';
 import 'memory_screen.dart';
 import 'token_stats_screen.dart';
 
@@ -88,9 +89,7 @@ class SessionDrawer extends ConsumerWidget {
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
                                 fontSize: 15,
-                                fontWeight: active
-                                    ? FontWeight.w500
-                                    : FontWeight.w500,
+                                fontWeight: FontWeight.w500,
                               ),
                             ),
                             // 并行对话：别的会话还在生成时给出可视反馈，
@@ -110,7 +109,18 @@ class SessionDrawer extends ConsumerWidget {
                                 IconButton(
                                   icon:
                                       const Icon(Icons.close_rounded, size: 18),
-                                  onPressed: () {
+                                  // 二次确认（2026-10-11 P1）：会话含全部
+                                  // 聊天记录，误触即永久删除（同步传播），
+                                  // 是全项目最高价值的删除操作。
+                                  onPressed: () async {
+                                    final ok = await confirmDestructive(
+                                      context,
+                                      title: '删除会话',
+                                      message:
+                                          '「${s.title}」及其全部聊天记录将被永久删除，'
+                                          '并同步删除其它设备上的这份会话。',
+                                    );
+                                    if (!ok) return;
                                     ref
                                         .read(chatProvider.notifier)
                                         .deleteSession(s.id);

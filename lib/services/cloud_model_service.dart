@@ -216,11 +216,14 @@ class CloudModelsController extends ChangeNotifier {
       return;
     }
     final cached = _loadedAt;
+    // 缓存命中条件（2026-10-11 P2 修复）：`_agentConfig != null` 在
+    // 「管理员未开通 Agent」的用户上恒为 false → 缓存永不命中，每次进
+    // 对话页都白打两个网络请求。改为看缓存时间即可——是否开通 Agent
+    // 已经由上一轮请求的结果写在 state 里了。
     if (!force &&
         cached != null &&
         DateTime.now().difference(cached) < cacheTtl &&
-        _state.hasModels &&
-        _agentConfig != null) {
+        _state.hasModels) {
       return;
     }
     _apply(_state.copyWith(loading: true, clearError: true));

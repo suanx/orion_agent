@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 
-import 'package:archive/archive.dart';
+import 'package:archive/archive_io.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -700,18 +700,54 @@ class TerminalService {
   // 只有 TarFile 保留 typeFlag 与 nameOfLinkedFile 原始信息。
   static RootfsExtractStats _extractRootfs(
       String archivePath, String destDir, bool isGz) {
-    final compressed = File(archivePath).readAsBytesSync();
-    final List<int> tarBytes;
+    // 内存流式化（2026-10-11，P0 修复）：旧实现 readAsBytesSync + 整体
+    // decodeBytes 会把「压缩包 + 解压后 tar + 条目副本」同时压进内存
+    // （Debian 峰值 500MB+，isolate 内 OOM = 整个 App 闪退）。现在统一
+    // 先产出临时 .tar 文件，再从文件流逐条目懒读：
+    // - gz：GZipDecoder().decodeStream 边解压边写盘，内存只有流缓冲；
+    // - xz：archive 3.6.1 的 XZDecoder 无流式 API，整体解压是唯一不可
+    //   省的一步，但解压完立即落盘释放，峰值从「压缩包+tar+条目副本」
+    //   降为「压缩包+tar」，后续条目读取不再叠加内存；
+    // - tar 解码走 InputFileStream：rawContent 是文件上的懒窗口，
+    //   toUint8List 只物化当前条目，用完即弃。
+    final tarPath = '$archivePath.extract.tar';
     if (isGz) {
-      tarBytes = GZipDecoder().decodeBytes(compressed);
+      final input = InputFileStream(archivePath);
+      final output = OutputFileStream(tarPath);
+      try {
+        GZipDecoder().decodeStream(input, output);
+      } finally {
+        output.closeSync();
+        input.closeSync();
+      }
     } else {
       // verify: true 校验每个 xz 块的 CRC/CRC64。默认关闭时解码损坏
       // 会静默产出半截垃圾 tar，结构校验只会报「缺少 xxx」而真因被埋
       // （真机 §11.22 的教训：校验失败时无法区分下载损坏还是解码损坏）
-      tarBytes = XZDecoder().decodeBytes(compressed, verify: true);
+      final compressed = File(archivePath).readAsBytesSync();
+      final tarBytes = XZDecoder().decodeBytes(compressed, verify: true);
+      File(tarPath).writeAsBytesSync(tarBytes, flush: false);
     }
     final decoder = TarDecoder();
-    decoder.decodeBytes(tarBytes);
+    final tarInput = InputFileStream(tarPath);
+    try {
+      decoder.decodeBuffer(tarInput);
+      return _materializeRootfs(decoder, destDir);
+    } finally {
+      tarInput.closeSync();
+      try {
+        File(tarPath).deleteSync();
+      } catch (_) {
+        // 临时 tar 删不掉不致命：下次 _cleanTrashDirs 或系统缓存清理会
+        // 回收，不应因此让安装失败。
+      }
+    }
+  }
+
+  /// 把已解码的 tar 条目落盘成 rootfs（[_extractRootfs] 的纯落盘段，
+  /// 拆出来是为了让解压与落盘各自可测；逻辑与拆分前完全一致）。
+  static RootfsExtractStats _materializeRootfs(
+      TarDecoder decoder, String destDir) {
     var createdLinks = 0;
     var createdFiles = 0;
     var skippedUnsafe = 0;
@@ -1065,10 +1101,23 @@ class TerminalService {
           'proot 启动超时（20 秒）。可能缺少执行权限，请重新安装应用。'),
     );
     final buf = StringBuffer();
-    final sub1 =
-        proc.stdout.cast<List<int>>().transform(utf8.decoder).listen(buf.write);
-    final sub2 =
-        proc.stderr.cast<List<int>>().transform(utf8.decoder).listen(buf.write);
+    // 输出上限（2026-10-11 P1）：`cat 500MB文件` / `yes` 洪泛会把全部
+    // 输出吞进内存直接 OOM。达到上限后杀进程（流式截断没有意义，
+    // 继续收只是白白耗电），并标注截断。
+    const maxOutputChars = 256 * 1024;
+    var truncated = false;
+    void append(String s) {
+      if (truncated) return;
+      buf.write(s);
+      if (buf.length > maxOutputChars) {
+        truncated = true;
+        buf.write('\n…（输出超过 256KB 上限，已截断并终止命令）');
+        proc.kill();
+      }
+    }
+
+    final sub1 = proc.stdout.cast<List<int>>().transform(utf8.decoder).listen(append);
+    final sub2 = proc.stderr.cast<List<int>>().transform(utf8.decoder).listen(append);
 
     int code;
     try {

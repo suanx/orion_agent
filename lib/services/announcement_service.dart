@@ -53,7 +53,13 @@ class CloudAnnouncement {
 /// 「运行中二次提醒」这类场景复用。
 class AnnouncementService {
   AnnouncementService(this._prefs, {Dio? dio})
-      : _dio = dio ?? Dio(BaseOptions(connectTimeout: const Duration(seconds: 8)));
+      // receiveTimeout（2026-10-11 P2）：只有 connectTimeout 时，服务端
+      // 建连后挂起不响应会让 fetchPending 无限等待（冷启动 await 它）。
+      : _dio = dio ??
+            Dio(BaseOptions(
+              connectTimeout: const Duration(seconds: 8),
+              receiveTimeout: const Duration(seconds: 10),
+            ));
 
   static const String _seenPrefix = 'announcement.seen.';
   static const String _snoozedKey = 'announcement.snoozedUntilMs';

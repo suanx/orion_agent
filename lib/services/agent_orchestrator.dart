@@ -162,8 +162,29 @@ class AgentOrchestrator {
     // （轮数无上限后，这是无限循环的主要护栏。）
     String? prevSig;
     var repeatCount = 0;
+    // 总轮数上限（2026-10-11）：重复护栏只拦「同一个调用」，拦不住
+    // 「每轮换着调不同工具」的异常循环。60 轮工具调用远超正常任务所需，
+    // 超过必然是异常（服务端故障/模型抽风），立即收尾。
+    var round = 0;
 
     for (;;) {
+      round++;
+      if (round > 60) {
+        // 与下方失败收尾同构：已完成的中间成果（lead）先保下来再报错。
+        if (lead.isNotEmpty) {
+          yield AgentAnswer(ChatMessage(
+            id: 'asst_${DateTime.now().millisecondsSinceEpoch}',
+            role: 'assistant',
+            content: '$lead\n\n（工具调用轮数达到上限，任务已中止；'
+                '以上是已完成部分。）',
+            reasoning:
+                reasoningBuf.isEmpty ? null : reasoningBuf.toString(),
+          ));
+        }
+        yield const AgentFailure(
+            '工具调用轮数已达上限（60），任务已中止以避免空转烧 token。');
+        return;
+      }
       if (cancelToken?.isCancelled ?? false) {
         yield const AgentFailure('已取消。');
         return;
@@ -383,22 +404,27 @@ class AgentOrchestrator {
         // role:"tool" 且 tool_call_id 匹配的回复。原来对空 name 直接 continue，
         // 会让请求里留下一个没有回填结果的 tool_call，下一轮被服务端以
         // 400 Invalid parameter 拒绝，整轮 Agent 直接终止。
+        // 重复护栏对空 name 调用同样生效（2026-10-11）：旧实现空 name
+        // 分支不更新签名，服务端异常/模型抽风时每轮都吐空 name 的
+        // tool_calls，messages 每轮只多一条错误回复，外层 for(;;)
+        // 永不终止、每轮都在烧 token。签名计算提到分支之前。
+        final sig = '${call.name}:${call.arguments}';
+        if (sig == prevSig) {
+          repeatCount++;
+        } else {
+          prevSig = sig;
+          repeatCount = 1;
+        }
+        if (repeatCount >= 3) {
+          yield AgentFailure('模型在重复调用同一个工具'
+              '（${call.name.isEmpty ? '(未命名)' : call.name}），已提前中止以避免空转。');
+          return;
+        }
         final String result;
         if (call.name.isEmpty) {
           result = '错误：模型返回了缺少函数名的工具调用，无法执行。';
           yield AgentToolDone('(未命名工具)', result);
         } else {
-          final sig = '${call.name}:${call.arguments}';
-          if (sig == prevSig) {
-            repeatCount++;
-          } else {
-            prevSig = sig;
-            repeatCount = 1;
-          }
-          if (repeatCount >= 3) {
-            yield AgentFailure('模型在重复调用同一个工具（${call.name}），已提前中止以避免空转。');
-            return;
-          }
           yield AgentStatus('正在调用工具 ${call.name} …');
           result = await _tools.execute(call.name, call.arguments);
           yield AgentToolDone(call.name, result);

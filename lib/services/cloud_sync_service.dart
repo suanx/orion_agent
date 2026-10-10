@@ -93,14 +93,38 @@ class CloudSyncService {
     }
 
     final key = CloudSyncCrypto.deriveKey(password);
-    // 验证：云端已有数据时必须能解出，否则说明密码不对
-    final probe = await _cloud.authedGet('/api/sync/pull?since=0&limit=1');
+    // 验证（2026-10-11 重写）：旧实现拿「第一行」当探针——pull 按时间
+    // 升序返回，第一行完全可能是 tombstone（payload 为 null，cast 直接
+    // 抛 TypeError）或损坏行（解密失败被误判成密码错误），密码对不对
+    // 取决于云端第一行是什么，纯碰运气。现在改为：
+    // 1. 优先找首次解锁时写入的专用校验行（_keyCheckRowId）；
+    // 2. 找不到校验行时退回「任意一条有 payload 的行」；
+    // 3. 全是 tombstone（没有任何 payload 行）视为全新账号，直接放行。
+    final probe =
+        await _cloud.authedGet('/api/sync/pull?since=0&limit=50');
     final rows = (probe['rows'] as List?) ?? const [];
-    if (rows.isNotEmpty) {
-      final row = rows.first as Map<String, dynamic>;
+    String? checkPayload, checkNonce;
+    String? fallbackPayload, fallbackNonce;
+    for (final r in rows) {
+      if (r is! Map) continue;
+      final row = r.cast<String, dynamic>();
+      final p = row['payload'];
+      if (p is! String || p.isEmpty) continue; // tombstone / 损坏行跳过
+      final n = row['nonce'];
+      final nStr = n is String ? n : '';
+      if (row['rowId'] == _keyCheckRowId && row['table'] == 'prefs') {
+        checkPayload = p;
+        checkNonce = nStr;
+        break;
+      }
+      fallbackPayload ??= p;
+      fallbackNonce ??= nStr;
+    }
+    final verifyPayload = checkPayload ?? fallbackPayload;
+    if (verifyPayload != null) {
       try {
-        CloudSyncCrypto.decryptJson(key, row['payload'] as String,
-            row['nonce'] as String? ?? '');
+        CloudSyncCrypto.decryptJson(
+            key, verifyPayload, (checkNonce ?? fallbackNonce) ?? '');
       } on CloudSyncCryptoError {
         throw const CloudSyncPasswordWrong();
       }
@@ -198,10 +222,20 @@ class CloudSyncService {
   // ---------------- 多端同步 ----------------
 
   /// 完整同步一轮：先拉（合并远端），再推（本机变更）。
-  Future<SyncSummary> syncNow() async {
+  /// 进行中的同步（互斥，2026-10-11）：手点同步与定时同步同时进入时，
+  /// 推拉会交错产生双推/合并竞态。后到者直接复用进行中的那一次。
+  Future<SyncSummary>? _syncing;
+
+  Future<SyncSummary> syncNow() {
     if (!isUnlocked) {
       throw const CloudSyncException('请先解锁云同步');
     }
+    return _syncing ??= _syncNowOnce().whenComplete(() {
+      _syncing = null;
+    });
+  }
+
+  Future<SyncSummary> _syncNowOnce() async {
     final pulled = await _pullAndMerge();
     final pushed = await _pushLocalChanges();
     await _prefs.setInt(_flagLastSync, DateTime.now().millisecondsSinceEpoch);

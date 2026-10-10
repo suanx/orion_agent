@@ -112,7 +112,11 @@ class SshTerminalService {
     // 表现就是「启动超时」。按发行版拼参数。
     final isAlpine = _terminal.activeDistro == TerminalDistro.alpine;
     final sshdFlags = [
-      '-o ListenAddress=0.0.0.0',
+      // 安全（2026-10-11）：必须只听宿主内回环。proot 不隔离网络，
+      // 0.0.0.0 会把 sshd 绑到手机所有网卡——同一 Wi-Fi 下任何设备
+      // 都能用代码里公开的 root 密码 SSH 进沙箱。宿主内连接 127.0.0.1
+      // 本来就是唯一使用方式，无需对外监听。
+      '-o ListenAddress=127.0.0.1',
       '-o PermitRootLogin=yes',
       '-o PasswordAuthentication=yes',
       '-o KbdInteractiveAuthentication=yes',

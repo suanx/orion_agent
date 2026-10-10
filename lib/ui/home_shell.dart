@@ -4,6 +4,7 @@ import '../theme.dart';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
@@ -437,7 +438,12 @@ class _NavTileState extends State<_NavTile> {
       onPointerUp: (_) => setState(() => _pressed = false),
       onPointerCancel: (_) => setState(() => _pressed = false),
       child: InkWell(
-        onTap: widget.onTap,
+        onTap: () {
+          // 触觉反馈（2026-10-11）：导航切换是高频关键交互，
+          // 全项目此前零触觉反馈，从导航开始补。
+          HapticFeedback.selectionClick();
+          widget.onTap();
+        },
         borderRadius: BorderRadius.circular(22),
         splashColor: widget.primary.withValues(alpha: 0.10),
         highlightColor: widget.primary.withValues(alpha: 0.05),

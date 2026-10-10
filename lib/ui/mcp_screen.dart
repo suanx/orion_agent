@@ -193,7 +193,15 @@ class _McpScreenState extends ConsumerState<McpScreen> {
                           ),
                           IconButton(
                             icon: const Icon(Icons.delete_outline, size: 20),
+                            // 二次确认（2026-10-11 P1）
                             onPressed: () async {
+                              final ok = await confirmDestructive(
+                                context,
+                                title: '删除 MCP 服务器',
+                                message:
+                                    '「${s.name}」将被移除，其提供的全部工具不再可用。',
+                              );
+                              if (!ok) return;
                               await ref
                                   .read(mcpServiceProvider)
                                   .removeServer(s.id);

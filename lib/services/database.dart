@@ -191,7 +191,7 @@ class AppDatabase extends _$AppDatabase {
       : super(executor ?? driftDatabase(name: 'orion_agent'));
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   /// 全部索引。单独抽出以便 onCreate 与 onUpgrade 共用，避免漏建。
   ///
@@ -205,6 +205,10 @@ class AppDatabase extends _$AppDatabase {
     // Token 统计页按时间倒序取用量，没有索引会全表扫描。
     'CREATE INDEX IF NOT EXISTS idx_token_usage_created '
         'ON token_usage_rows (created_at)',
+    // 知识库文档删除/分块清理按 docId 过滤（2026-10-11 P2）：
+    // DELETE FROM knowledge_chunks WHERE doc_id = ? 没有索引是全表扫描。
+    'CREATE INDEX IF NOT EXISTS idx_knowledge_chunks_doc '
+        'ON knowledge_chunks (doc_id)',
   ];
 
   Future<void> _createIndexes() async {

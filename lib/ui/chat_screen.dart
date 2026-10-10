@@ -636,42 +636,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       });
     }
 
-    final items = <Widget>[];
-    if (session != null) {
-      for (final m in session.messages) {
-        items.add(_MessageBubble(
-            message: m, onQuote: _quoteToInput, onSend: _sendSelection));
-      }
-    }
-    // 流式进度按会话隔离（ChatState.streams），isStreaming/内容等
-    // 派生视图只取【当前激活会话】的那份：切到别的会话看到的是
-    // 自己的进度（没有则不渲染气泡），不会把别的对话的流「串台」进来。
-    if (chat.isStreaming) {
-      // 思考行右侧的模式徽章（⚡快速回答 / ⚡深度思考）跟随输入栏当前开关。
-      final thinkingOn = ref.watch(thinkingProvider);
-      // RepaintBoundary 把流式气泡的重绘限制在气泡自身图层内，
-      // 每个 delta 不再连带顶栏/输入栏等整页重绘。
-      items.add(RepaintBoundary(
-        child: _StreamingBubble(
-            content: chat.streamingContent,
-            reasoning: chat.streamingReasoning,
-            steps: chat.steps,
-            modeLabel: thinkingOn ? '深度思考' : '快速回答',
-            onQuote: _quoteToInput,
-            onSend: _sendSelection),
-      ));
-    }
-    final empty = items.isEmpty;
-    if (!empty) {
-      // 底部水印：与主流 AI 对话产品一致的生成内容提示。
-      items.add(Padding(
-        padding: const EdgeInsets.only(top: 12, bottom: 4),
-        child: Center(
-          child: Text('内容由 AI 生成，请注意核实',
-              style: TextStyle(fontSize: 11.5, color: onSurface(context, 0.3))),
-        ),
-      ));
-    }
+    // 伪 builder 修复（2026-10-11 P1）：旧实现在 build 里把【全部】历史
+    // 消息构造成 Widget 列表，itemBuilder 只是取现成对象——流式期间每个
+    // delta 触发一次 rebuild（每秒几十次），所有历史气泡全部重新构造，
+    // 长会话掉帧的直接原因。现在只记录数量，气泡延迟到 itemBuilder 里
+    // 按需构造，Flutter 只构建可见项 + 前后 cacheExtent。
+    final msgCount = session?.messages.length ?? 0;
+    final streaming = chat.isStreaming;
+    // ListView 条目顺序：历史气泡 × msgCount → [流式气泡] → [水印]。
+    final itemCount = msgCount + (streaming ? 1 : 0) + (msgCount > 0 || streaming ? 1 : 0);
 
     return Column(
       children: [
@@ -730,9 +703,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 ),
                 // 沙箱产物入口：仅当前模型是云端 Agent 时出现。
                 // 其他模型没有远端沙箱，按钮无意义 —— 直接隐藏而不是置灰。
-                if (ref.read(configProvider).activeConfig?.id
-                        .startsWith('agent:') ==
-                    true)
+                // 必须用 watch（2026-10-11）：read 不订阅变化，云端/本地
+                // 切换后按钮状态残留，直到其它 provider 变化才纠正。
+                if (_isAgentConfig(
+                    ref.watch(configProvider).activeConfig?.id))
                   IconButton(
                     tooltip: 'Agent 产物',
                     icon: const Icon(Icons.inventory_2_outlined, size: 22),
@@ -785,7 +759,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             data: MediaQuery.of(context).copyWith(
               textScaler: TextScaler.linear(ref.watch(chatFontScaleProvider)),
             ),
-            child: empty
+            child: itemCount == 0
                 ? _EmptyGreeting(
                     onSuggestion: (text) {
                       ref.read(chatProvider.notifier).send(text);
@@ -797,8 +771,43 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     controller: _scrollController,
                     padding:
                         const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                    itemCount: items.length,
-                    itemBuilder: (_, i) => items[i],
+                    itemCount: itemCount,
+                    itemBuilder: (_, i) {
+                      // 历史气泡：延迟构造 + 按消息 id 复用 Element
+                      if (i < msgCount) {
+                        final m = session!.messages[i];
+                        return _MessageBubble(
+                            key: ValueKey(m.id),
+                            message: m,
+                            onQuote: _quoteToInput,
+                            onSend: _sendSelection);
+                      }
+                      final j = i - msgCount;
+                      // 流式气泡：RepaintBoundary 把重绘限制在自身图层
+                      if (streaming && j == 0) {
+                        // 思考行右侧的模式徽章跟随输入栏当前开关
+                        final thinkingOn = ref.watch(thinkingProvider);
+                        return RepaintBoundary(
+                          child: _StreamingBubble(
+                              content: chat.streamingContent,
+                              reasoning: chat.streamingReasoning,
+                              steps: chat.steps,
+                              modeLabel: thinkingOn ? '深度思考' : '快速回答',
+                              onQuote: _quoteToInput,
+                              onSend: _sendSelection),
+                        );
+                      }
+                      // 底部水印：与主流 AI 对话产品一致的生成内容提示
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 12, bottom: 4),
+                        child: Center(
+                          child: Text('内容由 AI 生成，请注意核实',
+                              style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: onSurface(context, 0.3))),
+                        ),
+                      );
+                    },
                   ),
           ),
         ),
@@ -1382,6 +1391,7 @@ class _SelectionAreaShellState extends State<_SelectionAreaShell> {
             btn('复制', () async {
               final text = current();
               if (text.isEmpty) return;
+              HapticFeedback.lightImpact();
               await Clipboard.setData(ClipboardData(text: text));
               // 与原生 Android 一致：复制后清掉选区、收起工具条。
               state.clearSelection();
@@ -1440,7 +1450,9 @@ class _MessageBubble extends StatelessWidget {
                 ? const EdgeInsets.all(6)
                 : const EdgeInsets.symmetric(horizontal: 15, vertical: 11),
             constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.78),
+                // sizeOf 只订阅尺寸，不订阅整个 MediaQueryData——键盘 inset
+                // 变化的每一帧不再重建全部气泡（2026-10-11 P1）
+                maxWidth: MediaQuery.sizeOf(context).width * 0.78),
             decoration: BoxDecoration(
               color: bg,
               borderRadius: BorderRadius.circular(18)
@@ -1873,6 +1885,7 @@ class _CodeBlockState extends State<_CodeBlock> {
   bool _unfolded = false;
 
   Future<void> _copy() async {
+    HapticFeedback.lightImpact();
     await Clipboard.setData(ClipboardData(text: widget.code));
     if (!mounted) return;
     setState(() => _copied = true);

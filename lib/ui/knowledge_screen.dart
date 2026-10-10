@@ -257,7 +257,15 @@ class _KnowledgeScreenState extends ConsumerState<KnowledgeScreen> {
                       subtitle: Text('$date · ${d.chunkCount} 个分块'),
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline),
+                        // 二次确认（2026-10-11 P1）：删的是全部分块向量
                         onPressed: () async {
+                          final ok = await confirmDestructive(
+                            context,
+                            title: '删除文档',
+                            message:
+                                '「${d.title}」及其 ${d.chunkCount} 个分块向量将被永久删除。',
+                          );
+                          if (!ok) return;
                           await ref
                               .read(ragServiceProvider)
                               .deleteDocument(d.id);

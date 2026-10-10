@@ -441,7 +441,13 @@ class _ChartPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ChartPainter old) =>
-      old.daily != daily || old.lineColor != lineColor;
+      // 所有参与绘制的颜色都要比较（2026-10-11 P1）：漏比较的字段在
+      // 深浅主题切换后会残留旧配色（网格/刻度/轴线不变色）。
+      old.daily != daily ||
+      old.lineColor != lineColor ||
+      old.gridColor != gridColor ||
+      old.labelColor != labelColor ||
+      old.axisColor != axisColor;
 }
 
 class _ChartLegend extends StatelessWidget {

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -93,7 +94,10 @@ class CloudService {
       if (map is Map<String, dynamic>) {
         _tokens = CloudTokens.fromJson(map);
       }
-    } catch (_) {
+    } catch (e) {
+      // 损坏的 token 只能丢弃，但必须留痕：否则用户只会奇怪
+      // 「怎么突然要重新登录」，排障时无任何线索。
+      debugPrint('云端登录态恢复失败（token 损坏？已清除）：$e');
       _tokens = null;
     }
   }
@@ -408,7 +412,20 @@ class CloudService {
     return _unwrap(resp);
   }
 
-  Future<bool> _refresh() async {
+  /// 进行中的续期（single-flight，2026-10-11）：refresh token 是一次性
+  /// 轮换的，两个并发请求同时撞 401 时，若无单飞，各自拿同一个旧 rt 去
+  /// 换新——第一个成功使旧 rt 失效，第二个必然失败 → `_saveTokens(null)`
+  /// 把刚续期成功的登录态清掉，用户被误登出。共享同一个 Future 后，
+  /// 后到者直接复用第一个的结果，不再发第二次换新。
+  Future<bool>? _refreshing;
+
+  Future<bool> _refresh() {
+    return _refreshing ??= _refreshOnce().whenComplete(() {
+      _refreshing = null;
+    });
+  }
+
+  Future<bool> _refreshOnce() async {
     final rt = _tokens?.refreshToken;
     if (rt == null) return false;
     final base = baseUrl;
@@ -425,6 +442,7 @@ class CloudService {
       await _saveTokens(CloudTokens.fromJson(resp.data!));
       return true;
     } catch (_) {
+      // 网络抖动：不清登录态（rt 未被消费，下次还能用），只报续期失败。
       return false;
     }
   }

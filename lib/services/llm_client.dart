@@ -488,6 +488,10 @@ class LlmClient {
     // 思考过程累积：FinalMessage 带给 Agent 层，随回答一起落库展示。
     final reasoningBuf = StringBuffer();
     final toolAcc = <int, _ToolCallAcc>{};
+    // 是否见到了 [DONE] 结束标记（2026-10-11）：服务端/代理中途掐断 TCP
+    // 时 Dart 侧常表现为流「正常结束」而非报错——没有这个标记就无法区分
+    // 「真的完了」和「被掐了」，半截回答会被当完整轮次落库。
+    var sawDone = false;
 
     // 本轮累积到的 usage。流式里它只在最后一帧出现，
     // 用可空变量收集，循环结束后统一 yield。
@@ -528,7 +532,10 @@ class LlmClient {
       if (!line.startsWith('data:')) continue;
       final data = line.substring(5).trim();
       if (data.isEmpty) continue;
-      if (data == '[DONE]') break;
+      if (data == '[DONE]') {
+        sawDone = true;
+        break;
+      }
 
       final Object? decoded;
       try {
@@ -678,6 +685,18 @@ class LlmClient {
       return;
     }
 
+    // 流被静默掐断（2026-10-11）：没见到 [DONE] 就结束。分两种处理：
+    // - 什么都没收到：抛错而非产空消息——处于 chatStream 多 Key 重试的
+    //   try 范围内，可换 Key/源重试，绝不把「空回答」当成功落库；
+    // - 已收到部分内容：重试会导致内容重复，只能在结尾追加截断标记，
+    //   让用户（与上层）知道这条回答是不完整的。
+    if (!sawDone) {
+      if (contentBuf.isEmpty && toolAcc.isEmpty && reasoningBuf.isEmpty) {
+        throw Exception('模型响应中断（未收到结束标记，无任何内容）——已触发重试');
+      }
+      contentBuf.write('\n\n（⚠️ 回复在此中断，后续内容丢失）');
+    }
+
     final entries = toolAcc.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
     final finalMsg = ChatMessage(
@@ -730,7 +749,8 @@ class LlmClient {
     CancelToken? cancelToken,
   }) async {
     final resp = await _dioFor(config).get<Map<String, dynamic>>(
-      '${_agentTaskBase(config)}/$taskId/status?from=$from',
+      // taskId 来自服务端，必须编码：含 / ? # 时裸拼会破坏 URL 路径
+      '${_agentTaskBase(config)}/${Uri.encodeComponent(taskId)}/status?from=$from',
       cancelToken: cancelToken,
       options: Options(headers: await _headers(config, '')),
     );
@@ -765,6 +785,10 @@ class LlmClient {
     var cursor = from;
     final content = StringBuffer();
     final reasoning = StringBuffer();
+    // 任务是否真正完成（2026-10-11）：只有收到「非 running」状态才算完。
+    // 轮询预算耗尽 / 用户取消 break 出来时，内容可能是残缺的，必须标记，
+    // 否则上层无法区分「任务真完成了」和「轮询到上限被截断」。
+    var completed = false;
 
     for (var i = 0; i < maxPolls; i++) {
       if (cancelToken?.isCancelled ?? false) break;
@@ -795,10 +819,17 @@ class LlmClient {
         }
       }
       cursor = poll.total;
-      if (!poll.isRunning) break;
+      if (!poll.isRunning) {
+        completed = true;
+        break;
+      }
       await Future<void>.delayed(interval);
     }
 
+    // 未完成且确实取到了内容：追加截断标记（重取会重复，只能标注）。
+    if (!completed && content.isNotEmpty) {
+      content.write('\n\n（⚠️ 任务输出被截断：轮询达到上限或已被取消）');
+    }
     yield FinalMessage(ChatMessage(
       id: 'asst_${DateTime.now().millisecondsSinceEpoch}',
       role: 'assistant',

@@ -52,35 +52,47 @@ class _SshTerminalScreenState extends ConsumerState<SshTerminalScreen> {
   @override
   void dispose() {
     _session?.close();
+    _flushTimer?.cancel();
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
 
+  // 输出合帧（2026-10-11 P1）：cat 大文件 / npm install 时输出块高频
+  // 到达，旧实现每个块一次 setState 且 SelectableText 全量重排版
+  // （200KB 缓冲 = 最坏每帧排 20 万字符）。改为 100ms 合帧——
+  // 抄 terminal_screen.dart 已验证的日志合帧方案。
+  Timer? _flushTimer;
+
+  void _scheduleFlush() {
+    _flushTimer ??= Timer(const Duration(milliseconds: 100), () {
+      _flushTimer = null;
+      if (!mounted) return;
+      setState(() {});
+      _scrollToBottom();
+    });
+  }
+
   void _log(String s) {
     if (!mounted) return;
-    setState(() {
-      _buffer.write(s.endsWith('\n') ? s : '$s\n');
-      _bufferLen += s.length + 1;
-      // 超限就从中间截断（保留最近的输出）
-      if (_bufferLen > _maxBufferChars) {
-        final text = _buffer.toString();
-        _buffer
-          ..clear()
-          ..write(text.substring(text.length - _maxBufferChars ~/ 2));
-        _bufferLen = _buffer.length;
-      }
-    });
-    _scrollToBottom();
+    _buffer.write(s.endsWith('\n') ? s : '$s\n');
+    _bufferLen += s.length + 1;
+    // 超限就从中间截断（保留最近的输出）
+    if (_bufferLen > _maxBufferChars) {
+      final text = _buffer.toString();
+      _buffer
+        ..clear()
+        ..write(text.substring(text.length - _maxBufferChars ~/ 2));
+      _bufferLen = _buffer.length;
+    }
+    _scheduleFlush();
   }
 
   void _logRaw(String s) {
     if (!mounted) return;
-    setState(() {
-      _buffer.write(s);
-      _bufferLen += s.length;
-    });
-    _scrollToBottom();
+    _buffer.write(s);
+    _bufferLen += s.length;
+    _scheduleFlush();
   }
 
   void _scrollToBottom() {

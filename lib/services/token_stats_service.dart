@@ -134,9 +134,13 @@ class TokenStatsService {
     // 顺手做过期清理：用量明细只保留 180 天，防止无限增长。
     // 每天最多执行一次，失败静默（统计数据不值得为它报错）。
     final today = DateTime.now();
-    if (_lastPrune == null ||
-        today.day != _lastPrune!.day ||
-        today.month != _lastPrune!.month) {
+    // 必须比较完整日期（年月日，2026-10-11 修复）：只比 day+month 时
+    // 跨年同月同日（整整一年后）会被误判为「今天已清理」。
+    final sameDay = _lastPrune != null &&
+        today.year == _lastPrune!.year &&
+        today.month == _lastPrune!.month &&
+        today.day == _lastPrune!.day;
+    if (!sameDay) {
       _lastPrune = today;
       unawaited(_pruneOld(today));
     }

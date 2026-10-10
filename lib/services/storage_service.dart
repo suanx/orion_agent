@@ -79,6 +79,18 @@ class StorageService {
   /// 旧历史 + 摘要消息 → 摘要消息 + 保留的近期消息）。
   Future<void> replaceMessages(String sessionId, List<ChatMessage> msgs) =>
       _db.transaction(() async {
+        // 压缩会把旧消息行删掉，其落盘图片必须一并回收（2026-10-11 P1）：
+        // 先收集被移除消息的图片引用，删行后清理文件。存留消息（含摘要）
+        // 的引用不动。
+        final kept = {for (final m in msgs) m.id};
+        final oldRows = await (_db.select(_db.messageRows)
+              ..where((m) => m.sessionId.equals(sessionId)))
+            .get();
+        final orphanRefs = <String>[
+          for (final r in oldRows)
+            if (!kept.contains(r.mid))
+              ...MessageImageStore.refsFromJson(r.imagesJson),
+        ];
         await (_db.delete(_db.messageRows)
               ..where((m) => m.sessionId.equals(sessionId)))
             .go();
@@ -89,19 +101,35 @@ class StorageService {
               .into(_db.messageRows)
               .insert(messageToCompanion(sessionId, m, imageRefs: refs));
         }
+        if (orphanRefs.isNotEmpty) {
+          await MessageImageStore.instance.deleteRefs(orphanRefs);
+        }
       });
 
   Future<void> deleteSession(String id) => _db.transaction(() async {
+        // 删会话前先收集该会话全部图片引用，删行后回收落盘文件
+        // （2026-10-11 P1：此前只删 DB 行，img/ 只增不减）。
+        final rows = await (_db.select(_db.messageRows)
+              ..where((m) => m.sessionId.equals(id)))
+            .get();
+        final refs = <String>[
+          for (final r in rows) ...MessageImageStore.refsFromJson(r.imagesJson),
+        ];
         await (_db.delete(_db.messageRows)
               ..where((m) => m.sessionId.equals(id)))
             .go();
         await (_db.delete(_db.sessionRows)..where((s) => s.id.equals(id)))
             .go();
+        if (refs.isNotEmpty) {
+          await MessageImageStore.instance.deleteRefs(refs);
+        }
       });
 
   Future<void> clearSessions() => _db.transaction(() async {
         await _db.delete(_db.messageRows).go();
         await _db.delete(_db.sessionRows).go();
+        // 全部会话都没了，落盘图片整目录回收。
+        await MessageImageStore.instance.deleteAll();
       });
 
   // ---------------- 自动任务 ----------------

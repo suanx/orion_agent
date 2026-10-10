@@ -130,6 +130,10 @@ class _SkillsScreenState extends ConsumerState<SkillsScreen> {
                 ),
                 const SizedBox(height: 10),
                 ...lib.map((s) => _BuiltinSkillTile(
+                      // key 按技能名（2026-10-11 P1）：_BuiltinSkillTile 是
+                      // StatefulWidget（持有展开态），分类筛选切换后列表
+                      // 重排，无 key 时展开态错位到别的技能卡。
+                      key: ValueKey(s.name),
                       skill: s,
                       installed: service.isInstalled(s),
                       onInstall: () => _install(context, s),

@@ -115,6 +115,68 @@ class MessageImageStore {
       return '[]';
     }
   }
+
+  /// 删除一组文件引用对应的落盘图片（data URL 元素自动忽略）。
+  /// 返回成功删除的文件数；单个失败记日志继续，不中断批量。
+  ///
+  /// 2026-10-11（P1）：此前本类只有 store/resolve，删除会话/清空会话/
+  /// 上下文压缩三条路径删了 DB 行却从不删文件，img/ 目录只增不减。
+  Future<int> deleteRefs(List<String> refs) async {
+    var deleted = 0;
+    for (final ref in refs) {
+      if (!ref.startsWith('img/')) continue;
+      try {
+        final dir = await _dir();
+        final f = File('${dir.path}${Platform.pathSeparator}'
+            '${ref.replaceAll('/', Platform.pathSeparator)}');
+        if (await f.exists()) {
+          await f.delete();
+          deleted++;
+        }
+      } catch (e) {
+        AppLog.e('消息图片删除失败（继续其余）: $ref', e);
+      }
+    }
+    return deleted;
+  }
+
+  /// 清空全部落盘图片（清空所有会话时调用）。
+  Future<int> deleteAll() async {
+    try {
+      final dir = await _dir();
+      final img = Directory(
+          '${dir.path}${Platform.pathSeparator}img');
+      if (!img.existsSync()) return 0;
+      var n = 0;
+      await for (final e in img.list()) {
+        try {
+          await e.delete();
+          n++;
+        } catch (err) {
+          AppLog.e('消息图片清理失败：${e.path}', err);
+        }
+      }
+      return n;
+    } catch (e) {
+      AppLog.e('消息图片目录清理失败', e);
+      return 0;
+    }
+  }
+
+  /// 从 imagesJson 列值提取文件引用（纯解析，不读文件、不解码内容）。
+  /// 解析失败按无图片处理。
+  static List<String> refsFromJson(String? imagesJson) {
+    if (imagesJson == null || imagesJson.isEmpty) return const [];
+    try {
+      final list = (jsonDecode(imagesJson) as List? ?? const []);
+      return [
+        for (final e in list)
+          if (e is String && e.startsWith('img/')) e
+      ];
+    } catch (_) {
+      return const [];
+    }
+  }
 }
 
 /// 便于在无 IO 的纯计算处引用（如测试），base64 编码工具方法。

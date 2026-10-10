@@ -84,7 +84,11 @@ class ProviderModel {
 
   factory ProviderModel.fromJson(Map<String, dynamic> j) {
     final kind = ModelKindX.fromWire(j['kind'] as String?);
-    final rawMods = (j['modalities'] as List?)?.cast<String>();
+    // 不用 .cast<String>()：它是惰性抛错（遍历到非 String 元素才炸），
+    // 会让上层「一条坏记录炸掉整份配置」。这里逐元素过滤。
+    final rawMods = (j['modalities'] as List?)
+        ?.whereType<String>()
+        .toList(growable: false);
     return ProviderModel(
       name: j['name'] as String? ?? '',
       kind: kind,

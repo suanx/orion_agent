@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../providers/providers.dart';
+import 'glass.dart';
 
 class MemoryScreen extends ConsumerStatefulWidget {
   const MemoryScreen({super.key});
@@ -74,7 +75,13 @@ class _MemoryScreenState extends ConsumerState<MemoryScreen> {
                             '${n.createdAt.year}-${n.createdAt.month.toString().padLeft(2, '0')}-${n.createdAt.day.toString().padLeft(2, '0')}'),
                         trailing: IconButton(
                           icon: const Icon(Icons.delete_outline),
+                          // 二次确认（2026-10-11 P1）
                           onPressed: () async {
+                            final ok = await confirmDestructive(
+                              context,
+                              title: '删除记忆',
+                            );
+                            if (!ok) return;
                             await memory.removeNote(n.id);
                             if (!mounted) return;
                             setState(() {});

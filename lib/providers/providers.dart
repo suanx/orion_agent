@@ -443,8 +443,22 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
       try {
         final decoded = jsonDecode(raw);
         if (decoded is List) {
+          // 逐条容错（2026-10-11）：一条坏记录不能炸掉整份配置。
+          // 旧实现 try 包住整个循环，一条模型的字段类型异常（如
+          // modalities 混入非字符串触发惰性 cast 抛错）→ 整份配置清空，
+          // 后续任何一次持久化都会把空列表写回——真数据丢失。
+          var bad = 0;
           for (final item in decoded) {
-            if (item is Map<String, dynamic>) list.add(LlmConfig.fromJson(item));
+            if (item is! Map) continue;
+            try {
+              list.add(LlmConfig.fromJson(item.cast<String, dynamic>()));
+            } catch (e) {
+              bad++;
+              debugPrint('跳过一条损坏的模型配置：$e');
+            }
+          }
+          if (bad > 0 && mounted) {
+            debugPrint('模型配置加载完成，跳过 $bad 条损坏记录');
           }
         }
       } catch (e) {
@@ -1931,6 +1945,14 @@ class TasksNotifier extends StateNotifier<TasksState> {
 /// 自动任务状态（任务页 + 调度器共用）。
 final tasksProvider =
     StateNotifierProvider<TasksNotifier, TasksState>((ref) {
+  // 权限档联动（2026-10-11 P1）：此前绑定只发生在 chatProvider 构造时，
+  // 冷启动后直接跑定时/手动任务（从未打开聊天页）时 ToolRegistry.permission
+  // 停在类内默认值，用户设置的权限档不生效。这里与 chatProvider 同样绑定。
+  final registry = ref.watch(toolRegistryProvider);
+  registry.permission = ref.read(agentPermissionProvider);
+  ref.listen<AgentPermission>(agentPermissionProvider, (_, v) {
+    registry.permission = v;
+  });
   final notifier = TasksNotifier(
     storage: ref.watch(storageServiceProvider),
     orchestrator: ref.watch(orchestratorProvider),

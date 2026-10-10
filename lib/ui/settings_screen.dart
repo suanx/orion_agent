@@ -502,9 +502,13 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
 
   @override
   void dispose() {
-    // 防抖未触发就退出时，最后一次输入会丢，这里补一次
+    // 防抖未触发就退出时，最后一次输入会丢，这里补一次。
+    // ⚠️ 必须调 _writeBack 而不是 _commit：_commit 的 mounted 守卫在
+    // dispose 里恒为 false，补提交会整体被跳过——「填完 Key 立刻退出」
+    // 这个最常见路径下最后一次输入全部丢失（2026-10-11 P0 修复）。
+    // dispose 内 controller 尚未 dispose、ref 仍可用，直接写回是安全的。
     _debounce?.cancel();
-    _commit();
+    _writeBack();
     _name.dispose();
     _key.dispose();
     _url.dispose();
@@ -524,6 +528,11 @@ class _ConfigTabState extends ConsumerState<_ConfigTab> {
   /// 反而更容易漏。
   void _commit() {
     if (!mounted) return;
+    _writeBack();
+  }
+
+  /// 不带 mounted 守卫的实际写回（dispose 补提交也走这里）。
+  void _writeBack() {
     final notifier = ref.read(configProvider.notifier);
     final c = notifier.byId(widget.configId);
     if (c == null) return;

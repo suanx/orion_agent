@@ -1,7 +1,7 @@
 name: orion_agent
 description: "Orion Agent - A mobile AI Agent app built with Flutter."
 publish_to: "none"
-version: 0.2.51+63
+version: 0.2.52+64
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
