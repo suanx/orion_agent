@@ -483,6 +483,7 @@ class _CategoryChip extends StatelessWidget {
 /// 内置技能条目：图标 + 名称 + 简介 + 安装按钮（可展开看模板）。
 class _BuiltinSkillTile extends StatefulWidget {
   const _BuiltinSkillTile({
+    super.key,
     required this.skill,
     required this.installed,
     required this.onInstall,

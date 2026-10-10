@@ -677,7 +677,7 @@ class LlmClient {
     // 由 resumeAgentTask 轮询续完；这里绝不能发 FinalMessage——内容是
     // 残缺的，发了会被当成完整回答落库。
     if (taskFallback != null) {
-      yield taskFallback!;
+      yield taskFallback;
       if (_isCloud(config)) {
         final q = _quotaFromHeaders(resp);
         if (q != null) yield q;

@@ -1421,7 +1421,8 @@ class _SelectionAreaShellState extends State<_SelectionAreaShell> {
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message, this.onQuote, this.onSend});
+  const _MessageBubble(
+      {super.key, required this.message, this.onQuote, this.onSend});
 
   final ChatMessage message;
 

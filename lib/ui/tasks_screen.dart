@@ -240,6 +240,7 @@ class _TasksScreenState extends ConsumerState<TasksScreen> {
 
 class _TaskCard extends StatefulWidget {
   const _TaskCard({
+    super.key,
     required this.task,
     required this.running,
     required this.onRun,
