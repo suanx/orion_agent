@@ -12,13 +12,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'format_utils.dart';
-import 'floating_nav_bar.dart';
 import 'glass.dart';
-import 'keyboard_safe_padding.dart';
 import 'sessions_drawer.dart';
 import 'status_bar_area.dart';
 import 'agent_artifact_screen.dart';
-import '../services/navigation_service.dart';
 
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
@@ -81,13 +78,11 @@ void _showImageViewer(BuildContext context, String dataUrl) {
 
 /// 对话 Tab（body，无 Scaffold；drawer 由 HomeShell 提供）。
 ///
-/// [cloudPage]：作为「云端 Agent」独立会话页运行（顶部设备切换进入）。
-/// 两种形态共用同一套对话链路（ChatNotifier / 会话 / 沙箱产物入口），
-/// 区别只在顶栏交互：云端页选「我的手机」时切换配置并退出本页。
+/// 本地模型与云端 Agent 共用本组件：切换设备只改变激活配置
+/// （configProvider），界面原地更新——云端 Agent 自 v0.2.55 起不再
+/// 有独立路由页。
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key, this.cloudPage = false});
-
-  final bool cloudPage;
+  const ChatScreen({super.key});
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -229,20 +224,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
       notifier.setActive(target.id);
     }
-    if (widget.cloudPage && mounted) {
-      // 转场前主动收键盘：让下一页进场时没有残留的 IME 动画，
-      // 页面切换观感更干净（底栏已常驻，不再依赖此逻辑防卡死）。
-      FocusManager.instance.primaryFocus?.unfocus();
-      Navigator.of(context).pop();
-    }
+    // 原地切换（2026-10-11 v0.2.55）：云端 Agent 不再是独立路由页，
+    // 只是激活配置变化——ChatScreen 监听 configProvider，界面就地更新，
+    // 没有转场、没有独立页、没有 push/pop（突兀与不流畅的根源）。
   }
 
-  /// 切到「云端 Agent」：记住当前本地配置 → 拉取云端列表 → 激活 agent
-  /// 托管配置 → 主页面再 push 独立会话页。未开通时给出明确指引。
+  /// 切到「云端 Agent」：记住当前本地配置 → 拉取云端列表 → 原地激活
+  /// agent 托管配置。未开通时给出明确指引。
   Future<void> _switchToCloud() async {
     if (_isAgentConfig(ref.read(configProvider).activeConfig?.id)) {
-      // 已经是云端 Agent：云端页无需动作；主页面直接开新页。
-      if (!widget.cloudPage) await _pushCloudPage();
+      // 已经是云端 Agent：无需动作。
       return;
     }
     // 记住当前本地配置，切回时恢复
@@ -254,7 +245,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
     // 确保云端列表与 Agent 授权信息是新的。
     // 策略：没有缓存的 agentConfig 时才同步等待（首次切换必须有结果才能
-    // 判断是否开通）；已有缓存则先用缓存直接进页（relayUrl() 会把 chatUrl
+    // 判断是否开通）；已有缓存则先用缓存直接切（relayUrl() 会把 chatUrl
     // 重锚到 CloudConfig.baseUrl，即使缓存里带坏地址也安全），后台静默
     // force 刷新供下次使用。这样来回切换不再每次都卡一个网络往返
     // （2026-10-10 用户反馈「切换云端 Agent 卡」的根因就是无条件 await）。
@@ -277,16 +268,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final notifier = ref.read(configProvider.notifier);
     notifier.upsert(agentCfg);
     notifier.setActive(agentCfg.id);
-    if (!widget.cloudPage) await _pushCloudPage();
-  }
-
-  Future<void> _pushCloudPage() {
-    // 转场前主动收键盘：避免上一页的键盘动画压在转场上（观感问题；
-    // 底栏已常驻，不再依赖此逻辑防「卡消失」）。
-    FocusManager.instance.primaryFocus?.unfocus();
-    return Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => const _CloudAgentPage(),
-    ));
   }
 
   /// 把消息内容以引用格式（markdown 块引用，多行逐行加 `> ` 前缀）填入
@@ -2676,49 +2657,7 @@ class _InputBar extends StatelessWidget {
 /// 产物入口），只是以独立路由展示——进入前 activeConfig 已被切到
 /// `agent:` 托管配置，顶栏副标题因此显示「云端 Agent · N 条消息」，
 /// 再选「我的手机」即恢复本地配置并退出本页。
-class _CloudAgentPage extends ConsumerWidget {
-  const _CloudAgentPage();
-
-  /// 从云端页退出并跳到主页面指定 Tab。
-  ///
-  /// 先记账导航意图（HomeShell 在路由栈下层持续监听），再退出本页——
-  /// 揭开主页时 Tab 已经切好，视觉上是一次连贯的跳转。
-  void _exitToTab(BuildContext context, WidgetRef ref, int tab) {
-    if (tab == HomeTab.chat) {
-      // 目标就是对话：直接退出（HomeShell 的对话 Tab 即本页内容）。
-      Navigator.of(context).pop();
-      return;
-    }
-    ref.read(navigationServiceProvider).goToTab(tab);
-    Navigator.of(context).pop();
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      backgroundColor: scaffoldBg(context),
-      // 新路由里没有 HomeShell，会话历史按钮（Scaffold.of.openDrawer）
-      // 需要本页自带抽屉；快捷入口经 onGoTab 退出本页并切主 Tab
-      // （此前传 null → 快捷入口整体隐藏 → 抽屉底部一条空白，截图反馈）。
-      drawer: SessionDrawer(
-        onGoTab: (t) => _exitToTab(context, ref, t),
-      ),
-      resizeToAvoidBottomInset: false,
-      // 键盘 insets 残留自愈（2026-10-11 根因修复）：本页 push/pop 与
-      // IME 收起竞态是「底部错位卡死」的直接触发路径，与 HomeShell
-      // 同样套 KeyboardSafePadding。
-      body: KeyboardSafePadding(
-        child: const ChatScreen(cloudPage: true),
-      ),
-      // 悬浮导航栏（2026-10-11）：此前本页没有底栏——主页面的导航栏
-      // 只在 HomeShell 里，切到云端后底部一条空白带，用户感知为
-      // 「导航栏消失」。现在与主页面共用 FloatingGlassNavBar，选中态
-      // 固定「对话」（本页即对话），点其它 Tab 退出本页并直达。
-      bottomNavigationBar: FloatingGlassNavBar(
-        index: HomeTab.chat,
-        height: 64.0,
-        onTap: (i) => _exitToTab(context, ref, i),
-      ),
-    );
-  }
-}
+// 云端 Agent 独立路由页（_CloudAgentPage）已于 2026-10-11 v0.2.55 移除：
+// 切换云端 Agent 改为原地激活配置，不再 push 全屏页——独立页带来转场
+// 突兀、底部空白带（无底栏）、push/pop 与键盘竞态三类问题，且其内容
+// 与主页面 ChatScreen 完全同源，隔离只是形式上的。

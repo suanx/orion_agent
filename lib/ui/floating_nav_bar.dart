@@ -31,10 +31,9 @@ const navBarItems = <NavBarItem>[
 /// - 点击特效：按压缩放回弹（Listener+AnimatedScale）+ 水波纹
 ///   （InkWell）+ 选中项药丸高亮（AnimatedContainer）。
 ///
-/// 2026-10-11 从 home_shell.dart 抽出为公共组件：云端 Agent 页
-/// （_CloudAgentPage）是独立全屏路由、没有 HomeShell，此前它没有底栏，
-/// 底部留一条空白带——用户感知为「切到云端后导航栏消失」。现在主页与
-/// 云端页共用本组件；云端页 onTap 里先记账导航意图再退出本页。
+/// 2026-10-11 从 home_shell.dart 抽出为公共组件。云端 Agent 自
+/// v0.2.55 起内嵌主页面（原地切换配置、无独立路由页），本组件目前
+/// 仅 HomeShell 使用；保留公共可见性供未来全屏对话类页面复用。
 class FloatingGlassNavBar extends StatelessWidget {
   const FloatingGlassNavBar({
     super.key,

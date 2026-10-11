@@ -6,12 +6,11 @@ import 'package:flutter/material.dart';
 /// 键盘 insets 残留自愈包裹（2026-10-11 根因修复）。
 ///
 /// ## 症状
-/// 云端 Agent 页（全屏路由）push/pop 与 IME 收起动画竞态后，
-/// `viewInsets.bottom` 停在「键盘开着」时的旧值不再归零（Flutter
-/// Android embedding 的已知问题）。使用它的页面（HomeShell /
-/// _CloudAgentPage 都是 `resizeToAvoidBottomInset: false` + 手动
-/// `Padding(bottom: kb)`）整个内容被顶上去，底部一大块空白——
-/// 表现为「导航栏消失 / 底部错位」，只能重启恢复。
+/// 路由 push/pop 与 IME 收起动画竞态后，`viewInsets.bottom` 停在
+/// 「键盘开着」时的旧值不再归零（Flutter Android embedding 的已知
+/// 问题）。使用它的页面（HomeShell 等都是 `resizeToAvoidBottomInset:
+/// false` + 手动 `Padding(bottom: kb)`）整个内容被顶上去，底部一大块
+/// 空白——表现为「导航栏消失 / 底部错位」，只能重启恢复。
 ///
 /// ## 为什么之前的修复没打中
 /// 2026-10-10 的「底栏常驻不折叠」只是让底栏不再随 kb 折叠，
