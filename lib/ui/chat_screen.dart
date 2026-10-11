@@ -12,11 +12,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:image_picker/image_picker.dart';
 import 'format_utils.dart';
+import 'floating_nav_bar.dart';
 import 'glass.dart';
 import 'keyboard_safe_padding.dart';
 import 'sessions_drawer.dart';
 import 'status_bar_area.dart';
 import 'agent_artifact_screen.dart';
+import '../services/navigation_service.dart';
 
 import '../models/chat_message.dart';
 import '../models/chat_session.dart';
@@ -2674,22 +2676,48 @@ class _InputBar extends StatelessWidget {
 /// 产物入口），只是以独立路由展示——进入前 activeConfig 已被切到
 /// `agent:` 托管配置，顶栏副标题因此显示「云端 Agent · N 条消息」，
 /// 再选「我的手机」即恢复本地配置并退出本页。
-class _CloudAgentPage extends StatelessWidget {
+class _CloudAgentPage extends ConsumerWidget {
   const _CloudAgentPage();
 
+  /// 从云端页退出并跳到主页面指定 Tab。
+  ///
+  /// 先记账导航意图（HomeShell 在路由栈下层持续监听），再退出本页——
+  /// 揭开主页时 Tab 已经切好，视觉上是一次连贯的跳转。
+  void _exitToTab(BuildContext context, WidgetRef ref, int tab) {
+    if (tab == HomeTab.chat) {
+      // 目标就是对话：直接退出（HomeShell 的对话 Tab 即本页内容）。
+      Navigator.of(context).pop();
+      return;
+    }
+    ref.read(navigationServiceProvider).goToTab(tab);
+    Navigator.of(context).pop();
+  }
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
       backgroundColor: scaffoldBg(context),
       // 新路由里没有 HomeShell，会话历史按钮（Scaffold.of.openDrawer）
-      // 需要本页自带抽屉；快捷入口不传 onGoTab（不在本页切主 Tab）。
-      drawer: const SessionDrawer(),
+      // 需要本页自带抽屉；快捷入口经 onGoTab 退出本页并切主 Tab
+      // （此前传 null → 快捷入口整体隐藏 → 抽屉底部一条空白，截图反馈）。
+      drawer: SessionDrawer(
+        onGoTab: (t) => _exitToTab(context, ref, t),
+      ),
       resizeToAvoidBottomInset: false,
       // 键盘 insets 残留自愈（2026-10-11 根因修复）：本页 push/pop 与
       // IME 收起竞态是「底部错位卡死」的直接触发路径，与 HomeShell
       // 同样套 KeyboardSafePadding。
       body: KeyboardSafePadding(
         child: const ChatScreen(cloudPage: true),
+      ),
+      // 悬浮导航栏（2026-10-11）：此前本页没有底栏——主页面的导航栏
+      // 只在 HomeShell 里，切到云端后底部一条空白带，用户感知为
+      // 「导航栏消失」。现在与主页面共用 FloatingGlassNavBar，选中态
+      // 固定「对话」（本页即对话），点其它 Tab 退出本页并直达。
+      bottomNavigationBar: FloatingGlassNavBar(
+        index: HomeTab.chat,
+        height: 64.0,
+        onTap: (i) => _exitToTab(context, ref, i),
       ),
     );
   }
