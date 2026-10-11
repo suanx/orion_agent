@@ -246,9 +246,15 @@ class CloudModelsController extends ChangeNotifier {
     }
   }
 
-  /// Agent 未开通时返回 null，UI 据此**完全隐藏**入口（不提示、不引导）。
+  /// 构造云端 Agent 配置。
+  ///
+  /// 2026-10-11 起**未授权（enabled=false）也返回配置**：登录用户即使
+  /// 管理员还没在后台绑定 Agent 实例，也可以进入云端 Agent 界面发消息
+  /// ——中继 /agent/chat 会返回一条合成回复「暂未授权 请联系管理员」
+  /// （不扣额度）。此前未开通时返回 null → UI 完全隐藏入口/切换被拦，
+  /// 用户无从得知自己的账号状态。
   LlmConfig? _toAgentConfig(CloudAgentInfo info) {
-    if (!info.enabled || info.chatUrl.isEmpty) return null;
+    if (info.chatUrl.isEmpty) return null;
     return CloudModelService.agentToConfig(info);
   }
 
