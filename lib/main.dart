@@ -141,6 +141,16 @@ Widget _buildErrorCard(String message) {
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // ---- 锁定竖屏（2026-10-11 用户要求）----
+  // 必须在 runApp 之前设置。只保留竖屏两个方向（含倒置），
+  // 横屏（landscapeLeft/Right）不再进入；平板/折叠屏同样锁定。
+  // 布局全部按竖屏宽度设计（气泡 maxWidth 0.78、底栏悬浮样式等），
+  // 横屏下没有做任何适配，放开只会露馅。
+  await SystemChrome.setPreferredOrientations(<DeviceOrientation>[
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+
   // ---- 诊断日志（必须最先就位）----
   // 先接管 debugPrint：全 App 39 处既有调用点（网络失败、DB 降级、
   // MCP 连不上……）从此自动进日志，不必逐处改代码。
